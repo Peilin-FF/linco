@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { RotateCw, ExternalLink, Link2 } from 'lucide-react'
+import { RotateCw, ExternalLink, Link2, ChevronLeft, ChevronRight } from 'lucide-react'
 import {
   onPreviewReload,
-  previewDefaultTarget,
   previewPrefetchAssets,
   previewSetTarget,
   previewStart
@@ -24,7 +23,8 @@ interface ScreenViewProps {
  * 在工作目录里:本地直接读盘,远程经持久 SSH 通道按需读+缓存。claude 改了
  * HTML 会经 mtime 轮询触发热刷新,iframe 自动重载。
  *
- * 地址栏可手填:输入别的 http(s):// 地址(如 dev server)会直接加载、绕过本服务器。
+ * 导航:浏览器式前进/后退历史栈(在不同 HTML 间跳转),地址栏可手填
+ * (输入别的 http(s):// 地址如 dev server 会直接加载、绕过本服务器)。
  */
 export default function ScreenView({
   host,
@@ -32,17 +32,44 @@ export default function ScreenView({
   previewPath
 }: ScreenViewProps): JSX.Element {
   const [port, setPort] = useState(0)
-  const [url, setUrl] = useState('')
+  // 导航历史栈 + 当前位置(浏览器式前进后退)。url 由 stack[idx] 派生。
+  const [nav, setNav] = useState<{ stack: string[]; idx: number }>({ stack: [], idx: -1 })
   const [nonce, setNonce] = useState(0) // 强制重载
-  const [mode, setMode] = useState<'served' | 'manual'>('served')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [empty, setEmpty] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  const url = nav.idx >= 0 ? nav.stack[nav.idx] : ''
+  const canBack = nav.idx > 0
+  const canForward = nav.idx < nav.stack.length - 1
+  // served = 走我们的本地服务器;manual = 用户手填的外部地址(dev server 等)
+  const mode: 'served' | 'manual' =
+    !url || (port > 0 && url.startsWith(`http://127.0.0.1:${port}`)) ? 'served' : 'manual'
   const modeRef = useRef(mode)
   modeRef.current = mode
 
   const reload = (): void => setNonce((n) => n + 1)
+
+  // 跳到新地址:截断当前位置之后的前进历史,压入新条目并定位到它。
+  // 与当前同址则只重载(不堆重复历史)。
+  const pushUrl = (u: string): void => {
+    setNav((n) => {
+      if (n.stack[n.idx] === u) return n // 同址,不入栈(下方 nonce 仍触发重载)
+      const stack = [...n.stack.slice(0, n.idx + 1), u]
+      return { stack, idx: stack.length - 1 }
+    })
+    setNonce((x) => x + 1)
+  }
+
+  const back = (): void => {
+    setNav((n) => (n.idx > 0 ? { ...n, idx: n.idx - 1 } : n))
+    setNonce((x) => x + 1)
+  }
+  const forward = (): void => {
+    setNav((n) => (n.idx < n.stack.length - 1 ? { ...n, idx: n.idx + 1 } : n))
+    setNonce((x) => x + 1)
+  }
 
   // 启动本地服务器(幂等),拿端口
   useEffect(() => {
@@ -58,39 +85,51 @@ export default function ScreenView({
     previewPrefetchAssets(host).catch(() => {})
   }, [port, host])
 
-  // 工作目录 / 目标文件变化 → 设定预览目标、重指 iframe(served 模式)
+  // 工作目录 / 目标文件变化 → 设定预览目标、压入历史(served 模式)
   useEffect(() => {
     if (!port || !cwd || modeRef.current === 'manual') return
     let alive = true
     const base = `http://127.0.0.1:${port}/`
     ;(async () => {
       try {
-        // previewPath 为绝对路径时,取相对 cwd 的部分;否则求默认目标
-        let rel = ''
         if (previewPath) {
-          rel = previewPath.startsWith(cwd)
+          // 右键指定某文件 → 直接进该文件
+          const rel = previewPath.startsWith(cwd)
             ? previewPath.slice(cwd.length).replace(/^\/+/, '')
             : previewPath
+          await previewSetTarget(cwd, rel, host)
+          if (!alive) return
+          setEmpty(false)
+          pushUrl(base + encodeURI(rel))
         } else {
-          rel = await previewDefaultTarget(cwd, host)
+          // 默认 → 进「产物首页」列表,自己点选要看的 HTML
+          if (!alive) return
+          setEmpty(false)
+          pushUrl(base + '__index__')
         }
-        if (!alive) return
-        await previewSetTarget(cwd, rel, host)
-        if (!alive) return
-        setEmpty(false)
-        setUrl(base + encodeURI(rel))
-        setNonce((n) => n + 1)
       } catch {
         if (!alive) return
-        // 没找到 HTML:显示空态,但保留地址栏可手填
-        setEmpty(true)
-        setUrl(base)
+        setEmpty(false)
+        pushUrl(base + '__index__')
       }
     })()
     return () => {
       alive = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, cwd, host, previewPath])
+
+  // 当后退/前进切到 served 的具体文件时,同步预览服务器目标(让热刷新盯对文件)。
+  // 列表页(__index__)无单一文件可盯,跳过。
+  useEffect(() => {
+    if (!cwd || mode !== 'served' || !url || port <= 0) return
+    const base = `http://127.0.0.1:${port}/`
+    if (!url.startsWith(base)) return
+    const rel = decodeURI(url.slice(base.length))
+    if (!rel || rel === '__index__') return
+    previewSetTarget(cwd, rel, host).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url])
 
   // 热刷新:claude 改了 HTML → 重载(仅 served 模式)
   useEffect(() => {
@@ -101,22 +140,48 @@ export default function ScreenView({
     return () => un?.()
   }, [])
 
+  // 监听产物首页里点链接 → 压入历史(这样工具条后退能回到列表页)
+  useEffect(() => {
+    const onMsg = (e: MessageEvent): void => {
+      const href = (e.data as { __lincoNav?: string })?.__lincoNav
+      if (typeof href !== 'string' || !port) return
+      const base = `http://127.0.0.1:${port}/`
+      pushUrl(base + href.replace(/^\/+/, ''))
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [port])
+
   const go = (next: string): void => {
     let u = next.trim()
     if (!u) return
     if (!/^https?:\/\//.test(u)) u = `http://${u}`
-    // 属于本地服务器 → served;否则 manual(直接加载外部地址,绕过)
-    setMode(u.startsWith(`http://127.0.0.1:${port}`) ? 'served' : 'manual')
-    setUrl(u)
     setEmpty(false)
     setEditing(false)
-    setNonce((n) => n + 1)
+    pushUrl(u) // mode 由 url 自动派生(本地服务器→served,其它→manual)
   }
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
       {/* 工具条 */}
       <div className="flex shrink-0 items-center gap-1.5 border-b border-black/8 px-2.5 py-1.5">
+        <button
+          onClick={back}
+          disabled={!canBack}
+          className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink disabled:text-ink-faint/40 disabled:hover:bg-transparent"
+          title="后退"
+        >
+          <ChevronLeft size={15} />
+        </button>
+        <button
+          onClick={forward}
+          disabled={!canForward}
+          className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink disabled:text-ink-faint/40 disabled:hover:bg-transparent"
+          title="前进"
+        >
+          <ChevronRight size={15} />
+        </button>
         <button
           onClick={reload}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"

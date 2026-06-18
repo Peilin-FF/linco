@@ -11,7 +11,6 @@ import {
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
-import { termKill } from '@/lib/terminal'
 import ChatInput from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'

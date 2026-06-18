@@ -220,9 +220,9 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
     let decoded = percent_decode(path);
     let rel = decoded.trim_start_matches('/');
 
-    let (host, root, target_rel) = {
+    let (host, root) = {
         match global().lock() {
-            Ok(g) => (g.host.clone(), g.root.clone(), g.target_rel.clone()),
+            Ok(g) => (g.host.clone(), g.root.clone()),
             Err(_) => return (b"server busy".to_vec(), "text/plain".into(), 500),
         }
     };
@@ -237,8 +237,12 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
     if root.is_empty() {
         return (b"no preview target".to_vec(), "text/plain".into(), 404);
     }
-    // 空路径 → 当前目标文件
-    let rel = if rel.is_empty() { target_rel.as_str() } else { rel };
+
+    // 产物首页:显式 /__index__ 或目录请求(空/以 / 结尾)→ 列出所有 HTML 可点链接。
+    if rel == "__index__" || rel.is_empty() || rel.ends_with('/') {
+        let dir_rel = if rel == "__index__" { "" } else { rel.trim_end_matches('/') };
+        return serve_index(&host, &root, dir_rel);
+    }
 
     // 路径安全:归一化后必须仍在 root 内
     let abs = match safe_join(&root, rel) {
@@ -256,6 +260,128 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
         Ok(b) => (b, ctype, 200),
         Err(_) => (b"not found".to_vec(), "text/plain".into(), 404),
     }
+}
+
+/// 产物首页:列出 root(或其子目录 dir_rel)下所有 HTML 为可点链接。
+/// 本地直接遍历;远程经 agent/find 列。链接是相对 URL,点击在 iframe 内导航。
+fn serve_index(host: &Option<String>, root: &str, dir_rel: &str) -> (Vec<u8>, String, u16) {
+    let base = if dir_rel.is_empty() {
+        root.to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), dir_rel)
+    };
+    // 收集 HTML 相对路径(相对 root,供链接)
+    let htmls = list_html_rel(host, root, &base);
+    let mut items = String::new();
+    if htmls.is_empty() {
+        items.push_str("<p class=empty>工作目录里还没有 HTML 产物。</p>");
+    } else {
+        items.push_str("<ul>");
+        for rel in &htmls {
+            // 链接相对服务器根;名称展示去掉目录前缀更友好
+            let name = rel.rsplit('/').next().unwrap_or(rel);
+            let sub = if rel.contains('/') {
+                let p = &rel[..rel.rfind('/').unwrap()];
+                format!("<span class=dir>{}/</span>", html_escape(p))
+            } else {
+                String::new()
+            };
+            items.push_str(&format!(
+                "<li><a href=\"/{href}\">{sub}<b>{name}</b></a></li>",
+                href = html_escape(rel),
+                sub = sub,
+                name = html_escape(name),
+            ));
+        }
+        items.push_str("</ul>");
+    }
+    let title = if dir_rel.is_empty() { "产物" } else { dir_rel };
+    let page = format!(
+        "<!doctype html><html lang=zh><head><meta charset=utf-8>\
+<meta name=viewport content=\"width=device-width,initial-scale=1\">\
+<title>{title}</title><style>\
+body{{font-family:system-ui,-apple-system,'PingFang SC',sans-serif;background:#FAF9F5;\
+color:#3D3D3A;max-width:820px;margin:0 auto;padding:48px 32px}}\
+h1{{font-family:Georgia,serif;font-weight:500;color:#141413;font-size:26px;margin:0 0 4px}}\
+.k{{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#87867F;\
+text-transform:uppercase;letter-spacing:.08em;margin-bottom:20px}}\
+ul{{list-style:none;padding:0;margin:0}}\
+li{{border:1.5px solid #E3DACC;border-radius:10px;margin-bottom:8px;background:#fff}}\
+li a{{display:block;padding:12px 16px;text-decoration:none;color:#141413;\
+font-family:ui-monospace,Menlo,monospace;font-size:13.5px}}\
+li a:hover{{border-color:#D97757;color:#B85C3E}}\
+.dir{{color:#87867F}} b{{font-weight:600}}\
+.empty{{color:#87867F;font-style:italic;font-family:Georgia,serif}}\
+</style></head><body><div class=k>预览 · {title}</div><h1>HTML 产物</h1>{items}\
+<script>\
+// 点链接时通知父窗口(Linco),让工具条的前进/后退历史能记录这次跳转。\
+document.addEventListener('click',function(e){{\
+var a=e.target.closest&&e.target.closest('a[href]');\
+if(a){{e.preventDefault();try{{parent.postMessage({{__lincoNav:a.getAttribute('href')}},'*');}}catch(_){{location.href=a.href;}}}}\
+}});\
+</script></body></html>",
+        title = html_escape(title),
+        items = items,
+    );
+    (page.into_bytes(), "text/html; charset=utf-8".into(), 200)
+}
+
+/// 列出 base 目录下(限深)所有 HTML,返回相对 root 的路径(/ 分隔)。
+fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if let Some(h) = host.as_deref() {
+        // 远程:find(经持久会话);跳过噪声目录
+        let cmd = format!(
+            "find {} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500",
+            crate::remote::shq(base)
+        );
+        if let Ok(b) = crate::remote::run_remote(h, &cmd) {
+            let root_pref = format!("{}/", root.trim_end_matches('/'));
+            for line in String::from_utf8_lossy(&b).lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let rel = line.strip_prefix(&root_pref).unwrap_or(line);
+                out.push(rel.to_string());
+            }
+        }
+    } else {
+        let root_path = std::path::Path::new(root);
+        let mut stack = vec![(std::path::PathBuf::from(base), 0u32)];
+        const SKIP: &[&str] = &["node_modules", ".git", "target", "__pycache__", "dist", ".venv"];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 4 || out.len() >= 500 {
+                continue;
+            }
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    if !SKIP.contains(&n.as_str()) {
+                        stack.push((p, depth + 1));
+                    }
+                } else {
+                    let lower = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                    if lower == "html" || lower == "htm" {
+                        if let Ok(rel) = p.strip_prefix(root_path) {
+                            out.push(rel.to_string_lossy().replace('\\', "/"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// 远端读字节,带 TTL 缓存。
