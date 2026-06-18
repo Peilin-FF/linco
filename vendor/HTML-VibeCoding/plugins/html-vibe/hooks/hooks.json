@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/html-session-start.sh\"",
+            "timeout": 15,
+            "statusMessage": "启动 HTML 预览工作流…"
+          }
+        ]
+      }
+    ]
+  }
+}

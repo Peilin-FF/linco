@@ -615,14 +615,16 @@ fn has_notebook_js(dir: &str) -> bool {
 
 fn find_assets_local() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    // 已知安装位置:开发副本 + claude 插件缓存
+    // 已知安装位置(按优先级):标准插件目录 > 开发副本 > 插件缓存搜索
     let mut cands = vec![
-        format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"),
+        format!("{home}/.claude/plugins/html-vibe/assets"), // README 安装位置(主)
+        format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"), // 旧开发副本
     ];
-    // claude 插件缓存里搜(marketplaces / cache 下的 html-vibe)
+    // 插件缓存/市场里搜(marketplaces / cache 下的 html-vibe)
     for base in [
         format!("{home}/.claude/plugins/marketplaces"),
         format!("{home}/.claude/plugins/cache"),
+        format!("{home}/.claude/plugins"),
     ] {
         if let Some(d) = walk_find_assets(&base, 6) {
             cands.push(d);
@@ -656,7 +658,9 @@ fn walk_find_assets(base: &str, max_depth: u32) -> Option<String> {
 
 /// 远程:find 插件 assets 目录(经持久 SSH;集群是 Linux)。
 fn find_assets_remote(host: &str) -> Option<String> {
-    let cmd = "for d in \"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \
+    // 优先标准安装位置,再回退开发副本,最后在插件目录里 find。
+    let cmd = "for d in \"$HOME/.claude/plugins/html-vibe/assets\" \
+\"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \
 $(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets -path '*html-vibe*' 2>/dev/null); do \
 [ -f \"$d/notebook.js\" ] && echo \"$d\" && break; done";
     let out = crate::remote::run_remote(host, cmd).ok()?;

@@ -1,0 +1,13 @@
+{
+  "name": "html-vibe-marketplace",
+  "owner": {
+    "name": "fengpeilin"
+  },
+  "plugins": [
+    {
+      "name": "html-vibe",
+      "source": "./plugins/html-vibe",
+      "description": "默认用自包含 HTML 文件交互：每次会话自动启动 artifacts 预览服务器（热刷新），并注入'产物默认产出 HTML'的指令，附带统一设计套件。"
+    }
+  ]
+}
