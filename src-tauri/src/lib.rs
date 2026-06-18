@@ -6,6 +6,7 @@
 // 终端视图中实时渲染。对任何厂家的 CLI 都通用。
 
 mod agent;
+mod agent_rpc;
 mod completion;
 mod config;
 mod fs;

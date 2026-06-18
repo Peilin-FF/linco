@@ -353,6 +353,15 @@ pub fn run_remote_stdin(
     run_remote_oneshot(host, sh_cmd, stdin_data)
 }
 
+/// 一次性 ssh 的公开包装(供 agent_rpc 部署脚本用,不走持久会话)。
+pub fn run_remote_oneshot_pub(
+    host: &str,
+    sh_cmd: &str,
+    stdin_data: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    run_remote_oneshot(host, sh_cmd, stdin_data)
+}
+
 /// 一次性 ssh(降级路径 / 旧实现)。
 fn run_remote_oneshot(
     host: &str,
@@ -469,7 +478,8 @@ pub fn ssh_check(host: String) -> bool {
 /// 关闭 master 连接。
 #[tauri::command]
 pub fn ssh_disconnect(host: String) -> Result<(), String> {
-    drop_session(&host); // 先关持久会话(否则会持有死管道)
+    drop_session(&host); // 先关持久 shell 会话(否则会持有死管道)
+    crate::agent_rpc::drop_session(&host); // 关 agent 会话(杀远端常驻进程的本地管道)
     let mut cmd = Command::new("ssh");
     cmd.args(ssh_opts());
     cmd.arg("-O").arg("exit").arg(&host);
@@ -493,8 +503,27 @@ fn join_remote(dir: &str, name: &str) -> String {
     }
 }
 
-/// 列目录:`ls -1Ap`(尾随 / 标记目录,-A 含 dotfile 但不含 . ..)。
+/// 列目录:优先走常驻 agent(RPC),失败回退 shell。
 pub fn list_dir(host: &str, dir: &str) -> Result<Vec<RemoteEntry>, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "readdir", serde_json::json!({ "path": dir })) {
+        if let Some(arr) = v.get("entries").and_then(|x| x.as_array()) {
+            return Ok(arr
+                .iter()
+                .filter_map(|e| {
+                    Some(RemoteEntry {
+                        name: e.get("name")?.as_str()?.to_string(),
+                        path: e.get("path")?.as_str()?.to_string(),
+                        is_dir: e.get("is_dir").and_then(|d| d.as_bool()).unwrap_or(false),
+                    })
+                })
+                .collect());
+        }
+    }
+    list_dir_shell(host, dir)
+}
+
+/// 列目录(shell 实现):`ls -1Ap`(尾随 / 标记目录,-A 含 dotfile 但不含 . ..)。
+fn list_dir_shell(host: &str, dir: &str) -> Result<Vec<RemoteEntry>, String> {
     let out = run_remote_str(host, &format!("ls -1Ap -- {}", shq(dir)))?;
     let mut entries = Vec::new();
     for line in out.lines() {
@@ -523,6 +552,15 @@ pub fn list_dir(host: &str, dir: &str) -> Result<Vec<RemoteEntry>, String> {
 const MAX_READ: u64 = 5 * 1024 * 1024;
 
 pub fn read_file(host: &str, path: &str) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "read_file", serde_json::json!({ "path": path, "max": MAX_READ })) {
+        if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
+            return Ok(t.to_string());
+        }
+    }
+    read_file_shell(host, path)
+}
+
+fn read_file_shell(host: &str, path: &str) -> Result<String, String> {
     // 先判大小
     let size_out = run_remote_str(host, &format!("wc -c < {}", shq(path)))?;
     if let Ok(n) = size_out.trim().parse::<u64>() {
@@ -538,18 +576,33 @@ pub fn read_file(host: &str, path: &str) -> Result<String, String> {
 }
 
 pub fn write_file(host: &str, path: &str, content: &str) -> Result<(), String> {
-    run_remote_stdin(host, &format!("cat > {}", shq(path)), Some(content.as_bytes()))
-        .map(|_| ())
+    if crate::agent_rpc::call(host, "write_file", serde_json::json!({ "path": path, "content": content })).is_ok() {
+        return Ok(());
+    }
+    run_remote_stdin(host, &format!("cat > {}", shq(path)), Some(content.as_bytes())).map(|_| ())
 }
 
 /// 写远端二进制文件:原始字节经 stdin(base64 heredoc,二进制安全)写入。
 pub fn write_bytes(host: &str, path: &str, bytes: &[u8]) -> Result<(), String> {
+    let b64 = B64.encode(bytes);
+    if crate::agent_rpc::call(host, "write_bytes", serde_json::json!({ "path": path, "b64": b64 })).is_ok() {
+        return Ok(());
+    }
     run_remote_stdin(host, &format!("cat > {}", shq(path)), Some(bytes)).map(|_| ())
 }
 
 /// 读远端文件为 base64(供图片/视频/PDF 等二进制预览)。
 /// 远端用 `base64`(GNU coreutils / busybox 通用),失败回退 openssl。
 pub fn read_bytes_b64(host: &str, path: &str, max: u64) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "read_bytes", serde_json::json!({ "path": path, "max": max })) {
+        if let Some(b) = v.get("b64").and_then(|x| x.as_str()) {
+            return Ok(b.to_string());
+        }
+    }
+    read_bytes_b64_shell(host, path, max)
+}
+
+fn read_bytes_b64_shell(host: &str, path: &str, max: u64) -> Result<String, String> {
     // 先判大小
     let size_out = run_remote_str(host, &format!("wc -c < {}", shq(path)))?;
     if let Ok(n) = size_out.trim().parse::<u64>() {
@@ -571,56 +624,101 @@ pub fn read_bytes_b64(host: &str, path: &str, max: u64) -> Result<String, String
 }
 
 pub fn create_file(host: &str, parent: &str, name: &str) -> Result<String, String> {
+    match crate::agent_rpc::call(host, "create_file", serde_json::json!({ "parent": parent, "name": name })) {
+        Ok(v) => {
+            if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+                return Ok(p.to_string());
+            }
+        }
+        // 业务错(同名已存在)直接上抛,不回退(避免 shell 再创一次产生歧义)
+        Err(e) if e.contains("已存在") => return Err(e),
+        Err(_) => {}
+    }
     let target = join_remote(parent, name);
-    // set -C 防覆盖已存在文件
-    run_remote(
-        host,
-        &format!("set -C; : > {}", shq(&target)),
-    )
-    .map_err(|_| "同名文件已存在或创建失败".to_string())?;
+    run_remote(host, &format!("set -C; : > {}", shq(&target)))
+        .map_err(|_| "同名文件已存在或创建失败".to_string())?;
     Ok(target)
 }
 
 pub fn create_dir(host: &str, parent: &str, name: &str) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "mkdir", serde_json::json!({ "parent": parent, "name": name })) {
+        if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+            return Ok(p.to_string());
+        }
+    }
     let target = join_remote(parent, name);
     run_remote(host, &format!("mkdir -- {}", shq(&target)))?;
     Ok(target)
 }
 
 pub fn rename(host: &str, path: &str, new_name: &str) -> Result<String, String> {
+    match crate::agent_rpc::call(host, "rename", serde_json::json!({ "path": path, "new_name": new_name })) {
+        Ok(v) => {
+            if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+                return Ok(p.to_string());
+            }
+        }
+        Err(e) if e.contains("已存在") => return Err(e),
+        Err(_) => {}
+    }
     let parent = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     let target = join_remote(parent, new_name);
-    run_remote(
-        host,
-        &format!("test ! -e {t} && mv -- {s} {t}", t = shq(&target), s = shq(path)),
-    )
-    .map_err(|_| "目标已存在或重命名失败".to_string())?;
+    run_remote(host, &format!("test ! -e {t} && mv -- {s} {t}", t = shq(&target), s = shq(path)))
+        .map_err(|_| "目标已存在或重命名失败".to_string())?;
     Ok(target)
 }
 
 pub fn delete(host: &str, path: &str) -> Result<(), String> {
+    if crate::agent_rpc::call(host, "delete", serde_json::json!({ "path": path })).is_ok() {
+        return Ok(());
+    }
     run_remote(host, &format!("rm -rf -- {}", shq(path))).map(|_| ())
 }
 
 pub fn copy(host: &str, src: &str, dest_dir: &str) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "copy", serde_json::json!({ "src": src, "dest_dir": dest_dir })) {
+        if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+            return Ok(p.to_string());
+        }
+    }
     let name = src.rsplit('/').next().unwrap_or(src);
     let target = join_remote(dest_dir, name);
-    run_remote(
-        host,
-        &format!("cp -r -- {} {}", shq(src), shq(&target)),
-    )?;
+    run_remote(host, &format!("cp -r -- {} {}", shq(src), shq(&target)))?;
     Ok(target)
 }
 
 pub fn move_to(host: &str, src: &str, dest_dir: &str) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "move", serde_json::json!({ "src": src, "dest_dir": dest_dir })) {
+        if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
+            return Ok(p.to_string());
+        }
+    }
     let name = src.rsplit('/').next().unwrap_or(src);
     let target = join_remote(dest_dir, name);
     run_remote(host, &format!("mv -- {} {}", shq(src), shq(&target)))?;
     Ok(target)
 }
 
-/// 文件名搜索(远程 find)。
+/// 文件名搜索(优先 agent,回退远程 find)。
 pub fn search_files(host: &str, root: &str, query: &str) -> Result<Vec<RemoteEntry>, String> {
+    if let Ok(v) = crate::agent_rpc::call(host, "search_files", serde_json::json!({ "root": root, "query": query })) {
+        if let Some(arr) = v.get("entries").and_then(|x| x.as_array()) {
+            return Ok(arr
+                .iter()
+                .filter_map(|e| {
+                    Some(RemoteEntry {
+                        name: e.get("name")?.as_str()?.to_string(),
+                        path: e.get("path")?.as_str()?.to_string(),
+                        is_dir: e.get("is_dir").and_then(|d| d.as_bool()).unwrap_or(false),
+                    })
+                })
+                .collect());
+        }
+    }
+    search_files_shell(host, root, query)
+}
+
+fn search_files_shell(host: &str, root: &str, query: &str) -> Result<Vec<RemoteEntry>, String> {
     // 跳过重目录;-iname 大小写不敏感;限制数量
     let cmd = format!(
         "find {root} \\( -name .git -o -name node_modules -o -name target -o -name __pycache__ \\) -prune -o -iname {pat} -print 2>/dev/null | head -300",
@@ -647,6 +745,35 @@ pub fn search_files(host: &str, root: &str, query: &str) -> Result<Vec<RemoteEnt
 /// 远程内容搜索(grep)。返回 (path, line_no, line_text) 三元组。
 /// 大小写敏感/正则由调用方传入对应 grep 标志。
 pub fn grep_content(
+    host: &str,
+    root: &str,
+    pattern: &str,
+    case_sensitive: bool,
+    is_regex: bool,
+) -> Result<Vec<(String, usize, String)>, String> {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "grep",
+        serde_json::json!({ "root": root, "pattern": pattern, "case_sensitive": case_sensitive, "is_regex": is_regex }),
+    ) {
+        if let Some(arr) = v.get("matches").and_then(|x| x.as_array()) {
+            return Ok(arr
+                .iter()
+                .filter_map(|m| {
+                    let a = m.as_array()?;
+                    Some((
+                        a.first()?.as_str()?.to_string(),
+                        a.get(1)?.as_u64()? as usize,
+                        a.get(2)?.as_str()?.to_string(),
+                    ))
+                })
+                .collect());
+        }
+    }
+    grep_content_shell(host, root, pattern, case_sensitive, is_regex)
+}
+
+fn grep_content_shell(
     host: &str,
     root: &str,
     pattern: &str,
