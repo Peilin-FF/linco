@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "1";
+const AGENT_VERSION: &str = "2";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);

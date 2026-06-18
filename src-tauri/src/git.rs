@@ -21,6 +21,18 @@ fn host_opt(h: &Option<String>) -> Option<&str> {
 /// 执行 git 命令(本地或远程),返回 stdout(失败返回 Err(stderr))。
 fn git(host: &Option<String>, repo: &str, args: &[&str]) -> Result<String, String> {
     if let Some(h) = host_opt(host) {
+        // 优先走常驻 agent(RPC,一次往返);失败回退 shell。
+        if let Ok(v) = crate::agent_rpc::call(
+            h,
+            "git",
+            serde_json::json!({ "repo": repo, "args": args }),
+        ) {
+            let code = v.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
+            if code == 0 {
+                return Ok(v.get("stdout").and_then(|x| x.as_str()).unwrap_or("").to_string());
+            }
+            return Err(v.get("stderr").and_then(|x| x.as_str()).unwrap_or("git 失败").to_string());
+        }
         let joined = args.iter().map(|a| shq(a)).collect::<Vec<_>>().join(" ");
         let cmd = format!("cd {} && git {}", shq(repo), joined);
         return run_remote(h, &cmd).map(|b| String::from_utf8_lossy(&b).to_string());

@@ -75,6 +75,10 @@ export default function App(): JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null)
   // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
   const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat']))
+  // 后台预热:app 就绪后空闲时悄悄把 文件/Git/预览 三视图挂载好(含各自首次
+  // 数据拉取),这样用户真正点开时已经热好 = 瞬现,不再卡那一下(借鉴 VS Code
+  // "显示与加载解耦";配合 CodeMirrorWarmup 一起把首次开销提前)。
+  const [prewarmed, setPrewarmed] = useState(false)
   // 预览目标文件(右键预览时指定;空=默认目标)
   const [previewPath, setPreviewPath] = useState<string | undefined>(undefined)
 
@@ -148,6 +152,22 @@ export default function App(): JSX.Element {
 
   // 工作目录:远程用连接的远端目录,本地用配置的 cwd
   const cwd = (host ? activeConn?.cwd : config?.cwd) || undefined
+
+  // 后台预热三视图:连接/工作目录就绪后,空闲时悄悄把 文件/Git/预览 挂载好
+  // (含各自首次数据拉取),用户真正点开时已热好=瞬现,不再卡那一下。
+  // 切连接(host/cwd 变)时重置重热。
+  useEffect(() => {
+    setPrewarmed(false)
+    if (!cwd) return // 没选工作目录就别空跑
+    const ric =
+      window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 600))
+    const id = ric(() => setPrewarmed(true))
+    return () => {
+      if (window.cancelIdleCallback && typeof id === 'number') {
+        window.cancelIdleCallback(id)
+      }
+    }
+  }, [host, cwd])
   // 对话会话自动启动 claude/codex
   const initialCommand =
     config?.autoStart && defaultAgent ? defaultAgent.command : undefined
@@ -159,13 +179,14 @@ export default function App(): JSX.Element {
   // 换工作目录=该会话按新 cwd 重启(有意);agent/env 不进 key(挂载时读一次)。
   const activeChatId = `chat:${connId}:${cwd ?? ''}`
 
-  // 懒挂载活动连接的对话会话:不存在则加入(从此常驻);
-  // 同一连接换了工作目录(id 变)→ 替换该连接的旧会话(杀旧 PTF,带新 cwd 重启)。
+  // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
+  // 每个 连接+工作目录 各一个会话(id 含 cwd):切到新项目=新会话(claude 在后台
+  // 起,不冻 UI);切回访问过的项目=原会话还在(claude 在对话、终端、渲染态全保留),
+  // 瞬现。**不杀任何旧会话**——这正是"固化"。会话很轻(一个 PTY),保留到 app 退出。
   useEffect(() => {
-    if (!config) return
+    if (!config || !cwd) return
     setChatSessions((prev) => {
-      const mine = prev.find((s) => s.id === activeChatId)
-      if (mine) return prev // 已在现场,直接复用
+      if (prev.some((s) => s.id === activeChatId)) return prev // 已在现场,复用
       const next: ChatSession = {
         id: activeChatId,
         connId,
@@ -175,16 +196,9 @@ export default function App(): JSX.Element {
         env: agentEnvVars,
         command: initialCommand
       }
-      // 同连接的旧会话(cwd 变)清掉,避免堆积死会话
-      const stale = prev.find((s) => s.connId === connId)
-      if (stale) {
-        chatRefs.current.delete(stale.id)
-        termKill(stale.id).catch(() => {})
-        return [...prev.filter((s) => s.connId !== connId), next]
-      }
       return [...prev, next]
     })
-    // 仅在活动会话 id 变化时运行(切连接/换 cwd)
+    // 仅在活动会话 id 变化时运行(切连接/切项目)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId])
 
@@ -496,8 +510,8 @@ export default function App(): JSX.Element {
             </div>
           )}
 
-          {/* 预览:首次访问后常驻挂载(iframe 状态保留),切回瞬时显示 */}
-          {visited.has('preview') && (
+          {/* 预览:预热后或访问过即常驻挂载(iframe 状态保留),切回瞬时显示 */}
+          {(prewarmed || visited.has('preview')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'preview'
@@ -512,8 +526,8 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-          {/* 文件 / Git:首次访问后常驻挂载,切回瞬时显示(不重挂载、不重拉) */}
-          {visited.has('files') && (
+          {/* 文件 / Git:预热后或访问过即常驻挂载,切回瞬时显示(不重挂载、不重拉) */}
+          {(prewarmed || visited.has('files')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'files'
@@ -530,7 +544,7 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-          {visited.has('git') && (
+          {(prewarmed || visited.has('git')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'git'

@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading
 
-AGENT_VERSION = "1"
+AGENT_VERSION = "2"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 
@@ -203,6 +203,24 @@ def op_grep(a):
     return {"matches": results}
 
 
+def op_git(a):
+    # 在 repo 目录跑 git,返回 stdout/stderr/code(不抛错,由调用方按 code 判断)
+    repo = a["repo"]
+    args = a.get("args") or []
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo] + list(args),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        return {
+            "stdout": p.stdout.decode("utf-8", "replace"),
+            "stderr": p.stderr.decode("utf-8", "replace"),
+            "code": p.returncode,
+        }
+    except FileNotFoundError:
+        raise ValueError("git 未安装")
+
+
 OPS = {
     "ping": op_ping, "stat": op_stat, "readdir": op_readdir,
     "read_file": op_read_file, "read_bytes": op_read_bytes,
@@ -211,6 +229,7 @@ OPS = {
     "rename": op_rename, "delete": op_delete,
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
+    "git": op_git,
 }
 
 
