@@ -1,0 +1,204 @@
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef
+} from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import '@xterm/xterm/css/xterm.css'
+import {
+  onTermExit,
+  onTermOutput,
+  termKill,
+  termResize,
+  termStart,
+  termWrite
+} from '@/lib/terminal'
+import type { UnlistenFn } from '@tauri-apps/api/event'
+
+// 跟随系统深浅色:深色模式下 claude 等 TUI 会用深色背景的 ANSI 块,
+// 终端背景也必须深,否则块与白底对不齐,出现大片空白(本次修复的问题)。
+function prefersDark(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-color-scheme: dark)').matches
+  )
+}
+
+function termTheme(dark: boolean): Record<string, string> {
+  if (dark) {
+    return {
+      background: '#1e1e1e',
+      foreground: '#e4e4e4',
+      cursor: '#e4e4e4',
+      cursorAccent: '#1e1e1e',
+      selectionBackground: 'rgba(255,255,255,0.18)',
+      black: '#1e1e1e',
+      red: '#f47067',
+      green: '#57ab5a',
+      yellow: '#c69026',
+      blue: '#539bf5',
+      magenta: '#b083f0',
+      cyan: '#39c5cf',
+      white: '#d1d5da',
+      brightBlack: '#6e7681'
+    }
+  }
+  return {
+    background: '#ffffff',
+    foreground: '#1f1f1f',
+    cursor: '#1a1a1a',
+    cursorAccent: '#ffffff',
+    selectionBackground: 'rgba(0,0,0,0.10)',
+    black: '#1f1f1f',
+    red: '#c0392b',
+    green: '#27894e',
+    yellow: '#b8860b',
+    blue: '#2563eb',
+    magenta: '#8b5cf6',
+    cyan: '#0e7490',
+    white: '#3f3f3f',
+    brightBlack: '#9a9a9a'
+  }
+}
+
+export interface TerminalHandle {
+  /** 把文本写入终端并回车(整体发送)。 */
+  send: (text: string) => void
+  /** 写入原始字节到 PTY(实时转发用,不自动加回车)。 */
+  write: (data: string) => void
+  focus: () => void
+}
+
+interface TerminalViewProps {
+  id: string
+  cwd?: string
+  env?: Record<string, string>
+  /** PTY 起来后自动执行的命令(如 `claude`) */
+  initialCommand?: string
+  /** 远程主机(user@ip 或 ssh config 别名);空=本地 */
+  host?: string
+  identity?: string
+}
+
+const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
+  function TerminalView({ id, cwd, env, initialCommand, host, identity }, ref) {
+    const hostRef = useRef<HTMLDivElement>(null)
+    const termRef = useRef<Terminal | null>(null)
+    const fitRef = useRef<FitAddon | null>(null)
+    // cwd / env / initialCommand 只在启动时读取一次,用 ref 持有,
+    // 避免 prop 身份变化触发终端重挂载(切换全局目录不应重启已开的终端)。
+    const cwdRef = useRef(cwd)
+    const envRef = useRef(env)
+    const initCmdRef = useRef(initialCommand)
+    const hostRef2 = useRef(host)
+    const identityRef = useRef(identity)
+    hostRef2.current = host
+    identityRef.current = identity
+    cwdRef.current = cwd
+    envRef.current = env
+    initCmdRef.current = initialCommand
+
+    useImperativeHandle(ref, () => ({
+      send: (text: string) => {
+        // 写入文本并以回车提交,等价于在终端输入命令
+        termWrite(id, text.endsWith('\n') ? text : text + '\r')
+      },
+      write: (data: string) => {
+        // 原始转发(逐字符同步)
+        termWrite(id, data)
+      },
+      focus: () => termRef.current?.focus()
+    }))
+
+    useEffect(() => {
+      const host = hostRef.current
+      if (!host) return
+
+      const term = new Terminal({
+        fontFamily:
+          '"SF Mono", "JetBrains Mono", Menlo, Monaco, "Cascadia Code", monospace',
+        fontSize: 13.5,
+        lineHeight: 1.35,
+        letterSpacing: 0.2,
+        cursorBlink: true,
+        cursorStyle: 'bar',
+        scrollback: 5000,
+        theme: termTheme(prefersDark()),
+        allowProposedApi: true
+      })
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(host)
+      // 让 host 内边距区域也跟随终端背景,避免深色下出现白边框
+      host.style.background = termTheme(prefersDark()).background
+      fit.fit()
+      termRef.current = term
+      fitRef.current = fit
+
+      let unlistenOut: UnlistenFn | undefined
+      let unlistenExit: UnlistenFn | undefined
+      let disposed = false
+
+      // 用户在终端里键入 → 写回 PTY
+      const dataSub = term.onData((d) => termWrite(id, d))
+
+      // 启动 PTY 会话 + 订阅输出
+      ;(async () => {
+        unlistenOut = await onTermOutput(id, (bytes) => {
+          if (!disposed) term.write(bytes)
+        })
+        unlistenExit = await onTermExit(id, () => {
+          if (!disposed) term.write('\r\n\x1b[90m[进程已退出]\x1b[0m\r\n')
+        })
+        await termStart(id, term.cols, term.rows, {
+          cwd: cwdRef.current,
+          env: envRef.current,
+          initialCommand: initCmdRef.current,
+          host: hostRef2.current,
+          identity: identityRef.current
+        })
+        term.focus()
+      })()
+
+      // 尺寸自适应:容器变化时 fit + 同步 PTY
+      const ro = new ResizeObserver(() => {
+        try {
+          fit.fit()
+          termResize(id, term.cols, term.rows)
+        } catch {
+          /* 容器临时为 0 时忽略 */
+        }
+      })
+      ro.observe(host)
+
+      // 监听系统深浅色切换 → 实时更新终端主题
+      const mql = window.matchMedia('(prefers-color-scheme: dark)')
+      const onScheme = (): void => {
+        term.options.theme = termTheme(mql.matches)
+        host.style.background = termTheme(mql.matches).background
+      }
+      mql.addEventListener?.('change', onScheme)
+
+      return () => {
+        disposed = true
+        ro.disconnect()
+        mql.removeEventListener?.('change', onScheme)
+        dataSub.dispose()
+        unlistenOut?.()
+        unlistenExit?.()
+        termKill(id)
+        term.dispose()
+        termRef.current = null
+        fitRef.current = null
+      }
+      // 仅按 id 创建会话:同一终端实例不因 cwd/env 变化而重启
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id])
+
+    return <div ref={hostRef} className="h-full w-full px-3 pt-2" />
+  }
+)
+
+export default TerminalView

@@ -1,0 +1,325 @@
+import { useEffect, useRef, useState } from 'react'
+import { FolderOpen, X } from 'lucide-react'
+import FileTree, { type TreeContextTarget } from './files/FileTree'
+import FileViewer from './files/FileViewer'
+import ContextMenu, { type ContextAction } from './files/ContextMenu'
+import { usePrompt } from './usePrompt'
+import {
+  copyPath as fsCopy,
+  createDir,
+  createFile,
+  deletePath,
+  movePath,
+  renamePath,
+  revealInFinder,
+  type DirEntry
+} from '@/lib/fs'
+
+interface FilesViewProps {
+  /** 工作目录(资源管理器根) */
+  root?: string
+  onPickRoot?: () => void
+  /** 在指定目录打开一个新终端 */
+  onOpenInTerminal?: (dir: string) => void
+  /** 在预览视图打开某 HTML 文件 */
+  onPreview?: (path: string) => void
+  /** 外部请求打开的文件路径(如从搜索结果跳转);变化时自动选中 */
+  openPath?: string
+  /** 远程主机(空=本地) */
+  host?: string
+}
+
+interface Clipboard {
+  path: string
+  mode: 'cut' | 'copy'
+}
+
+export default function FilesView({
+  root,
+  onPickRoot,
+  onOpenInTerminal,
+  onPreview,
+  openPath,
+  host
+}: FilesViewProps): JSX.Element {
+  // 多标签:已打开的文件列表 + 当前激活的文件
+  const [tabs, setTabs] = useState<string[]>([])
+  const [active, setActive] = useState('')
+  const [menu, setMenu] = useState<TreeContextTarget | null>(null)
+  const [clipboard, setClipboard] = useState<Clipboard | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [refreshPaths, setRefreshPaths] = useState<string[]>([])
+  // 文件树定位请求(active 变化时让左侧树跳转到该文件,VS Code 式)
+  const [revealReq, setRevealReq] = useState('')
+  const revealSeq = useRef(0)
+  // 应用内输入弹窗(替代 WKWebView 不支持的 window.prompt)
+  const { prompt, dialog } = usePrompt()
+
+  // active(当前预览的文件)变化 → 请求树定位到它
+  useEffect(() => {
+    if (active) {
+      revealSeq.current += 1
+      setRevealReq(`${active}#${revealSeq.current}`)
+    }
+  }, [active])
+
+  // 打开文件:加入标签(已存在则不重复)并激活
+  const openFile = (path: string): void => {
+    setTabs((prev) => (prev.includes(path) ? prev : [...prev, path]))
+    setActive(path)
+  }
+
+  // 新建后定位:文件→作为标签打开(并触发树展开+定位);文件夹→仅请求树定位展开。
+  // 关键:这会让新建项所在目录被展开,否则在未展开的目录里新建会"看不见"。
+  const revealAndOpen = (createdPath: string): void => {
+    if (/\.[^/]+$/.test(createdPath)) {
+      // 有扩展名,当作文件打开
+      openFile(createdPath)
+    } else {
+      revealSeq.current += 1
+      setRevealReq(`${createdPath}#${revealSeq.current}`)
+    }
+  }
+
+  // 关闭标签:移除并把激活切到相邻标签
+  const closeTab = (path: string): void => {
+    setTabs((prev) => {
+      const i = prev.indexOf(path)
+      const next = prev.filter((p) => p !== path)
+      setActive((cur) =>
+        cur === path ? (next[i] ?? next[i - 1] ?? '') : cur
+      )
+      return next
+    })
+  }
+
+  // 外部请求打开某文件(如搜索/Git 跳转)→ 作为标签打开
+  useEffect(() => {
+    if (openPath) openFile(openPath)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPath])
+
+  const refresh = (...dirs: string[]): void => {
+    setRefreshPaths(dirs)
+    setRefreshKey((k) => k + 1)
+  }
+
+  // 取某 entry 的“所在目录”:文件夹用自身,文件用其父目录
+  const dirOf = (entry: DirEntry): string =>
+    entry.isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
+
+  // 拖拽移动:把 src 移到 destDir 下,刷新两端
+  const handleMove = async (src: string, destDir: string): Promise<void> => {
+    const srcDir = src.slice(0, src.lastIndexOf('/'))
+    if (srcDir === destDir) return // 已在目标目录
+    try {
+      await movePath(src, destDir, host)
+      if (tabs.includes(src)) closeTab(src)
+      refresh(srcDir, destDir)
+    } catch (e) {
+      window.alert(`移动失败:${e}`)
+    }
+  }
+
+  const handleAction = async (
+    action: ContextAction,
+    target: DirEntry
+  ): Promise<void> => {
+    try {
+      switch (action) {
+        case 'new-file': {
+          const name = (await prompt('新建文件名'))?.trim()
+          if (!name) return
+          const created = await createFile(target.path, name, host)
+          refresh(target.path)
+          // 展开目标目录并定位到新文件,顺手作为标签打开
+          revealAndOpen(created)
+          break
+        }
+        case 'new-folder': {
+          const name = (await prompt('新建文件夹名'))?.trim()
+          if (!name) return
+          const created = await createDir(target.path, name, host)
+          refresh(target.path)
+          revealAndOpen(created)
+          break
+        }
+        case 'reveal':
+          await revealInFinder(target.path)
+          break
+        case 'preview':
+          onPreview?.(target.path)
+          break
+        case 'open-terminal':
+          onOpenInTerminal?.(target.path)
+          break
+        case 'cut':
+          setClipboard({ path: target.path, mode: 'cut' })
+          break
+        case 'copy':
+          setClipboard({ path: target.path, mode: 'copy' })
+          break
+        case 'paste': {
+          if (!clipboard) return
+          if (clipboard.mode === 'copy') {
+            await fsCopy(clipboard.path, target.path, host)
+          } else {
+            await movePath(clipboard.path, target.path, host)
+            // 剪切后清空源目录刷新
+            const srcDir = clipboard.path.slice(
+              0,
+              clipboard.path.lastIndexOf('/')
+            )
+            refresh(srcDir)
+            setClipboard(null)
+          }
+          refresh(target.path)
+          break
+        }
+        case 'copy-path':
+          await navigator.clipboard.writeText(target.path)
+          break
+        case 'copy-relative-path':
+          await navigator.clipboard.writeText(
+            root && target.path.startsWith(root)
+              ? target.path.slice(root.length).replace(/^\//, '')
+              : target.path
+          )
+          break
+        case 'rename': {
+          const name = (await prompt('重命名为', target.name))?.trim()
+          if (!name || name === target.name) return
+          await renamePath(target.path, name, host)
+          refresh(dirOf(target))
+          break
+        }
+        case 'delete': {
+          const ok = window.confirm(`确定删除「${target.name}」?`)
+          if (!ok) return
+          await deletePath(target.path, host)
+          if (tabs.includes(target.path)) closeTab(target.path)
+          refresh(dirOf(target))
+          break
+        }
+      }
+    } catch (e) {
+      window.alert(`操作失败:${e}`)
+    }
+  }
+
+  if (!root) {
+    return (
+      <div className="flex h-full w-full items-center justify-center rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+        <button
+          onClick={onPickRoot}
+          className="flex items-center gap-2 rounded-lg bg-sidebar px-4 py-2.5 text-[14px] text-ink hover:bg-black/5"
+        >
+          <FolderOpen size={16} />
+          选择工作目录以浏览文件
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+      {/* 左:文件树 */}
+      <div className="flex w-[260px] shrink-0 flex-col border-r border-black/8">
+        <div className="flex shrink-0 items-center justify-between px-3 py-2 text-[12px] font-medium uppercase tracking-wide text-ink-faint">
+          <span className="truncate">{root.split('/').pop() || root}</span>
+        </div>
+        <div className="min-h-0 flex-1">
+          <FileTree
+            root={root}
+            selectedPath={active}
+            onSelectFile={openFile}
+            onContext={setMenu}
+            onMove={handleMove}
+            refreshKey={refreshKey}
+            refreshPaths={refreshPaths}
+            host={host}
+            revealRequest={revealReq}
+          />
+        </div>
+      </div>
+
+      {/* 右:多标签编辑器 */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {tabs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
+            从左侧选择文件查看 / 编辑
+          </div>
+        ) : (
+          <>
+            {/* 标签条 */}
+            <div className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-black/8 bg-sidebar/40 px-1 py-1">
+              {tabs.map((p) => (
+                <div
+                  key={p}
+                  onClick={() => setActive(p)}
+                  onMouseDown={(e) => {
+                    // 鼠标中键(滚轮按下)关闭标签,与 VS Code / 浏览器一致
+                    if (e.button === 1) {
+                      e.preventDefault()
+                      closeTab(p)
+                    }
+                  }}
+                  className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md py-1 pl-2.5 pr-1 text-[12.5px] ${
+                    p === active
+                      ? 'bg-canvas text-ink shadow-sm'
+                      : 'text-ink-muted hover:bg-black/5'
+                  }`}
+                  title={p}
+                >
+                  <span className="max-w-[160px] truncate">
+                    {p.split('/').pop()}
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      closeTab(p)
+                    }}
+                    className="rounded p-0.5 text-ink-faint opacity-0 hover:bg-black/10 hover:text-ink group-hover:opacity-100"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {/* 内容:所有标签常驻挂载,显隐切换 → 切 tab 瞬时、保留滚动/编辑态 */}
+            <div className="relative min-h-0 flex-1">
+              {tabs.map((p) => (
+                <div
+                  key={p}
+                  className={`absolute inset-0 ${
+                    p === active
+                      ? 'z-10 opacity-100'
+                      : 'pointer-events-none opacity-0'
+                  }`}
+                >
+                  <FileViewer path={p} host={host} />
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 右键菜单 */}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          isDir={menu.entry.isDir}
+          fileName={menu.entry.name}
+          canPaste={!!clipboard}
+          onAction={(a) => handleAction(a, menu.entry)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* 输入弹窗(新建/重命名) */}
+      {dialog}
+    </div>
+  )
+}

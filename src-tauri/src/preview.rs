@@ -1,0 +1,767 @@
+// 预览服务器:在 Mac 本机起一个仅 127.0.0.1 的 HTTP 服务器,iframe 只访问
+// localhost(瞬时、不卡)。被预览的 HTML 在工作目录里:
+// - 本地工作目录:直接读盘。
+// - 远程工作目录(SSH):按需经持久 SSH 通道读字节并缓存(避免每次渲染卡 SSH)。
+//
+// 为什么用真 HTTP 服务器而非自定义 URI scheme:iframe 里 HTML 的相对子资源
+// (./style.css、/img/x.png、<script src>)要正确加载;真服务器根在工作目录,
+// 相对路径与任何网站一致。自定义 scheme 在 WKWebView iframe 里会被判 insecure。
+//
+// 热刷新:轮询目标文件 mtime(本地 metadata / 远端 stat),变化就 emit
+// "preview-reload" 事件,前端把 iframe key+1 重载。远端 inotify 不可行,统一轮询。
+
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+
+const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
+const CACHE_TTL: Duration = Duration::from_secs(2);
+
+struct PreviewInner {
+    port: u16,                 // 0 = 未启动
+    host: Option<String>,      // None = 本地
+    root: String,              // 服务器根 = 工作目录绝对路径
+    target_rel: String,        // 当前预览文件(相对 root),热刷新监听对象
+    last_mtime: Option<i64>,
+    // 远端字节缓存:key = 绝对路径,value = (取得时刻, 字节)
+    cache: HashMap<String, (Instant, Vec<u8>)>,
+    // html-vibe 插件 assets 目录(notebook.js/css/mathjax 所在),按 host 解析后缓存。
+    // key = host("" 表本地);value 空串=解析过但没找到。
+    assets_dir: HashMap<String, String>,
+    // 渲染引擎资源的永久缓存(notebook.js/css、2MB mathjax 不变):key = "host|文件名"。
+    // 一次读入常驻内存,后续 /__assets/ 请求零 IO/零 SSH,杜绝白屏重传。
+    assets_cache: HashMap<String, Vec<u8>>,
+}
+
+impl Default for PreviewInner {
+    fn default() -> Self {
+        PreviewInner {
+            port: 0,
+            host: None,
+            root: String::new(),
+            target_rel: String::new(),
+            last_mtime: None,
+            cache: HashMap::new(),
+            assets_dir: HashMap::new(),
+            assets_cache: HashMap::new(),
+        }
+    }
+}
+
+// 状态是进程级单例(服务器线程/刷新线程需要 'static 访问);命令一律走 global()。
+static STATE: OnceLock<&'static Mutex<PreviewInner>> = OnceLock::new();
+
+#[derive(Clone, Serialize)]
+struct ReloadEvent {
+    token: u64,
+}
+
+/// 启动预览服务器(幂等)。返回监听端口。
+#[tauri::command]
+pub fn preview_start(app: AppHandle) -> Result<u16, String> {
+    let cell = global();
+    {
+        let inner = cell.lock().map_err(|e| e.to_string())?;
+        if inner.port != 0 {
+            return Ok(inner.port);
+        }
+    }
+
+    let server = tiny_http::Server::http("127.0.0.1:0")
+        .map_err(|e| format!("启动预览服务器失败: {e}"))?;
+    let port = match server.server_addr() {
+        tiny_http::ListenAddr::IP(a) => a.port(),
+        _ => return Err("无法获取预览端口".into()),
+    };
+    {
+        let mut inner = cell.lock().map_err(|e| e.to_string())?;
+        inner.port = port;
+    }
+
+    // 服务器线程:逐请求处理
+    std::thread::spawn(move || {
+        for mut req in server.incoming_requests() {
+            let url = req.url().to_string();
+            let path = url.split(['?', '#']).next().unwrap_or("").to_string();
+            let is_post = matches!(req.method(), tiny_http::Method::Post);
+
+            // POST /__save:WYSIWYG 保存(复刻插件的 /__save),把编辑后的
+            // notebook 写回工作目录里的 .html。否则保存按钮报 "需经预览服务器打开"。
+            let (bytes, ctype, code) = if is_post && path == "/__save" {
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                save_artifact(&body)
+            } else {
+                serve(&url)
+            };
+
+            let resp = tiny_http::Response::from_data(bytes)
+                .with_status_code(code)
+                .with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
+                        .unwrap(),
+                )
+                .with_header(
+                    tiny_http::Header::from_bytes(
+                        &b"Cache-Control"[..],
+                        // 渲染引擎资源(notebook.js/css、2MB mathjax)不变 → 让 WebView
+                        // 永久缓存,避免每次刷新/保存都重传重解析(白屏主因)。
+                        // HTML 文档本身可变 → no-cache,保证热刷新拿到新内容。
+                        if path.starts_with("/__assets/") {
+                            &b"public, max-age=31536000, immutable"[..]
+                        } else {
+                            &b"no-cache"[..]
+                        },
+                    )
+                    .unwrap(),
+                );
+            let _ = req.respond(resp);
+        }
+    });
+
+    // 热刷新线程:轮询目标 mtime
+    let app2 = app.clone();
+    std::thread::spawn(move || reload_loop(app2));
+
+    Ok(port)
+}
+
+/// 设置当前预览目标(切换文件/工作目录/连接时调用)。
+#[tauri::command]
+pub fn preview_set_target(
+    host: Option<String>,
+    root: String,
+    target_rel: String,
+) -> Result<(), String> {
+    let host = host.filter(|s| !s.is_empty());
+    let mut inner = global().lock().map_err(|e| e.to_string())?;
+    inner.host = host;
+    inner.root = root;
+    inner.target_rel = target_rel;
+    inner.last_mtime = None; // 重新基线,切换后不误刷
+    inner.cache.clear();
+    Ok(())
+}
+
+/// 后台预取渲染引擎资源到永久缓存。预取 KaTeX(常见路径,~270KB)+ notebook 引擎,
+/// **不**预取 2MB MathJax(它只在 KaTeX 渲染不了时才懒加载,绝大多数文档用不到)。
+/// 在连接建立 / 打开预览前调用,真打开预览时引擎已在 Rust 内存,首屏不等传输。
+#[tauri::command]
+pub fn preview_prefetch_assets(host: Option<String>) {
+    let host = host.filter(|s| !s.is_empty());
+    std::thread::spawn(move || {
+        for asset in ["notebook.css", "notebook.js", "katex.min.css", "katex.min.js"] {
+            let _ = serve_asset(&host, asset); // 命中即写入 assets_cache
+        }
+    });
+}
+
+/// 解析默认预览目标:index.html → artifacts/index.html → 最新 *.html。
+/// 返回相对 root 的路径;找不到返 Err。
+#[tauri::command]
+pub fn preview_default_target(host: Option<String>, root: String) -> Result<String, String> {
+    let host = host.filter(|s| !s.is_empty());
+    let candidates = ["index.html", "artifacts/index.html"];
+    if let Some(h) = host.as_deref() {
+        for c in candidates {
+            let abs = join_rel(&root, c);
+            let out = crate::remote::run_remote(h, &format!("test -f {} && echo Y", crate::remote::shq(&abs)))
+                .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+                .unwrap_or_default();
+            if out == "Y" {
+                return Ok(c.to_string());
+            }
+        }
+        // 最新 *.html(GNU find,集群是 Linux)
+        let cmd = format!(
+            "find {} -maxdepth 3 -name '*.html' -not -path '*/node_modules/*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -1",
+            crate::remote::shq(&root)
+        );
+        let out = crate::remote::run_remote(h, &cmd)
+            .map(|b| String::from_utf8_lossy(&b).to_string())
+            .unwrap_or_default();
+        if let Some(p) = out.trim().split_whitespace().nth(1) {
+            let rel = p.strip_prefix(&root).unwrap_or(p).trim_start_matches('/');
+            if !rel.is_empty() {
+                return Ok(rel.to_string());
+            }
+        }
+        return Err("未找到 HTML".into());
+    }
+
+    // 本地
+    for c in candidates {
+        if Path::new(&root).join(c).is_file() {
+            return Ok(c.to_string());
+        }
+    }
+    if let Some(rel) = newest_local_html(&root) {
+        return Ok(rel);
+    }
+    Err("未找到 HTML".into())
+}
+
+// —— 内部 ——
+
+fn global() -> &'static Mutex<PreviewInner> {
+    STATE.get_or_init(|| Box::leak(Box::new(Mutex::new(PreviewInner::default()))))
+}
+
+/// 处理一个请求 URL,返回 (字节, content-type, 状态码)。
+fn serve(url: &str) -> (Vec<u8>, String, u16) {
+    // 去 query/fragment + 解码 + 去前导 /
+    let path = url.split(['?', '#']).next().unwrap_or("");
+    let decoded = percent_decode(path);
+    let rel = decoded.trim_start_matches('/');
+
+    let (host, root, target_rel) = {
+        match global().lock() {
+            Ok(g) => (g.host.clone(), g.root.clone(), g.target_rel.clone()),
+            Err(_) => return (b"server busy".to_vec(), "text/plain".into(), 500),
+        }
+    };
+
+    // html-vibe 渲染引擎资源:/__assets/notebook.js 等。复刻插件 Python 服务器的
+    // /__assets/ 行为——从插件 assets 目录读(本地搜已知路径,远程 find+缓存),
+    // 否则 notebook 产物拿不到渲染引擎、显示空白。
+    if let Some(asset) = rel.strip_prefix("__assets/") {
+        return serve_asset(&host, asset);
+    }
+
+    if root.is_empty() {
+        return (b"no preview target".to_vec(), "text/plain".into(), 404);
+    }
+    // 空路径 → 当前目标文件
+    let rel = if rel.is_empty() { target_rel.as_str() } else { rel };
+
+    // 路径安全:归一化后必须仍在 root 内
+    let abs = match safe_join(&root, rel) {
+        Some(p) => p,
+        None => return (b"forbidden".to_vec(), "text/plain".into(), 403),
+    };
+    let ctype = content_type(rel).to_string();
+
+    let bytes = if let Some(h) = host.as_deref() {
+        read_remote_cached(h, &abs)
+    } else {
+        std::fs::read(&abs).map_err(|e| e.to_string())
+    };
+    match bytes {
+        Ok(b) => (b, ctype, 200),
+        Err(_) => (b"not found".to_vec(), "text/plain".into(), 404),
+    }
+}
+
+/// 远端读字节,带 TTL 缓存。
+fn read_remote_cached(host: &str, abs: &str) -> Result<Vec<u8>, String> {
+    let key = format!("{host}|{abs}");
+    {
+        if let Ok(g) = global().lock() {
+            if let Some((at, data)) = g.cache.get(&key) {
+                if at.elapsed() < CACHE_TTL {
+                    return Ok(data.clone());
+                }
+            }
+        }
+    }
+    let b64 = crate::remote::read_bytes_b64(host, abs, MAX_PREVIEW_BYTES)?;
+    let data = B64.decode(b64.as_bytes()).map_err(|e| e.to_string())?;
+    if let Ok(mut g) = global().lock() {
+        g.cache.insert(key, (Instant::now(), data.clone()));
+    }
+    Ok(data)
+}
+
+/// 服务 html-vibe 渲染引擎资源(notebook.js/css、mathjax)。
+/// asset 形如 "notebook.js"。引擎必须与产物同机(版本/seed 格式要匹配):
+/// 远程产物 → 远程引擎。为避免 2MB 每次走 SSH:**永久缓存**(一 session 只读一次)
+/// + 连接时**后台预取**(见 preview_prefetch_assets),打开预览前就备好。
+fn serve_asset(host: &Option<String>, asset: &str) -> (Vec<u8>, String, u16) {
+    // 允许:简单文件名 或 fonts/<名>(KaTeX CSS 用相对路径引字体)。
+    // 拒:.. 穿越、绝对路径、其余多级子路径。
+    let allowed = !asset.is_empty()
+        && !asset.contains("..")
+        && !asset.starts_with('/')
+        && (!asset.contains('/') || {
+            // 仅放行单层 fonts/ 子目录
+            let rest = asset.strip_prefix("fonts/");
+            matches!(rest, Some(r) if !r.is_empty() && !r.contains('/'))
+        });
+    if !allowed {
+        return (b"forbidden".to_vec(), "text/plain".into(), 403);
+    }
+    let ctype = content_type(asset).to_string();
+    // 永久缓存命中:零 IO/零 SSH(2MB mathjax 不再重读/重传)
+    let ckey = format!("{}|{asset}", host.as_deref().unwrap_or(""));
+    if let Ok(g) = global().lock() {
+        if let Some(data) = g.assets_cache.get(&ckey) {
+            return (data.clone(), ctype, 200);
+        }
+    }
+    let dir = match assets_dir(host) {
+        Some(d) if !d.is_empty() => d,
+        _ => return (b"assets not found".to_vec(), "text/plain".into(), 404),
+    };
+    let abs = format!("{}/{}", dir.trim_end_matches('/'), asset);
+    let bytes = if let Some(h) = host.as_deref() {
+        read_remote_cached(h, &abs)
+    } else {
+        std::fs::read(&abs).map_err(|e| e.to_string())
+    };
+    match bytes {
+        Ok(b) => {
+            if let Ok(mut g) = global().lock() {
+                g.assets_cache.insert(ckey, b.clone());
+            }
+            (b, ctype, 200)
+        }
+        Err(_) => (b"asset not found".to_vec(), "text/plain".into(), 404),
+    }
+}
+
+/// WYSIWYG 保存(复刻插件 /__save)。body 是 JSON:
+/// - {path, seed:[...]}:读盘上的文件,只替换 <script id="seed"> 的 JSON 体
+///   (健壮:模板其余部分/脚本不被重新序列化);兼容旧版 /* SEED:BEGIN */ 区。
+/// - {path, html:"..."}:整篇写入(通用兜底)。
+/// path 必须是 .html 且限定在工作目录 root 内。本地写盘,远程经 SSH 写回。
+fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
+    let ok = |rel: &str| {
+        (
+            format!("{{\"ok\":true,\"path\":{}}}", json_str(rel)).into_bytes(),
+            "application/json".to_string(),
+            200u16,
+        )
+    };
+    let err = |msg: &str| {
+        (
+            format!("{{\"ok\":false,\"error\":{}}}", json_str(msg)).into_bytes(),
+            "application/json".to_string(),
+            400u16,
+        )
+    };
+
+    let payload: serde_json::Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return err(&format!("bad json: {e}")),
+    };
+    let rel = payload
+        .get("path")
+        .and_then(|p| p.as_str())
+        .unwrap_or("")
+        .trim_start_matches('/');
+    if !rel.ends_with(".html") {
+        return err("bad request");
+    }
+
+    let (host, root) = match global().lock() {
+        Ok(g) => (g.host.clone(), g.root.clone()),
+        Err(_) => return err("server busy"),
+    };
+    // 路径限定在 root 内(防穿越)
+    let abs = match safe_join(&root, rel) {
+        Some(p) => p,
+        None => return err("path escapes root"),
+    };
+
+    // 算出要写入的内容
+    let out: String = if let Some(seed) = payload.get("seed") {
+        // 读现有文件(本地/远程),替换 seed 区
+        let src = match read_text(&host, &abs) {
+            Ok(s) => s,
+            Err(_) => return err("file not found for seed-save"),
+        };
+        let seed_json = match serde_json::to_string_pretty(seed) {
+            Ok(s) => s,
+            Err(e) => return err(&format!("seed serialize: {e}")),
+        };
+        match replace_seed(&src, &seed_json) {
+            Ok(s) => s,
+            Err(e) => return err(e),
+        }
+    } else if let Some(h) = payload.get("html").and_then(|h| h.as_str()) {
+        h.to_string()
+    } else {
+        return err("bad request");
+    };
+
+    // 写回 + 失效缓存
+    let write_res = if let Some(h) = host.as_deref() {
+        crate::remote::write_file(h, &abs, &out)
+    } else {
+        std::fs::write(&abs, out.as_bytes()).map_err(|e| e.to_string())
+    };
+    match write_res {
+        Ok(_) => {
+            // 我们自己保存的:把 last_mtime 推进到新值,避免热刷新线程把这次
+            // 保存当成"外部改动"而触发整页重载(WYSIWYG 已就地更新,重载只会白屏)。
+            let host_opt = host.clone();
+            let new_mtime = mtime_of(&host_opt, &abs);
+            if let Ok(mut g) = global().lock() {
+                g.cache.clear();
+                // 仅当保存的就是当前预览目标时才推进基线
+                if join_rel(&g.root, &g.target_rel) == abs {
+                    g.last_mtime = new_mtime;
+                }
+            }
+            ok(rel)
+        }
+        Err(e) => err(&e),
+    }
+}
+
+/// 读文本(本地/远程),供 seed 保存用。
+fn read_text(host: &Option<String>, abs: &str) -> Result<String, String> {
+    if let Some(h) = host.as_deref() {
+        crate::remote::read_file(h, abs)
+    } else {
+        std::fs::read_to_string(abs).map_err(|e| e.to_string())
+    }
+}
+
+/// 替换 notebook 的 seed 区:优先 <script id="seed"> JSON 体,兜底旧 SEED 注释区。
+fn replace_seed(src: &str, seed_json: &str) -> Result<String, &'static str> {
+    let tag = "<script id=\"seed\" type=\"application/json\">";
+    if let Some(ti) = src.find(tag) {
+        let cstart = ti + tag.len();
+        let cend = match src[cstart..].find("</script>") {
+            Some(off) => cstart + off,
+            None => return Err("seed script not closed"),
+        };
+        return Ok(format!(
+            "{}\n{}\n{}",
+            &src[..cstart],
+            seed_json,
+            &src[cend..]
+        ));
+    }
+    // 旧版:/* SEED:BEGIN */ ... /* SEED:END */
+    let b = "/* SEED:BEGIN */";
+    let e = "/* SEED:END */";
+    if let (Some(i), Some(j)) = (src.find(b), src.find(e)) {
+        if j >= i {
+            return Ok(format!(
+                "{}{}\nvar SEED={};\n{}",
+                &src[..i],
+                b,
+                seed_json,
+                &src[j..]
+            ));
+        }
+    }
+    Err("seed marker not found")
+}
+
+/// 最小 JSON 字符串转义(用于 ok/err 响应里的路径/消息)。
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// 解析 html-vibe 插件 assets 目录(含 notebook.js)。解析一次后缓存到 state。
+/// 本地:搜已知安装位置;远程:find 常见位置(经持久 SSH)。
+fn assets_dir(host: &Option<String>) -> Option<String> {
+    let hkey = host.as_deref().unwrap_or("").to_string();
+    if let Ok(g) = global().lock() {
+        if let Some(d) = g.assets_dir.get(&hkey) {
+            return if d.is_empty() { None } else { Some(d.clone()) };
+        }
+    }
+    let found = if let Some(h) = host.as_deref() {
+        find_assets_remote(h)
+    } else {
+        find_assets_local()
+    };
+    if let Ok(mut g) = global().lock() {
+        g.assets_dir
+            .insert(hkey, found.clone().unwrap_or_default());
+    }
+    found
+}
+
+fn has_notebook_js(dir: &str) -> bool {
+    std::path::Path::new(dir).join("notebook.js").is_file()
+}
+
+fn find_assets_local() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    // 已知安装位置:开发副本 + claude 插件缓存
+    let mut cands = vec![
+        format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"),
+    ];
+    // claude 插件缓存里搜(marketplaces / cache 下的 html-vibe)
+    for base in [
+        format!("{home}/.claude/plugins/marketplaces"),
+        format!("{home}/.claude/plugins/cache"),
+    ] {
+        if let Some(d) = walk_find_assets(&base, 6) {
+            cands.push(d);
+        }
+    }
+    cands.into_iter().find(|d| has_notebook_js(d))
+}
+
+/// 本地有限深度搜 html-vibe/assets/notebook.js 的父目录。
+fn walk_find_assets(base: &str, max_depth: u32) -> Option<String> {
+    let mut stack = vec![(PathBuf::from(base), 0u32)];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > max_depth {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if e.file_name().to_string_lossy() == "assets"
+                    && p.join("notebook.js").is_file()
+                {
+                    return Some(p.to_string_lossy().to_string());
+                }
+                stack.push((p, depth + 1));
+            }
+        }
+    }
+    None
+}
+
+/// 远程:find 插件 assets 目录(经持久 SSH;集群是 Linux)。
+fn find_assets_remote(host: &str) -> Option<String> {
+    let cmd = "for d in \"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \
+$(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets -path '*html-vibe*' 2>/dev/null); do \
+[ -f \"$d/notebook.js\" ] && echo \"$d\" && break; done";
+    let out = crate::remote::run_remote(host, cmd).ok()?;
+    let s = String::from_utf8_lossy(&out).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.lines().next()?.to_string())
+    }
+}
+
+/// 热刷新轮询:目标 mtime 变化 → 清缓存 + emit。
+fn reload_loop(app: AppHandle) {
+    let mut token: u64 = 0;
+    loop {
+        std::thread::sleep(Duration::from_millis(1000));
+        let (host, root, target_rel, last) = {
+            match global().lock() {
+                Ok(g) => (
+                    g.host.clone(),
+                    g.root.clone(),
+                    g.target_rel.clone(),
+                    g.last_mtime,
+                ),
+                Err(_) => continue,
+            }
+        };
+        if root.is_empty() || target_rel.is_empty() {
+            continue;
+        }
+        let abs = join_rel(&root, &target_rel);
+        let cur = mtime_of(&host, &abs);
+        let Some(cur) = cur else { continue };
+        match last {
+            None => {
+                if let Ok(mut g) = global().lock() {
+                    g.last_mtime = Some(cur);
+                }
+            }
+            Some(prev) if prev != cur => {
+                if let Ok(mut g) = global().lock() {
+                    g.last_mtime = Some(cur);
+                    g.cache.clear();
+                }
+                token += 1;
+                let _ = app.emit("preview-reload", ReloadEvent { token });
+            }
+            _ => {}
+        }
+    }
+}
+
+fn mtime_of(host: &Option<String>, abs: &str) -> Option<i64> {
+    if let Some(h) = host.as_deref() {
+        // GNU 然后 BSD 兜底
+        let cmd = format!(
+            "stat -c %Y {p} 2>/dev/null || stat -f %m {p} 2>/dev/null",
+            p = crate::remote::shq(abs)
+        );
+        let out = crate::remote::run_remote(h, &cmd).ok()?;
+        String::from_utf8_lossy(&out).trim().parse::<i64>().ok()
+    } else {
+        let meta = std::fs::metadata(abs).ok()?;
+        let modified = meta.modified().ok()?;
+        let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(dur.as_secs() as i64)
+    }
+}
+
+/// 本地找最新 *.html(限深遍历,跳过常见噪声目录)。
+fn newest_local_html(root: &str) -> Option<String> {
+    let root_path = PathBuf::from(root);
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let mut stack = vec![(root_path.clone(), 0u32)];
+    const SKIP: &[&str] = &["node_modules", ".git", "target", "__pycache__", "dist"];
+    while let Some((dir, depth)) = stack.pop() {
+        if depth > 3 {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let ft = match e.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if !SKIP.contains(&name.as_str()) {
+                    stack.push((p, depth + 1));
+                }
+            } else if p.extension().and_then(|x| x.to_str()) == Some("html") {
+                if let Ok(m) = e.metadata().and_then(|md| md.modified()) {
+                    if best.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
+                        best = Some((m, p));
+                    }
+                }
+            }
+        }
+    }
+    let (_, p) = best?;
+    let rel = p.strip_prefix(&root_path).ok()?;
+    Some(rel.to_string_lossy().replace('\\', "/"))
+}
+
+fn join_rel(root: &str, rel: &str) -> String {
+    format!("{}/{}", root.trim_end_matches('/'), rel.trim_start_matches('/'))
+}
+
+/// 安全拼接:归一化 rel,拒绝 `..` 逃逸;结果绝对路径必须在 root 内。
+fn safe_join(root: &str, rel: &str) -> Option<String> {
+    let mut norm = PathBuf::new();
+    for comp in Path::new(rel).components() {
+        match comp {
+            Component::Normal(c) => norm.push(c),
+            Component::CurDir => {}
+            // 任何 .. 或绝对根都视为非法
+            _ => return None,
+        }
+    }
+    let abs = join_rel(root, &norm.to_string_lossy());
+    // 双保险:abs 必须以 root 为前缀
+    if abs.starts_with(root.trim_end_matches('/')) {
+        Some(abs)
+    } else {
+        None
+    }
+}
+
+fn content_type(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "wasm" => "application/wasm",
+        "map" => "application/json",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// 最小 percent-decode(只处理 %XX 与 +→空格不处理,路径里 + 是字面量)。
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn content_type_by_ext() {
+        assert_eq!(content_type("a.html"), "text/html; charset=utf-8");
+        assert_eq!(content_type("dir/x.CSS"), "text/css; charset=utf-8");
+        assert_eq!(content_type("img.png"), "image/png");
+        assert_eq!(content_type("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn safe_join_blocks_traversal() {
+        assert!(safe_join("/work", "../etc/passwd").is_none());
+        assert!(safe_join("/work", "/abs").is_none());
+        assert_eq!(
+            safe_join("/work", "sub/page.html").as_deref(),
+            Some("/work/sub/page.html")
+        );
+        assert_eq!(
+            safe_join("/work", "./a/./b.css").as_deref(),
+            Some("/work/a/b.css")
+        );
+    }
+
+    #[test]
+    fn percent_decode_basic() {
+        assert_eq!(percent_decode("/a%20b/c.html"), "/a b/c.html");
+        assert_eq!(percent_decode("/plain.css"), "/plain.css");
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+    #[test]
+    fn replace_seed_script_body() {
+        let src = "<html><script id=\"seed\" type=\"application/json\">OLD</script><body></body></html>";
+        let out = replace_seed(src, "{\"a\":1}").unwrap();
+        assert!(out.contains("{\"a\":1}"), "new seed in: {out}");
+        assert!(!out.contains("OLD"), "old seed gone");
+        assert!(out.contains("<body></body>"), "rest preserved");
+    }
+    #[test]
+    fn replace_seed_legacy_region() {
+        let src = "x/* SEED:BEGIN */var SEED=1;/* SEED:END */y";
+        let out = replace_seed(src, "[2]").unwrap();
+        assert!(out.contains("var SEED=[2];"));
+        assert!(out.starts_with("x") && out.ends_with("y"));
+    }
+    #[test]
+    fn replace_seed_missing() {
+        assert!(replace_seed("<html></html>", "{}").is_err());
+    }
+}

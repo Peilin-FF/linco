@@ -1,0 +1,649 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Eye,
+  MessagesSquare,
+  TerminalSquare,
+  FolderTree,
+  GitBranch,
+  Settings as SettingsIcon,
+  Plus,
+  X
+} from 'lucide-react'
+import ScreenView from './components/ScreenView'
+import TerminalView, { type TerminalHandle } from './components/TerminalView'
+import { termKill } from '@/lib/terminal'
+import ChatInput from './components/ChatInput'
+import FilesView from './components/FilesView'
+import GitView from './components/GitView'
+import Settings from './components/Settings'
+import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
+import RemoteDirPicker from './components/RemoteDirPicker'
+import CodeMirrorWarmup from './components/CodeMirrorWarmup'
+import ResizeHandle from './components/ResizeHandle'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import {
+  agentEnv,
+  loadConfig,
+  saveConfig,
+  type AppConfig
+} from '@/lib/config'
+import {
+  sshConfigHosts,
+  sshConnect,
+  parseSshCommand,
+  sshConfigAdd,
+  remoteHome,
+  type Connection
+} from '@/lib/connection'
+
+type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
+
+const VIEWS: { id: ViewId; label: string; icon: typeof Eye }[] = [
+  { id: 'chat', label: '对话', icon: MessagesSquare },
+  { id: 'terminal', label: '终端', icon: TerminalSquare },
+  { id: 'preview', label: '预览', icon: Eye },
+  { id: 'files', label: '文件', icon: FolderTree },
+  { id: 'git', label: 'Git', icon: GitBranch }
+]
+
+// 终端会话独立编号
+interface Shell {
+  id: string
+  label: string
+  cwd?: string
+  host?: string
+  identity?: string
+}
+
+// 对话会话:每个连接(本地/各集群)一个,常驻挂载。props 在激活时冻结,
+// 之后切到别的连接也不卸载,切回来还在现场。
+interface ChatSession {
+  id: string // chat:${connId}:${cwd}
+  connId: string // 'local' 或连接 id —— 每连接最多一个会话
+  cwd?: string
+  host?: string
+  identity?: string
+  env?: Record<string, string>
+  command?: string
+}
+
+let shellSeq = 0
+
+export default function App(): JSX.Element {
+  const [view, setView] = useState<ViewId>('chat')
+  const [showSettings, setShowSettings] = useState(false)
+  const [config, setConfig] = useState<AppConfig | null>(null)
+  // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
+  const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat']))
+  // 预览目标文件(右键预览时指定;空=默认目标)
+  const [previewPath, setPreviewPath] = useState<string | undefined>(undefined)
+
+  // 在预览视图打开某文件:记目标 + 切到预览 + 标记已访问(常驻挂载)
+  const openInPreview = (absPath: string): void => {
+    setPreviewPath(absPath)
+    setVisited((prev) => (prev.has('preview') ? prev : new Set(prev).add('preview')))
+    setView('preview')
+  }
+
+  // 记录访问过的视图(用于常驻挂载)
+  useEffect(() => {
+    setVisited((prev) => (prev.has(view) ? prev : new Set(prev).add(view)))
+  }, [view])
+
+  // 底部停靠终端:dockOpened=曾打开(常驻挂载),dockTerminalOpen=当前可见
+  const [dockOpened, setDockOpened] = useState(false)
+  const [dockTerminalOpen, setDockTerminalOpen] = useState(false)
+  const [dockHeight, setDockHeight] = useState(110) // 可拖拽调整(默认矮)
+  const [chatBoxHeight, setChatBoxHeight] = useState(0) // 对话框输入区额外高度(0=默认)
+
+  // 连接状态
+  const [connState, setConnState] = useState<ConnState>('idle')
+  const [sshHosts, setSshHosts] = useState<string[]>([])
+  // 远端目录浏览器(打开时持有初始路径)
+  const [remoteBrowse, setRemoteBrowse] = useState<string | null>(null)
+
+  // 对话会话:每连接一个,常驻挂载。chatRefs 按 id 持有句柄,
+  // 底部对话框转发到当前活动会话。
+  const chatRefs = useRef<Map<string, TerminalHandle>>(new Map())
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+
+  // 独立终端列表(可多开)
+  const [shells, setShells] = useState<Shell[]>([])
+  const [activeShell, setActiveShell] = useState<string>('')
+
+  // 启动时加载本地配置 + 读取 ssh config 主机
+  useEffect(() => {
+    loadConfig()
+      .then(setConfig)
+      .catch(() =>
+        setConfig({
+          agents: [],
+          defaultAgent: '',
+          autoStart: true,
+          cwd: '',
+          recentDirs: [],
+          connections: [],
+          activeConnection: ''
+        })
+      )
+    sshConfigHosts().then(setSshHosts).catch(() => {})
+  }, [])
+
+  // 当前激活的连接(空 = 本地)
+  const activeConn = useMemo<Connection | undefined>(
+    () => config?.connections.find((c) => c.id === config.activeConnection),
+    [config]
+  )
+  const host = activeConn?.host || undefined // undefined = 本地
+
+  // 默认 agent:决定对话会话要自动启动的命令与注入的环境变量
+  const defaultAgent = useMemo(
+    () => config?.agents.find((a) => a.id === config.defaultAgent),
+    [config]
+  )
+  const agentEnvVars = useMemo(
+    () => (defaultAgent ? agentEnv(defaultAgent) : undefined),
+    [defaultAgent]
+  )
+
+  // 工作目录:远程用连接的远端目录,本地用配置的 cwd
+  const cwd = (host ? activeConn?.cwd : config?.cwd) || undefined
+  // 对话会话自动启动 claude/codex
+  const initialCommand =
+    config?.autoStart && defaultAgent ? defaultAgent.command : undefined
+
+  // —— 每连接一个常驻对话会话 ——
+  // 连接身份:'' = 本地 → 'local';远程用 activeConnection id。
+  const connId = config?.activeConnection || 'local'
+  // 会话 id/key 仅含 connId + cwd:切集群=切到另一个常驻会话(不杀);
+  // 换工作目录=该会话按新 cwd 重启(有意);agent/env 不进 key(挂载时读一次)。
+  const activeChatId = `chat:${connId}:${cwd ?? ''}`
+
+  // 懒挂载活动连接的对话会话:不存在则加入(从此常驻);
+  // 同一连接换了工作目录(id 变)→ 替换该连接的旧会话(杀旧 PTF,带新 cwd 重启)。
+  useEffect(() => {
+    if (!config) return
+    setChatSessions((prev) => {
+      const mine = prev.find((s) => s.id === activeChatId)
+      if (mine) return prev // 已在现场,直接复用
+      const next: ChatSession = {
+        id: activeChatId,
+        connId,
+        cwd,
+        host,
+        identity: activeConn?.identity || undefined,
+        env: agentEnvVars,
+        command: initialCommand
+      }
+      // 同连接的旧会话(cwd 变)清掉,避免堆积死会话
+      const stale = prev.find((s) => s.connId === connId)
+      if (stale) {
+        chatRefs.current.delete(stale.id)
+        termKill(stale.id).catch(() => {})
+        return [...prev.filter((s) => s.connId !== connId), next]
+      }
+      return [...prev, next]
+    })
+    // 仅在活动会话 id 变化时运行(切连接/换 cwd)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeChatId])
+
+  const handleConfigChange = (next: AppConfig): void => {
+    setConfig(next)
+    saveConfig(next).catch((e) => console.error('保存配置失败', e))
+  }
+
+  // 激活某连接后:尝试静默 connect(key/已有 master)。
+  // 成功 → connected;失败(需密码/2FA)→ 切到终端视图交互连接。
+  const tryConnect = async (h: string, identity?: string): Promise<void> => {
+    setConnState('connecting')
+    try {
+      await sshConnect(h, identity)
+      setConnState('connected')
+    } catch {
+      // 需交互认证:跳到终端,让用户输密码;master 建立后各视图随即可用
+      setConnState('error')
+      setView('chat')
+    }
+  }
+
+  // 切到本地
+  const selectLocal = (): void => {
+    if (!config) return
+    setConnState('idle')
+    handleConfigChange({ ...config, activeConnection: '' })
+  }
+
+  // 切到已保存连接
+  const selectConnection = (id: string): void => {
+    if (!config) return
+    handleConfigChange({ ...config, activeConnection: id })
+    const conn = config.connections.find((c) => c.id === id)
+    if (conn?.host) void tryConnect(conn.host, conn.identity || undefined)
+  }
+
+  // 从 ~/.ssh/config 主机一键连接:创建一个连接并激活
+  const quickConnect = (h: string): void => {
+    if (!config) return
+    const id = `conn-${h}`
+    const exists = config.connections.find((c) => c.id === id || c.host === h)
+    const conn: Connection = exists ?? {
+      id,
+      name: h,
+      host: h,
+      cwd: '',
+      identity: ''
+    }
+    const connections = exists
+      ? config.connections
+      : [...config.connections, conn]
+    handleConfigChange({ ...config, connections, activeConnection: conn.id })
+    void tryConnect(h)
+  }
+
+  // 灵动岛:输入 ssh 指令 → 解析 → 写 ~/.ssh/config → 新增连接并激活。
+  // 返回错误信息(失败)或 null(成功)。
+  const handleAddSshCommand = async (cmd: string): Promise<string | null> => {
+    if (!config) return '配置未就绪'
+    try {
+      const t = await parseSshCommand(cmd)
+      await sshConfigAdd(t) // 写入 ~/.ssh/config(同名会报错)
+      const id = `conn-${t.alias}`
+      const conn: Connection = {
+        id,
+        name: t.alias,
+        host: t.alias, // 用别名连,ssh 自动套用刚写入的 config
+        cwd: '',
+        identity: ''
+      }
+      const connections = config.connections.some((c) => c.id === id)
+        ? config.connections
+        : [...config.connections, conn]
+      handleConfigChange({ ...config, connections, activeConnection: id })
+      sshConfigHosts().then(setSshHosts).catch(() => {}) // 刷新主机列表
+      void tryConnect(t.alias)
+      return null
+    } catch (e) {
+      return String(e)
+    }
+  }
+
+  const handlePickDir = (dir: string): void => {
+    if (!config) return
+    // 远程时:写到激活连接的 cwd + 该连接的最近列表;本地时:写全局 cwd + 全局最近
+    if (host && activeConn) {
+      const connections = config.connections.map((c) =>
+        c.id === activeConn.id
+          ? {
+              ...c,
+              cwd: dir,
+              recentDirs: [
+                dir,
+                ...(c.recentDirs ?? []).filter((d) => d !== dir)
+              ].slice(0, 12)
+            }
+          : c
+      )
+      handleConfigChange({ ...config, connections })
+    } else {
+      const recentDirs = [
+        dir,
+        ...config.recentDirs.filter((d) => d !== dir)
+      ].slice(0, 12)
+      handleConfigChange({ ...config, cwd: dir, recentDirs })
+    }
+  }
+
+  // 选作工作目录:远程 → 远端目录浏览器;本地 → 系统 Finder。
+  const pickRoot = async (): Promise<void> => {
+    if (host) {
+      // 远端:用连接的 cwd 或远端 HOME 作为初始路径
+      let init = activeConn?.cwd || ''
+      if (!init) {
+        try {
+          init = await remoteHome(host)
+        } catch {
+          init = '/'
+        }
+      }
+      setRemoteBrowse(init || '/')
+      return
+    }
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: '选择工作目录'
+    })
+    if (typeof selected === 'string') handlePickDir(selected)
+  }
+
+  // 新建独立终端(可指定目录,默认用全局工作目录)。继承当前连接(本地/远程)。
+  const newShell = (dir?: string): void => {
+    const id = `shell-${++shellSeq}`
+    const useDir = dir ?? cwd
+    const label = useDir ? useDir.split('/').pop() || `终端 ${shellSeq}` : `终端 ${shellSeq}`
+    setShells((prev) => [
+      ...prev,
+      { id, label, cwd: useDir, host, identity: activeConn?.identity || undefined }
+    ])
+    setActiveShell(id)
+    setView('terminal')
+  }
+
+  // 关闭终端
+  const closeShell = (id: string): void => {
+    setShells((prev) => {
+      const next = prev.filter((s) => s.id !== id)
+      setActiveShell((cur) =>
+        cur === id ? (next[next.length - 1]?.id ?? '') : cur
+      )
+      return next
+    })
+  }
+
+  // 底部对话框:始终与「对话」会话通信。发送/输入不切换当前视图。
+  const handleSend = (): void => {
+    // 实际写入由 onForward 的兜底重发完成(Ctrl-U + 文本 + 回车)
+  }
+  const handleForward = (data: string): void => {
+    // 转发到当前活动连接的对话会话
+    chatRefs.current.get(activeChatId)?.write(data)
+  }
+
+  // 配置未加载完成前不渲染
+  if (!config) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-canvas text-ink-faint">
+        加载中…
+      </div>
+    )
+  }
+
+  return (
+    <div className="relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">
+      <CodeMirrorWarmup />
+      {/* 顶部:视图切换(为 macOS 红绿灯留出左侧空间) */}
+      <div className="drag flex h-11 shrink-0 items-center gap-1 pl-20 pr-3">
+        {VIEWS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setView(id)}
+            className={`no-drag flex items-center gap-1.5 rounded-lg px-3 py-1 text-[13px] transition-colors ${
+              id === view
+                ? 'bg-canvas text-ink shadow-sm'
+                : 'text-ink-muted hover:bg-black/5'
+            }`}
+          >
+            <Icon size={15} />
+            <span>{label}</span>
+          </button>
+        ))}
+        <div className="flex-1" />
+        <ConnectionPicker
+          connections={config.connections}
+          activeId={config.activeConnection}
+          state={connState}
+          sshHosts={sshHosts}
+          onSelectLocal={selectLocal}
+          onSelectConnection={selectConnection}
+          onQuickConnect={quickConnect}
+          onManage={() => setShowSettings(true)}
+          onAddSshCommand={handleAddSshCommand}
+        />
+        <button
+          onClick={() => setShowSettings(true)}
+          className="no-drag rounded-lg p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
+          title="设置"
+        >
+          <SettingsIcon size={17} />
+        </button>
+      </div>
+
+      {/* 主区 */}
+      <div className="min-h-0 flex-1 px-1.5">
+        <div className="relative h-full w-full">
+          {/* 对话会话(claude agent):每连接一个,常驻挂载、自动启动。
+              切连接=切到另一个常驻会话(不卸载、不重启),切回来还在现场。
+              仅当前活动会话在「对话」视图下可见,其余 opacity-0 隐藏挂载。 */}
+          {chatSessions.map((s) => (
+            <div
+              key={s.id}
+              className={`absolute inset-0 overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
+                view === 'chat' && s.id === activeChatId
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <TerminalView
+                ref={(el) => {
+                  if (el) chatRefs.current.set(s.id, el)
+                  else chatRefs.current.delete(s.id)
+                }}
+                id={s.id}
+                cwd={s.cwd}
+                env={s.env}
+                initialCommand={s.command}
+                host={s.host}
+                identity={s.identity}
+              />
+            </div>
+          ))}
+
+          {/* 终端视图:独立 shell,可多开 */}
+          {view === 'terminal' && (
+            <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+              {/* 终端标签条 */}
+              <div className="flex shrink-0 items-center gap-1 border-b border-black/8 px-2 py-1.5">
+                {shells.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`group flex items-center gap-1 rounded-lg pl-2.5 pr-1 py-1 text-[12px] ${
+                      s.id === activeShell
+                        ? 'bg-sidebar text-ink'
+                        : 'text-ink-muted hover:bg-black/5'
+                    }`}
+                  >
+                    <button onClick={() => setActiveShell(s.id)}>{s.label}</button>
+                    <button
+                      onClick={() => closeShell(s.id)}
+                      className="rounded p-0.5 text-ink-faint hover:bg-black/10 hover:text-ink"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => newShell()}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5"
+                  title="新建终端"
+                >
+                  <Plus size={13} />
+                  新建终端
+                </button>
+              </div>
+              {/* 终端内容:每个 shell 常驻挂载,用显隐切换 */}
+              <div className="relative min-h-0 flex-1">
+                {shells.length === 0 ? (
+                  <div className="flex h-full items-center justify-center">
+                    <button
+                      onClick={() => newShell()}
+                      className="flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-2 text-[13px] text-ink hover:bg-black/5"
+                    >
+                      <Plus size={15} />
+                      新建终端
+                    </button>
+                  </div>
+                ) : (
+                  shells.map((s) => (
+                    <div
+                      key={s.id}
+                      className={`absolute inset-0 ${
+                        s.id === activeShell
+                          ? 'z-10 opacity-100'
+                          : 'pointer-events-none opacity-0'
+                      }`}
+                    >
+                      <TerminalView
+                        id={s.id}
+                        cwd={s.cwd}
+                        host={s.host}
+                        identity={s.identity}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 预览:首次访问后常驻挂载(iframe 状态保留),切回瞬时显示 */}
+          {visited.has('preview') && (
+            <div
+              className={`absolute inset-0 ${
+                view === 'preview'
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <ScreenView
+                host={host}
+                cwd={cwd}
+                previewPath={previewPath}
+              />
+            </div>
+          )}
+          {/* 文件 / Git:首次访问后常驻挂载,切回瞬时显示(不重挂载、不重拉) */}
+          {visited.has('files') && (
+            <div
+              className={`absolute inset-0 ${
+                view === 'files'
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <FilesView
+                root={cwd}
+                onPickRoot={pickRoot}
+                onOpenInTerminal={(dir) => newShell(dir)}
+                onPreview={openInPreview}
+                host={host}
+              />
+            </div>
+          )}
+          {visited.has('git') && (
+            <div
+              className={`absolute inset-0 ${
+                view === 'git'
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
+            >
+              <GitView repo={cwd} onPickRoot={pickRoot} host={host} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* screen ⟷ 对话框 的拖拽分隔条:向上拖加高对话框输入区(screen 变矮) */}
+      <div className="shrink-0 px-1.5">
+        <ResizeHandle
+          onResize={(dy) =>
+            setChatBoxHeight((h) => Math.max(0, Math.min(360, h - dy)))
+          }
+        />
+      </div>
+
+      {/* 底部对话框:常驻所有视图,始终与「对话」会话通信。
+          输入/提交不切换当前视图(想看对话自己点「对话」)。 */}
+      <div className="shrink-0 px-1.5 pb-1.5">
+        <div className="mx-auto w-full max-w-[820px]">
+          <ChatInput
+            onSend={handleSend}
+            onForward={handleForward}
+            cwd={cwd}
+            recentDirs={host && activeConn ? activeConn.recentDirs ?? [] : config.recentDirs}
+            onPickDir={handlePickDir}
+            remote={!!host}
+            onBrowseRemote={pickRoot}
+            compact={dockTerminalOpen}
+            terminalOpen={dockTerminalOpen}
+            extraHeight={chatBoxHeight}
+            commandBase={defaultAgent?.command}
+            host={host}
+            onToggleTerminal={() => {
+              setDockOpened(true)
+              setDockTerminalOpen((o) => !o)
+            }}
+          />
+        </div>
+      </div>
+
+      {/* 底部停靠终端(VS Code 式):放在对话框下方。干净的普通终端——
+          不注入 agent 的 API env、不自动跑 claude;只有对话窗口才跟 AI 对话。
+          宽度与上方 screen 一致;首次打开后常驻挂载,关闭仅隐藏不销毁会话。 */}
+      {dockOpened && (
+        <div
+          className={`shrink-0 px-1.5 pb-1.5 ${dockTerminalOpen ? 'block' : 'hidden'}`}
+        >
+          {/* 拖拽分隔条:向上拖加高终端(screen 自动变矮),向下拖反之 */}
+          <ResizeHandle
+            onResize={(dy) =>
+              setDockHeight((h) =>
+                Math.max(60, Math.min(window.innerHeight - 240, h - dy))
+              )
+            }
+          />
+          <div
+            className="relative overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5"
+            style={{ height: dockHeight }}
+          >
+            <div className="absolute right-2 top-1.5 z-10 flex items-center gap-1">
+              <span className="rounded bg-sidebar px-1.5 py-0.5 text-[11px] text-ink-faint">
+                终端{host ? ` · ${host}` : ''}
+              </span>
+              <button
+                onClick={() => setDockTerminalOpen(false)}
+                className="rounded p-1 text-ink-faint hover:bg-black/5 hover:text-ink"
+                title="关闭终端"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <TerminalView
+              id="dock"
+              cwd={cwd}
+              host={host}
+              identity={activeConn?.identity || undefined}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 远端目录浏览器(远程选工作目录时) */}
+      {remoteBrowse !== null && host && (
+        <RemoteDirPicker
+          host={host}
+          initialPath={remoteBrowse}
+          onPick={(dir) => {
+            setRemoteBrowse(null)
+            handlePickDir(dir)
+          }}
+          onClose={() => setRemoteBrowse(null)}
+        />
+      )}
+
+      {/* 设置:覆盖层(不替换主树)。主树仍挂载在底下,
+          对话/终端等会话不被卸载,claude 不会因开设置而重启。 */}
+      {showSettings && (
+        <div className="absolute inset-0 z-50 bg-sidebar">
+          <Settings
+            config={config}
+            onChange={handleConfigChange}
+            onClose={() => setShowSettings(false)}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+

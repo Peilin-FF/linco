@@ -1,0 +1,24 @@
+[package]
+name = "linco"
+version = "0.1.0"
+description = "Linco — 直接驱动 Claude Code / Codex 等 CLI agent 的桌面应用"
+authors = ["Linco"]
+edition = "2021"
+
+[lib]
+name = "linco_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.8"
+base64 = "0.22"
+tauri-plugin-dialog = "2.7.1"
+regex = "1"
+tiny_http = "0.12"
