@@ -102,7 +102,9 @@ export default function ScreenView({
           setEmpty(false)
           pushUrl(base + encodeURI(rel))
         } else {
-          // 默认 → 进「产物首页」列表,自己点选要看的 HTML
+          // 默认 → 进「产物首页」列表,自己点选要看的 HTML。
+          // 先设根目录(target_rel 空,只为把 root 告诉服务器,否则列表页拿不到 root)
+          await previewSetTarget(cwd, '', host)
           if (!alive) return
           setEmpty(false)
           pushUrl(base + '__index__')
