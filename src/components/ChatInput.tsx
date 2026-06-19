@@ -260,10 +260,12 @@ export default function ChatInput({
   const handleSend = (): void => {
     if (!canSend) return
     const text = value.trim()
+    // 顺序要紧:先 onSend(它会 git stash create 拍“本轮基线”),再 onForward 把回车
+    // 送进 PTY 放行 agent。否则 agent 可能在基线拍好前就改完文件,改动被基线吞掉 → diff 空。
+    onSend?.(text)
     // 兜底重发:先清空 claude 输入行(Ctrl-U),重打完整文本,再回车提交,
     // 保证即使逐字转发期间有偏差,最终命令也准确无误。
     onForward?.('\x15' + text + '\r')
-    onSend?.(text)
     setValue('')
     prevRef.current = ''
     setComp(null)

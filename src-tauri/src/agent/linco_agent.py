@@ -305,6 +305,63 @@ def op_ps(a):
     return {"procs": result}
 
 
+def op_proc_output(a):
+    # 取某进程 stdout/stderr(fd 1/2)指向的文件路径——code agent 起的后台进程
+    # 输出会被重定向到文件,读这个文件即可实时看到训练 log 等。
+    # Linux:readlink /proc/<pid>/fd/1;其它平台(macOS)用 lsof 兜底。
+    pid = int(a["pid"])
+    out = {"fd1": None, "fd2": None}
+    for fd, key in ((1, "fd1"), (2, "fd2")):
+        try:
+            p = os.readlink("/proc/%d/fd/%d" % (pid, fd))
+            # 只认普通文件(排除 pipe:/socket:/dev/null 等不可 tail 的)
+            if p.startswith("/") and not p.startswith("/dev/"):
+                out[key] = p
+            continue
+        except OSError:
+            pass
+        # 兜底:lsof(macOS 无 /proc)
+        try:
+            r = subprocess.run(
+                ["lsof", "-p", str(pid), "-a", "-d", str(fd), "-F", "n"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode("utf-8", "replace")
+            for line in r.splitlines():
+                if line.startswith("n/") and not line.startswith("n/dev/"):
+                    out[key] = line[1:]
+                    break
+        except Exception:
+            pass
+    return out
+
+
+def op_tail_file(a):
+    # 从 offset 字节处增量读文件,返回新增内容(base64)+ 当前总大小。
+    # 前端记住 size 作下次 offset,持续拿新增 → 实时滚动。文件被截断(size<offset)
+    # 时从头读。限制单次返回上限,避免初次打开超大 log 一次性灌爆。
+    path = a["path"]
+    offset = int(a.get("offset", 0))
+    max_bytes = int(a.get("max", 256 * 1024))
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        raise ValueError("无法读取输出文件: %s" % e)
+    start = offset
+    if offset > size:      # 文件被截断/轮转 → 从头
+        start = 0
+    # 初次(offset=0)且文件很大:只取尾部 max_bytes,避免一次性灌爆
+    if start == 0 and size > max_bytes:
+        start = size - max_bytes
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read(max_bytes)
+    return {
+        "b64": base64.b64encode(data).decode("ascii"),
+        "size": size,
+        "start": start,
+    }
+
+
 # ---------- 文件监听(灵敏:agent 改文件 → 主动推 fileChange)----------
 # 优先 inotifywait(事件级,最灵敏);否则纯 Python 轮询 mtime(~0.5s)。
 # 变更去抖后批量推 {"event":"fileChange","paths":[...]}(无 id,主动)。
@@ -456,6 +513,7 @@ OPS = {
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
     "git": op_git, "shell": op_shell, "ps": op_ps,
+    "proc_output": op_proc_output, "tail_file": op_tail_file,
 }
 
 

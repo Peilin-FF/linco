@@ -26,3 +26,31 @@ export async function agentProcesses(
     commandBase: commandBase || null
   })
 }
+
+export interface ProcOutput {
+  fd1: string | null // stdout 指向的文件(可 tail 看实时输出)
+  fd2: string | null // stderr 指向的文件
+}
+
+/// 取某进程 stdout/stderr 指向的输出文件路径(用于实时查看它的 log)。
+export async function procOutputFile(
+  pid: number,
+  host?: string
+): Promise<ProcOutput> {
+  return invoke<ProcOutput>('proc_output_file', { host: h(host), pid })
+}
+
+export interface TailChunk {
+  data: string // 新增内容
+  size: number // 文件当前总字节(下次作 offset)
+  start: number // 本次实际起始字节
+}
+
+/// 从 offset 增量读输出文件(实时滚动)。
+export async function tailFile(
+  path: string,
+  offset: number,
+  host?: string
+): Promise<TailChunk> {
+  return invoke<TailChunk>('tail_file', { host: h(host), path, offset })
+}

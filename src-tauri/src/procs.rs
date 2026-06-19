@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::process::Command;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use serde::Serialize;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -67,6 +69,140 @@ pub async fn agent_processes(
 
 /// 远端 shell 回退用的 ps 命令(字段与 agent op_ps 一致)。
 const PS_CMD: &str = "ps -eo pid=,ppid=,etime=,pcpu=,pmem=,stat=,args=";
+
+/// 进程 stdout/stderr(fd 1/2)指向的输出文件。code agent 起的后台进程输出会被
+/// 重定向到文件,拿到这个路径就能实时 tail 它的 log(训练进度/报错等)。
+/// 返回 (fd1_path, fd2_path),拿不到为 None。
+#[derive(serde::Serialize)]
+pub struct ProcOutput {
+    pub fd1: Option<String>,
+    pub fd2: Option<String>,
+}
+
+#[tauri::command]
+pub async fn proc_output_file(host: Option<String>, pid: i64) -> Result<ProcOutput, String> {
+    crate::blocking::run(move || {
+        if let Some(h) = host.filter(|s| !s.is_empty()) {
+            // 远程:优先 agent op,失败回退 shell(readlink /proc 或 lsof)
+            if let Ok(v) = crate::agent_rpc::call(&h, "proc_output", serde_json::json!({ "pid": pid }))
+            {
+                return Ok(ProcOutput {
+                    fd1: v.get("fd1").and_then(|x| x.as_str()).map(String::from),
+                    fd2: v.get("fd2").and_then(|x| x.as_str()).map(String::from),
+                });
+            }
+            let cmd = format!(
+                "readlink /proc/{pid}/fd/1 2>/dev/null || lsof -p {pid} -a -d 1 -F n 2>/dev/null | sed -n 's/^n//p' | head -1"
+            );
+            let fd1 = crate::remote::run_remote(&h, &cmd)
+                .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+                .ok()
+                .filter(|s| s.starts_with('/') && !s.starts_with("/dev/"));
+            return Ok(ProcOutput { fd1, fd2: None });
+        }
+        // 本地:Linux 读 /proc,macOS 用 lsof
+        Ok(local_proc_output(pid))
+    })
+    .await
+}
+
+/// 从 offset 字节增量读输出文件,返回新增内容 + 当前总大小(供前端实时滚动)。
+#[derive(serde::Serialize)]
+pub struct TailChunk {
+    pub data: String, // 新增的文本内容
+    pub size: i64,    // 文件当前总字节数(下次作 offset)
+    pub start: i64,   // 本次实际起始字节(初次取尾部时 > 0)
+}
+
+#[tauri::command]
+pub async fn tail_file(
+    host: Option<String>,
+    path: String,
+    offset: i64,
+) -> Result<TailChunk, String> {
+    const MAX: i64 = 256 * 1024;
+    crate::blocking::run(move || {
+        if let Some(h) = host.filter(|s| !s.is_empty()) {
+            // 远程:优先 agent op(返回 b64),失败回退 shell(wc -c + tail -c)
+            if let Ok(v) = crate::agent_rpc::call(
+                &h,
+                "tail_file",
+                serde_json::json!({ "path": path, "offset": offset, "max": MAX }),
+            ) {
+                let b64 = v.get("b64").and_then(|x| x.as_str()).unwrap_or("");
+                let bytes = B64.decode(b64).unwrap_or_default();
+                return Ok(TailChunk {
+                    data: String::from_utf8_lossy(&bytes).to_string(),
+                    size: v.get("size").and_then(|x| x.as_i64()).unwrap_or(0),
+                    start: v.get("start").and_then(|x| x.as_i64()).unwrap_or(offset),
+                });
+            }
+            let szout = crate::remote::run_remote(&h, &format!("wc -c < {}", crate::remote::shq(&path)))
+                .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
+            let size: i64 = szout.parse().unwrap_or(0);
+            let mut start = if offset > size { 0 } else { offset };
+            if start == 0 && size > MAX {
+                start = size - MAX;
+            }
+            let cmd = format!("tail -c +{} {} | head -c {}", start + 1, crate::remote::shq(&path), MAX);
+            let data = crate::remote::run_remote(&h, &cmd)
+                .map(|b| String::from_utf8_lossy(&b).to_string())?;
+            return Ok(TailChunk { data, size, start });
+        }
+        // 本地
+        local_tail(&path, offset, MAX)
+    })
+    .await
+}
+
+/// 本地解析进程 fd 1/2 的输出文件(Linux /proc;macOS lsof)。
+fn local_proc_output(pid: i64) -> ProcOutput {
+    let resolve = |fd: i64| -> Option<String> {
+        // Linux:readlink /proc/PID/fd/N
+        #[cfg(target_os = "linux")]
+        if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/fd/{fd}")) {
+            let s = p.to_string_lossy().to_string();
+            if s.starts_with('/') && !s.starts_with("/dev/") {
+                return Some(s);
+            }
+            return None;
+        }
+        // 其它(macOS):lsof
+        let out = Command::new("lsof")
+            .args(["-p", &pid.to_string(), "-a", "-d", &fd.to_string(), "-F", "n"])
+            .output()
+            .ok()?;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some(rest) = line.strip_prefix("n/") {
+                let path = format!("/{rest}");
+                if !path.starts_with("/dev/") {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    };
+    ProcOutput { fd1: resolve(1), fd2: resolve(2) }
+}
+
+/// 本地从 offset 增量读文件。
+fn local_tail(path: &str, offset: i64, max: i64) -> Result<TailChunk, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let size = std::fs::metadata(path).map_err(|e| format!("无法读取输出文件: {e}"))?.len() as i64;
+    let mut start = if offset > size { 0 } else { offset };
+    if start == 0 && size > max {
+        start = size - max;
+    }
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; max as usize];
+    let n = f.read(&mut buf).map_err(|e| e.to_string())?;
+    Ok(TailChunk {
+        data: String::from_utf8_lossy(&buf[..n]).to_string(),
+        size,
+        start,
+    })
+}
 
 fn proc_from_json(v: &serde_json::Value) -> Option<ProcInfo> {
     Some(ProcInfo {
