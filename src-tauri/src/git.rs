@@ -18,6 +18,11 @@ fn host_opt(h: &Option<String>) -> Option<&str> {
     h.as_deref().filter(|s| !s.is_empty())
 }
 
+/// 公开的 git 执行(供 shadow.rs 复用同一套 agent/shell 路由)。
+pub fn git_raw(host: &Option<String>, repo: &str, args: &[&str]) -> Result<String, String> {
+    git(host, repo, args)
+}
+
 /// 执行 git 命令(本地或远程),返回 stdout(失败返回 Err(stderr))。
 fn git(host: &Option<String>, repo: &str, args: &[&str]) -> Result<String, String> {
     if let Some(h) = host_opt(host) {

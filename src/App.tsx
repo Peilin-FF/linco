@@ -35,6 +35,7 @@ import {
   type Connection
 } from '@/lib/connection'
 import { watchStart, watchStop } from '@/lib/watch'
+import { shadowBeginTurn } from '@/lib/shadow'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
 
@@ -371,6 +372,8 @@ export default function App(): JSX.Element {
 
   // 底部对话框:始终与「对话」会话通信。发送/输入不切换当前视图。
   const handleSend = (): void => {
+    // 用户发消息 = 新一轮:记 git 基线,之后的改动即"本轮 agent 改动"(Cursor 式 diff)。
+    if (cwd) shadowBeginTurn(cwd, host).catch(() => {})
     // 实际写入由 onForward 的兜底重发完成(Ctrl-U + 文本 + 回车)
   }
   const handleForward = (data: string): void => {

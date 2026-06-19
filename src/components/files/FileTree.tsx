@@ -28,6 +28,35 @@ export interface TreeContextTarget {
   y: number
 }
 
+// Git 状态字符 → 颜色 class(A 绿/M 橙/D 红/? 灰)
+function gitColor(ch: string): string {
+  switch (ch) {
+    case 'A':
+      return 'text-[#27894e]'
+    case 'M':
+      return 'text-[#b8860b]'
+    case 'D':
+      return 'text-[#c0392b]'
+    default:
+      return 'text-ink-faint' // ? 未跟踪
+  }
+}
+
+// 计算节点的 git 状态:文件取自身;文件夹聚合(内部任意改动则取一个代表字符)。
+function nodeGitStatus(
+  entry: DirEntry,
+  gitMap?: Map<string, string>
+): string | null {
+  if (!gitMap || gitMap.size === 0) return null
+  if (!entry.isDir) return gitMap.get(entry.path) ?? null
+  // 文件夹:看是否有改动落在其下;有则返回聚合标记(优先级 M>A>D>?,统一显点)
+  const prefix = entry.path.replace(/\/+$/, '') + '/'
+  for (const k of gitMap.keys()) {
+    if (k.startsWith(prefix)) return '•' // 文件夹只显改动点
+  }
+  return null
+}
+
 interface FileTreeProps {
   root: string
   selectedPath: string
@@ -41,6 +70,8 @@ interface FileTreeProps {
   refreshPaths: string[]
   /** 远程主机(空=本地) */
   host?: string
+  /** Git 逐文件状态:绝对路径→状态字符(M/A/D/?)。用于显色标 + 文件夹聚合。 */
+  gitMap?: Map<string, string>
   /** 定位请求:设为某文件路径时,树自动展开并滚动到它(VS Code 式)。
    *  用 `路径#序号` 形式,序号变化即触发(同一文件可重复定位)。 */
   revealRequest?: string
@@ -64,7 +95,8 @@ const Node = memo(function Node({
   refreshKey,
   refreshPaths,
   revealPath,
-  host
+  host,
+  gitMap
 }: NodeProps): JSX.Element {
   const [open, setOpen] = useState(false)
   const [children, setChildren] = useState<DirEntry[] | null>(null)
@@ -148,6 +180,7 @@ const Node = memo(function Node({
 
   const FileIcon = entry.isDir ? null : iconForFile(entry.name)
   const isSelected = entry.path === selectedPath
+  const gitSt = nodeGitStatus(entry, gitMap)
 
   // 拖拽源
   const onDragStart = (e: React.DragEvent): void => {
@@ -221,7 +254,22 @@ const Node = memo(function Node({
             )}
           </>
         )}
-        <span className="truncate">{entry.name}</span>
+        <span
+          className={`truncate ${
+            gitSt && gitSt !== '•' ? gitColor(gitSt) : ''
+          }`}
+        >
+          {entry.name}
+        </span>
+        {gitSt && (
+          <span
+            className={`ml-auto shrink-0 pr-1 text-[11px] font-semibold ${gitColor(
+              gitSt === '•' ? 'M' : gitSt
+            )}`}
+          >
+            {gitSt === '•' ? '●' : gitSt}
+          </span>
+        )}
       </div>
 
       {entry.isDir && open && (
@@ -248,6 +296,7 @@ const Node = memo(function Node({
                 refreshPaths={refreshPaths}
                 revealPath={revealPath}
                 host={host}
+                gitMap={gitMap}
               />
             ))
           )}
@@ -267,7 +316,8 @@ export default function FileTree({
   refreshKey,
   refreshPaths,
   host,
-  revealRequest
+  revealRequest,
+  gitMap
 }: FileTreeProps): JSX.Element {
   const [entries, setEntries] = useState<DirEntry[]>([])
   const [revealPath, setRevealPath] = useState('')
@@ -617,6 +667,7 @@ export default function FileTree({
               refreshPaths={refreshPaths}
               revealPath={revealPath}
               host={host}
+              gitMap={gitMap}
             />
           ))
         )}

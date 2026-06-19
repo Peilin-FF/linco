@@ -14,6 +14,7 @@ mod git;
 mod preview;
 mod remote;
 mod search;
+mod shadow;
 mod terminal;
 mod watch;
 
@@ -48,6 +49,9 @@ pub fn run() {
             preview::preview_prefetch_assets,
             watch::watch_start,
             watch::watch_stop,
+            shadow::shadow_begin_turn,
+            shadow::shadow_diff,
+            shadow::shadow_changed,
             fs::fs_list_dir,
             fs::fs_read_file,
             fs::fs_read_bytes,

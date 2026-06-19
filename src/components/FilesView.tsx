@@ -15,6 +15,7 @@ import {
   type DirEntry
 } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
+import { gitStatus } from '@/lib/git'
 
 interface FilesViewProps {
   /** 工作目录(资源管理器根) */
@@ -52,6 +53,8 @@ export default function FilesView({
   const [treeSel, setTreeSel] = useState<DirEntry | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshPaths, setRefreshPaths] = useState<string[]>([])
+  // Git 逐文件状态:绝对路径 → 状态字符(M/A/D/?)。供文件树显色标 + 文件夹聚合。
+  const [gitMap, setGitMap] = useState<Map<string, string>>(new Map())
   // 文件树定位请求(active 变化时让左侧树跳转到该文件,VS Code 式)
   const [revealReq, setRevealReq] = useState('')
   const revealSeq = useRef(0)
@@ -108,6 +111,40 @@ export default function FilesView({
     setRefreshKey((k) => k + 1)
   }
 
+  // 拉取 Git 逐文件状态,建 绝对路径→状态字符 的 map(供文件树显标)。
+  const loadGit = async (): Promise<void> => {
+    if (!root) return
+    try {
+      const s = await gitStatus(root, host)
+      if (!s.isRepo) {
+        setGitMap(new Map())
+        return
+      }
+      const m = new Map<string, string>()
+      const base = root.replace(/\/+$/, '')
+      for (const f of s.files) {
+        // 状态字符:未跟踪=? 删除=D 新增=A 其余=M
+        const ch = f.untracked
+          ? '?'
+          : f.index === 'A' || f.work === 'A'
+            ? 'A'
+            : f.index === 'D' || f.work === 'D'
+              ? 'D'
+              : 'M'
+        m.set(`${base}/${f.path}`, ch)
+      }
+      setGitMap(m)
+    } catch {
+      setGitMap(new Map())
+    }
+  }
+
+  // 进入/换工作目录时拉一次 git 状态
+  useEffect(() => {
+    void loadGit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, host])
+
   // 监听文件变更(远程 agent / 本地扫描推送)→ debounce 后刷新受影响目录,
   // 实现"agent 改文件,文件树自动刷新"(灵敏)。
   useEffect(() => {
@@ -125,6 +162,7 @@ export default function FilesView({
       timer = window.setTimeout(() => {
         refresh(...pendingDirs)
         pendingDirs.clear()
+        void loadGit() // 文件变了 → git 标识也刷新
       }, 150)
     }).then((f) => (un = f))
     return () => {
@@ -301,6 +339,7 @@ export default function FilesView({
             refreshPaths={refreshPaths}
             host={host}
             revealRequest={revealReq}
+            gitMap={gitMap}
           />
         </div>
       </div>
@@ -359,7 +398,7 @@ export default function FilesView({
                       : 'pointer-events-none opacity-0'
                   }`}
                 >
-                  <FileViewer path={p} host={host} />
+                  <FileViewer path={p} host={host} repo={root} />
                 </div>
               ))}
             </div>
