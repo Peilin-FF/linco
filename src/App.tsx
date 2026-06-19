@@ -209,6 +209,9 @@ export default function App(): JSX.Element {
   }, [host, cwd, remoteDataReady])
   // 启动文件监听:工作目录/连接就绪后,让 agent(远程)或本地扫描盯住工作目录,
   // 变更经 remote-fs-change 事件实时推给文件树/Git/预览(灵敏自动刷新)。
+  // 注:影子基线不在这里建 —— 只在用户首次给 agent 发消息时才建(见 handleSend)。
+  // 这样「只看文件、不用 agent」时零开销;一旦开始对话,基线自动建立、之后每轮重置,
+  // 整个过程对用户透明,无需知道「基线」概念。
   useEffect(() => {
     if (!cwd || !remoteDataReady) {
       watchStop().catch(() => {})
@@ -580,24 +583,9 @@ export default function App(): JSX.Element {
           {/* 终端视图:agent 后台任务(自动 tab)+ 用户独立 shell(可多开) */}
           {view === 'terminal' && (
             <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
-              {/* 终端标签条 */}
+              {/* 终端标签条:用户的 shell + 「新建终端」按钮放最前(固定好找),
+                  agent 自动起的后台任务 tab 放在它们之后,避免把用户的入口挤跑。 */}
               <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-black/8 px-2 py-1.5">
-                {/* agent 后台任务 tab(自动出现/消失,不可手动关——进程结束即移除) */}
-                {tasks.map((t) => (
-                  <button
-                    key={`task:${t.pid}`}
-                    onClick={() => setActiveShell(`task:${t.pid}`)}
-                    className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
-                      activeShell === `task:${t.pid}`
-                        ? 'bg-sidebar text-ink'
-                        : 'text-ink-muted hover:bg-black/5'
-                    }`}
-                    title={t.args}
-                  >
-                    <Activity size={12} className="text-emerald-500" />
-                    {taskLabel(t.args)}
-                  </button>
-                ))}
                 {shells.map((s) => (
                   <div
                     key={s.id}
@@ -624,6 +612,26 @@ export default function App(): JSX.Element {
                   <Plus size={13} />
                   新建终端
                 </button>
+                {/* agent 后台任务 tab(自动出现/消失,不可手动关——进程结束即移除)。
+                    放在用户终端之后,加一条竖分隔线区分。 */}
+                {tasks.length > 0 && (
+                  <div className="mx-1 h-4 w-px shrink-0 bg-black/10" />
+                )}
+                {tasks.map((t) => (
+                  <button
+                    key={`task:${t.pid}`}
+                    onClick={() => setActiveShell(`task:${t.pid}`)}
+                    className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
+                      activeShell === `task:${t.pid}`
+                        ? 'bg-sidebar text-ink'
+                        : 'text-ink-muted hover:bg-black/5'
+                    }`}
+                    title={t.args}
+                  >
+                    <Activity size={12} className="text-emerald-500" />
+                    {taskLabel(t.args)}
+                  </button>
+                ))}
               </div>
               {/* 终端内容 */}
               <div className="relative min-h-0 flex-1">

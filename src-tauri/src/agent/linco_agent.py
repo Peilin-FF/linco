@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "11"
+AGENT_VERSION = "13"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -233,6 +233,19 @@ def op_git(a):
 SHADOW_SKIP_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
 SHADOW_MAX_FILE = 1024 * 1024  # 1MB:超过则不纳入(不标记、不 diff)
 
+# 临时文件唯一序号:agent 是单进程多线程(MAX_WORKERS),os.getpid() 在并发线程间相同,
+# 会导致临时 index / 列表文件名冲突 → 并发的 changed/diff 互相踩 index(全删/空 index bug)。
+# 用进程级原子自增序号 + 线程 id 保证每次调用的临时文件名全局唯一。
+_shadow_seq = [0]
+_shadow_seq_lock = threading.Lock()
+
+
+def _shadow_uniq():
+    with _shadow_seq_lock:
+        _shadow_seq[0] += 1
+        n = _shadow_seq[0]
+    return "%d-%d" % (threading.current_thread().ident or 0, n)
+
 
 def _shadow_fnv1a(s):
     h = 0xcbf29ce484222325
@@ -247,8 +260,10 @@ def _shadow_dir(repo):
     return os.path.join(home, ".linco", "shadows", _shadow_fnv1a(repo))
 
 
-def _shadow_git(repo, gitdir, args):
+def _shadow_git(repo, gitdir, args, index_file=None):
     # 用 --git-dir/--work-tree 把影子仓库与项目 git 隔离;关掉 hooks/gpg 保证干净快速。
+    # index_file:指定独立 index(GIT_INDEX_FILE),让 changed/diff 用临时 index 算,
+    # 不动持久 index —— 避免「清空 index→重 add」的空窗期被并发调用读到空 index(全 D bug)。
     full = [
         "git",
         "--git-dir=" + gitdir,
@@ -256,7 +271,10 @@ def _shadow_git(repo, gitdir, args):
         "-c", "core.hooksPath=/dev/null",
         "-c", "commit.gpgsign=false",
     ] + list(args)
-    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    env = dict(os.environ)
+    if index_file is not None:
+        env["GIT_INDEX_FILE"] = index_file
+    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 
@@ -291,21 +309,25 @@ def _shadow_collect(repo):
 
 
 def _shadow_stage(repo, gitdir):
-    # 替换式刷 index:先清空,再用 git add -f(强制,绕过 .gitignore)加入收集到的文件。
-    _shadow_git(repo, gitdir, ["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."])
+    # 增量刷新持久 index 到当前工作区状态(绝不清空 → 保留 git 的 stat 缓存,
+    # add 只重哈希真正变动的文件,大目录从几十秒降到秒级 = 增量重置,不会爆机器):
+    #   1) git add -f <当前文件列表>:纳入新增/修改(强制,绕过 .gitignore)
+    #   2) git add -u:只更新已跟踪文件,识别「消失的文件」→ 记录为删除(D)
+    # -u 只动已在 index 的文件,不会把 .gitignore 忽略的新目录拉进来,故 .gitignore 安全。
     files = _shadow_collect(repo)
-    if not files:
-        return
-    listfile = os.path.join(gitdir, "linco-stage-list")
-    with open(listfile, "wb") as f:
-        f.write(b"\0".join(p.encode("utf-8") for p in files))
-    try:
-        _shadow_git(repo, gitdir, ["add", "-f", "--pathspec-from-file", listfile, "--pathspec-file-nul"])
-    finally:
+    if files:
+        listfile = os.path.join(gitdir, "linco-stage-" + _shadow_uniq())
+        with open(listfile, "wb") as f:
+            f.write(b"\0".join(p.encode("utf-8") for p in files))
         try:
-            os.remove(listfile)
-        except OSError:
-            pass
+            _shadow_git(repo, gitdir,
+                        ["add", "-f", "--pathspec-from-file", listfile, "--pathspec-file-nul"])
+        finally:
+            try:
+                os.remove(listfile)
+            except OSError:
+                pass
+    _shadow_git(repo, gitdir, ["add", "-u"])
 
 
 def _shadow_rel(repo, path):
@@ -316,6 +338,7 @@ def _shadow_rel(repo, path):
 def op_shadow_begin(a):
     repo = a["repo"]
     gitdir = _shadow_ensure_init(repo)
+    # begin 要 commit,用持久 index。
     _shadow_stage(repo, gitdir)
     _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
     return {}
@@ -326,8 +349,17 @@ def op_shadow_changed(a):
     gitdir = _shadow_dir(repo)
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"changed": {}}
-    _shadow_stage(repo, gitdir)
-    code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--name-status", "HEAD"])
+    # 用临时 index 算,绝不动持久 index → 并发安全、无空窗(全 D bug 的根因)。
+    idx = os.path.join(gitdir, "linco-idx-" + _shadow_uniq())
+    try:
+        _shadow_stage(repo, gitdir, idx)
+        code, out, _ = _shadow_git(repo, gitdir,
+                                   ["diff", "--cached", "--name-status", "HEAD"], idx)
+    finally:
+        try:
+            os.remove(idx)
+        except OSError:
+            pass
     base = repo.rstrip("/")
     changed = {}
     for line in out.splitlines():
@@ -349,8 +381,17 @@ def op_shadow_diff(a):
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"diff": ""}
     rel = _shadow_rel(repo, path)
-    _shadow_stage(repo, gitdir)
-    code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--no-color", "HEAD", "--", rel])
+    # 临时 index,并发安全、不动持久状态。
+    idx = os.path.join(gitdir, "linco-idx-d-" + _shadow_uniq())
+    try:
+        _shadow_stage(repo, gitdir, idx)
+        code, out, _ = _shadow_git(repo, gitdir,
+                                   ["diff", "--cached", "--no-color", "HEAD", "--", rel], idx)
+    finally:
+        try:
+            os.remove(idx)
+        except OSError:
+            pass
     return {"diff": out}
 
 
@@ -537,6 +578,7 @@ _NOISE_CMDS = {
     "which", "env", "echo", "printf", "true", "false", "test", "expr",
     "date", "basename", "dirname", "readlink", "stat", "cmp", "diff",
     "git", "ssh", "scp", "rsync", "tee", "xargs", "cp", "mv", "rm", "mkdir",
+    "sleep",
 }
 
 

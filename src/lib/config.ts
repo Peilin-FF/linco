@@ -119,6 +119,19 @@ function defaultCommandForProvider(provider: string): string {
   return provider === 'openai' ? 'codex' : 'claude'
 }
 
+function tomlString(s: string): string {
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+function codexConfigArg(key: string, value: string | boolean): string {
+  const tomlValue = typeof value === 'boolean' ? String(value) : tomlString(value)
+  return ` -c ${shellQuote(`${key}=${tomlValue}`)}`
+}
+
+function hasCodexProviderConfig(command: string): boolean {
+  return command.includes('model_provider') || command.includes('model_providers.')
+}
+
 /** 返回用于进程定位/补全缓存的 agent 可执行名,不带模型/权限参数。 */
 export function agentExecutable(agent: AgentConfig): string {
   return commandHead(agent.command) || defaultCommandForProvider(agent.provider)
@@ -131,8 +144,17 @@ export function agentLaunchCommand(agent: AgentConfig): string {
 
   const head = commandHead(cmd).split('/').pop() ?? ''
   const model = agent.model.trim()
+  const isCodex = agent.provider === 'openai' || head === 'codex'
+  if (isCodex && agent.baseUrl.trim() && !hasCodexProviderConfig(cmd)) {
+    cmd += codexConfigArg('model_provider', 'linco')
+    cmd += codexConfigArg('model_providers.linco.name', 'Linco')
+    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim())
+    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses')
+    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY')
+    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false)
+  }
   if (model) {
-    if (agent.provider === 'openai' || head === 'codex') {
+    if (isCodex) {
       if (!hasFlag(cmd, '-m', '--model')) cmd += ` -m ${shellQuote(model)}`
     } else if (agent.provider === 'anthropic' || head === 'claude') {
       if (!hasFlag(cmd, '--model', '--model')) cmd += ` --model ${shellQuote(model)}`
@@ -147,8 +169,10 @@ export function agentEnv(agent: AgentConfig): Record<string, string> {
   const p = agent.provider
   if (agent.apiKey) {
     if (p === 'anthropic') env.ANTHROPIC_API_KEY = agent.apiKey
-    else if (p === 'openai') env.OPENAI_API_KEY = agent.apiKey
-    else {
+    else if (p === 'openai') {
+      env.OPENAI_API_KEY = agent.apiKey
+      env.LINCO_OPENAI_API_KEY = agent.apiKey
+    } else {
       // 自定义 / 其他:两个都给,最大兼容
       env.ANTHROPIC_API_KEY = agent.apiKey
       env.OPENAI_API_KEY = agent.apiKey

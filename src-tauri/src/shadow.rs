@@ -22,7 +22,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+// 临时文件唯一序号:tauri 命令在多线程池上跑,std::process::id() 在并发调用间相同,
+// 会导致临时 index / 列表文件名冲突 → 并发 changed/diff 互相踩 index(全删/空 index bug)。
+static SHADOW_SEQ: AtomicU64 = AtomicU64::new(0);
+fn shadow_uniq() -> u64 {
+    SHADOW_SEQ.fetch_add(1, Ordering::Relaxed)
+}
 
 // 每个 (host, repo) 是否已初始化过影子仓库(进程内缓存,避免每轮重复 init)。
 static INITED: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
@@ -71,6 +79,17 @@ const SKIP_DIRS: &[&str] = &[
 
 /// 在影子仓库上跑一条 git 命令(本地)。`--git-dir`/`--work-tree` 把它和项目 git 隔离。
 fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String> {
+    shadow_git_idx(repo, gitdir, args, None)
+}
+
+/// 同上,但可指定独立 index(GIT_INDEX_FILE)。changed/diff 用临时 index 算,不动持久 index
+/// —— 避免「清空 index→重 add」空窗期被并发调用读到空 index(文件树全 D 的根因)。
+fn shadow_git_idx(
+    repo: &str,
+    gitdir: &Path,
+    args: &[&str],
+    index_file: Option<&Path>,
+) -> Result<String, String> {
     let mut full: Vec<String> = vec![
         format!("--git-dir={}", gitdir.to_string_lossy()),
         format!("--work-tree={}", repo),
@@ -81,10 +100,12 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
         "commit.gpgsign=false".into(),
     ];
     full.extend(args.iter().map(|a| a.to_string()));
-    let out = Command::new("git")
-        .args(&full)
-        .output()
-        .map_err(|e| format!("无法执行 git: {e}"))?;
+    let mut cmd = Command::new("git");
+    cmd.args(&full);
+    if let Some(idx) = index_file {
+        cmd.env("GIT_INDEX_FILE", idx);
+    }
+    let out = cmd.output().map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -137,23 +158,23 @@ fn collect_files(repo: &str) -> Vec<String> {
 /// 把当前工作目录的「应纳入文件集」刷进影子 index(替换式):
 /// 先清空 index,再用 `git add -f`(强制,绕过任何 .gitignore)逐批加入收集到的文件。
 /// 这样 index 永远 = collect_files 的结果:新增体现为 add、删除体现为「不在新集合里」。
-fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
-    // 清空 index(--ignore-unmatch:空仓库时不报错)。
-    let _ = shadow_git(repo, gitdir, &["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."]);
+fn stage_snapshot(repo: &str, gitdir: &Path, index_file: Option<&Path>) -> Result<(), String> {
+    // 清空目标 index(read-tree --empty 比 rm --cached 干净)。
+    let _ = shadow_git_idx(repo, gitdir, &["read-tree", "--empty"], index_file);
     let files = collect_files(repo);
     if files.is_empty() {
         return Ok(());
     }
     // 用 NUL 分隔的 pathspec 文件喂给 git add -f(避免文件名含空格/特殊字符出错;
-    // 也避免命令行参数过长)。
+    // 也避免命令行参数过长)。文件名带 pid 唯一,避免并发互相覆盖。
     let mut buf = String::with_capacity(files.len() * 24);
     for f in &files {
         buf.push_str(f);
         buf.push('\0');
     }
-    let tmp = gitdir.join("linco-stage-list");
+    let tmp = gitdir.join(format!("linco-stage-{}", shadow_uniq()));
     std::fs::write(&tmp, buf.as_bytes()).map_err(|e| e.to_string())?;
-    let res = shadow_git(
+    let res = shadow_git_idx(
         repo,
         gitdir,
         &[
@@ -163,6 +184,7 @@ fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
             &tmp.to_string_lossy(),
             "--pathspec-file-nul",
         ],
+        index_file,
     );
     let _ = std::fs::remove_file(&tmp);
     res.map(|_| ())
@@ -211,8 +233,8 @@ pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(),
             return crate::agent_rpc::shadow_begin(host.as_deref().unwrap(), &repo);
         }
         let gitdir = ensure_init(&host, &repo)?;
-        // 自己遍历筛选(无视 .gitignore、跳噪声目录与大文件)后刷进 index。
-        stage_snapshot(&repo, &gitdir)?;
+        // 自己遍历筛选(无视 .gitignore、跳噪声目录与大文件)后刷进持久 index。
+        stage_snapshot(&repo, &gitdir, None)?;
         // commit:--allow-empty 保证即便无改动也产出一个基线 commit(后续 diff 才有锚点)。
         shadow_git(
             &repo,
@@ -247,14 +269,19 @@ pub async fn shadow_diff(
             return Ok(String::new()); // 还没拍过基线
         }
         let rel = rel_of(&repo, &path);
-        // 关键:先把当前工作区快照刷进 index(stage_snapshot 无视 .gitignore、含新建产物),
-        // 再用 `diff --cached HEAD`(index vs 基线 commit)。
-        stage_snapshot(&repo, &gitdir)?;
-        shadow_git(
-            &repo,
-            &gitdir,
-            &["diff", "--cached", "--no-color", "HEAD", "--", &rel],
-        )
+        // 用临时 index 算,绝不动持久 index → 并发安全、无空窗(文件树全 D bug 的根因)。
+        let idx = gitdir.join(format!("linco-idx-d-{}", shadow_uniq()));
+        let r = (|| {
+            stage_snapshot(&repo, &gitdir, Some(&idx))?;
+            shadow_git_idx(
+                &repo,
+                &gitdir,
+                &["diff", "--cached", "--no-color", "HEAD", "--", &rel],
+                Some(&idx),
+            )
+        })();
+        let _ = std::fs::remove_file(&idx);
+        r
     })
     .await
 }
@@ -274,10 +301,19 @@ pub async fn shadow_changed(
         if !gitdir.join("HEAD").exists() {
             return Ok(HashMap::new());
         }
-        // 刷快照进 index(无视 .gitignore、含新建产物),再 diff --cached(index vs 基线)。
-        stage_snapshot(&repo, &gitdir)?;
-        let out = shadow_git(&repo, &gitdir, &["diff", "--cached", "--name-status", "HEAD"])?;
-        Ok(parse_name_status(&repo, &out))
+        // 临时 index,并发安全、不动持久状态(全 D bug 的根因正是共享 index 的空窗)。
+        let idx = gitdir.join(format!("linco-idx-{}", shadow_uniq()));
+        let out = (|| {
+            stage_snapshot(&repo, &gitdir, Some(&idx))?;
+            shadow_git_idx(
+                &repo,
+                &gitdir,
+                &["diff", "--cached", "--name-status", "HEAD"],
+                Some(&idx),
+            )
+        })();
+        let _ = std::fs::remove_file(&idx);
+        Ok(parse_name_status(&repo, &out?))
     })
     .await
 }

@@ -383,7 +383,7 @@ const NOISE_CMDS: &[&str] = &[
     "fgrep", "ugrep", "rg", "ag", "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq",
     "cut", "tr", "which", "env", "echo", "printf", "true", "false", "test", "expr", "date",
     "basename", "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync",
-    "tee", "xargs", "cp", "mv", "rm", "mkdir",
+    "tee", "xargs", "cp", "mv", "rm", "mkdir", "sleep",
 ];
 
 /// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
