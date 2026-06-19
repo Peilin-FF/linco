@@ -31,16 +31,26 @@ export function termStart(
   })
 }
 
+// 会话可能尚未建好(挂载瞬间 ResizeObserver / 提前输入)或已死。这类
+// fire-and-forget 调用遇到"会话不存在"是良性的:吞掉,避免海量未处理 rejection
+// 拖垮启动(否则前端会卡在"加载中")。真正异常仍打到 console.debug,不掩盖问题。
+function ignoreNoSession(e: unknown): void {
+  const msg = String(e)
+  if (!msg.includes('终端会话不存在')) {
+    console.debug('term op failed:', msg)
+  }
+}
+
 export function termWrite(id: string, data: string): Promise<void> {
-  return invoke('term_write', { id, data })
+  return invoke<void>('term_write', { id, data }).catch(ignoreNoSession)
 }
 
 export function termResize(id: string, cols: number, rows: number): Promise<void> {
-  return invoke('term_resize', { id, cols, rows })
+  return invoke<void>('term_resize', { id, cols, rows }).catch(ignoreNoSession)
 }
 
 export function termKill(id: string): Promise<void> {
-  return invoke('term_kill', { id })
+  return invoke<void>('term_kill', { id }).catch(ignoreNoSession)
 }
 
 /** 监听某个终端的输出,回调收到的是已解码的原始字节。 */

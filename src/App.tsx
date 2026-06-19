@@ -118,9 +118,12 @@ export default function App(): JSX.Element {
 
   // 启动时加载本地配置 + 读取 ssh config 主机
   useEffect(() => {
-    loadConfig()
-      .then(setConfig)
-      .catch(() =>
+    console.log('[startup] mount, calling loadConfig at', performance.now().toFixed(0))
+    let settled = false
+    // 兜底:3 秒还没拿到 config 就用默认配置进入(诊断:若 app 恰好 3 秒后出现,说明 loadConfig 卡住)
+    const fallback = window.setTimeout(() => {
+      if (!settled) {
+        console.warn('[startup] loadConfig TIMEOUT 3s — entering with default config')
         setConfig({
           agents: [],
           defaultAgent: '',
@@ -130,8 +133,35 @@ export default function App(): JSX.Element {
           connections: [],
           activeConnection: ''
         })
-      )
-    sshConfigHosts().then(setSshHosts).catch(() => {})
+      }
+    }, 3000)
+    loadConfig()
+      .then((c) => {
+        settled = true
+        window.clearTimeout(fallback)
+        console.log('[startup] loadConfig resolved at', performance.now().toFixed(0))
+        setConfig(c)
+      })
+      .catch((e) => {
+        settled = true
+        window.clearTimeout(fallback)
+        console.log('[startup] loadConfig REJECTED at', performance.now().toFixed(0), e)
+        setConfig({
+          agents: [],
+          defaultAgent: '',
+          autoStart: true,
+          cwd: '',
+          recentDirs: [],
+          connections: [],
+          activeConnection: ''
+        })
+      })
+    sshConfigHosts()
+      .then((h) => {
+        console.log('[startup] sshConfigHosts resolved at', performance.now().toFixed(0))
+        setSshHosts(h)
+      })
+      .catch(() => {})
   }, [])
 
   // 当前激活的连接(空 = 本地)
@@ -389,6 +419,7 @@ export default function App(): JSX.Element {
       </div>
     )
   }
+  console.log('[startup] rendering MAIN tree at', performance.now().toFixed(0), '| chatSessions:', chatSessions.length, '| prewarmed:', prewarmed)
 
   return (
     <div className="relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">

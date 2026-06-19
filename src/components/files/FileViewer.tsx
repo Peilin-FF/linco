@@ -3,6 +3,7 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { Loader2, FileQuestion, Download, GitCompare, FileText } from 'lucide-react'
 import { readBytesCached } from '@/lib/fs'
 import { shadowDiff } from '@/lib/shadow'
+import { gitDiffFile } from '@/lib/git'
 import { onRemoteFsChange } from '@/lib/watch'
 import FileEditor from './FileEditor'
 import TableViewer, { isTableFile } from './TableViewer'
@@ -101,6 +102,8 @@ function TextOrDiff({
 }): JSX.Element {
   const [diff, setDiff] = useState<string | null>(null)
   const [mode, setMode] = useState<'diff' | 'file'>('file')
+  // 文件有未提交改动(相对 HEAD)、但本轮基线下无 diff → 提示"发消息后才显本轮改动"
+  const [changedNoTurn, setChangedNoTurn] = useState(false)
   // 用户是否手动切过:手动切了就尊重选择,不再自动跳回 diff
   const [touched, setTouched] = useState(false)
 
@@ -108,6 +111,7 @@ function TextOrDiff({
   useEffect(() => {
     if (!repo) {
       setDiff(null)
+      setChangedNoTurn(false)
       return
     }
     let alive = true
@@ -120,7 +124,15 @@ function TextOrDiff({
           setDiff(has ? d : null)
           // 有改动且用户没手动切过 → 默认显 diff
           if (has && !touched) setMode('diff')
-          if (!has) setMode('file')
+          if (!has) {
+            setMode('file')
+            // 本轮无 diff:看该文件是否相对 HEAD 有未提交改动,有则提示用户
+            gitDiffFile(repo, path, false, false, host)
+              .then((hd) => alive && setChangedNoTurn(hd.trim().length > 0))
+              .catch(() => alive && setChangedNoTurn(false))
+          } else {
+            setChangedNoTurn(false)
+          }
         })
         .catch(() => alive && setDiff(null))
     }
@@ -167,6 +179,11 @@ function TextOrDiff({
           }}
           name={baseName(path)}
         />
+      )}
+      {!diff && changedNoTurn && (
+        <div className="shrink-0 border-b border-black/8 bg-[#fff7e6] px-3 py-1.5 text-[12px] text-ink-muted">
+          此文件有未提交改动,但本轮对话还没改动它 —— 在对话框给 claude 发消息后,这一轮的增删会在这里以红绿 diff 显示。
+        </div>
       )}
       <div className="min-h-0 flex-1">
         <FileEditor path={path} host={host} />

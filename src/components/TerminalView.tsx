@@ -121,6 +121,8 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     useEffect(() => {
       const host = hostRef.current
       if (!host) return
+      const _t0 = performance.now()
+      console.log('[term] mount start', id, 'at', _t0.toFixed(0))
 
       const term = new Terminal({
         fontFamily:
@@ -142,6 +144,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       fit.fit()
       termRef.current = term
       fitRef.current = fit
+      console.log('[term] open+fit done', id, 'cost', (performance.now() - _t0).toFixed(0), 'ms')
 
       let unlistenOut: UnlistenFn | undefined
       let unlistenExit: UnlistenFn | undefined
@@ -151,6 +154,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const dataSub = term.onData((d) => termWrite(id, d))
 
       // 启动(或重启)PTY 会话:重连时复用同一函数。
+      let started = false // 会话建好前不发 resize(减少无谓调用)
       const start = (): void => {
         setExited(false)
         void termStart(id, term.cols, term.rows, {
@@ -159,7 +163,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           initialCommand: initCmdRef.current,
           host: hostRef2.current,
           identity: identityRef.current
-        }).then(() => term.focus())
+        }).then(() => {
+          started = true
+          term.focus()
+        })
       }
       restartRef.current = () => {
         if (disposed) return
@@ -181,11 +188,11 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         start()
       })()
 
-      // 尺寸自适应:容器变化时 fit + 同步 PTY
+      // 尺寸自适应:容器变化时 fit + 同步 PTY(会话建好后才发 resize)
       const ro = new ResizeObserver(() => {
         try {
           fit.fit()
-          termResize(id, term.cols, term.rows)
+          if (started) termResize(id, term.cols, term.rows)
         } catch {
           /* 容器临时为 0 时忽略 */
         }
