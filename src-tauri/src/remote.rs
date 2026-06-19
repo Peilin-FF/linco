@@ -355,6 +355,42 @@ pub fn run_remote_stdin(
     run_remote_oneshot(host, sh_cmd, stdin_data)
 }
 
+/// HTML preview 专用远程 shell。正常路径走 preview RPC lane,避免和文件树/编辑器抢 lane。
+pub fn preview_run_remote(host: &str, sh_cmd: &str) -> Result<Vec<u8>, String> {
+    preview_run_remote_stdin(host, sh_cmd, None)
+}
+
+/// 同 preview_run_remote,可向远程命令 stdin 喂数据。
+pub fn preview_run_remote_stdin(
+    host: &str,
+    sh_cmd: &str,
+    stdin_data: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    let mut args = serde_json::json!({ "cmd": sh_cmd, "timeout": SESSION_TIMEOUT.as_secs() });
+    if let Some(data) = stdin_data {
+        args["stdin_b64"] = serde_json::Value::String(B64.encode(data));
+    }
+    if let Ok(v) = crate::agent_rpc::call_preview(host, "shell", args) {
+        let code = v.get("code").and_then(|x| x.as_i64()).unwrap_or(1);
+        let stdout_b64 = v.get("stdout_b64").and_then(|x| x.as_str()).unwrap_or("");
+        let stdout = B64
+            .decode(stdout_b64.as_bytes())
+            .map_err(|e| e.to_string())?;
+        if code == 0 {
+            return Ok(stdout);
+        }
+        let stderr = v
+            .get("stderr")
+            .and_then(|x| x.as_str())
+            .unwrap_or("preview shell 失败")
+            .trim()
+            .to_string();
+        return Err(stderr);
+    }
+    // 兜底只在 preview RPC 不可用时触发;正常预览不经过共享 shell 会话。
+    run_remote_stdin(host, sh_cmd, stdin_data)
+}
+
 /// 一次性 ssh 的公开包装(供 agent_rpc 部署脚本用,不走持久会话)。
 pub fn run_remote_oneshot_pub(
     host: &str,
@@ -586,6 +622,34 @@ fn read_file_shell(host: &str, path: &str) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "非 UTF-8 文本,无法预览".to_string())
 }
 
+/// HTML preview 专用读文本:走 preview RPC lane。
+pub fn preview_read_file(host: &str, path: &str) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call_preview(
+        host,
+        "read_file",
+        serde_json::json!({ "path": path, "max": MAX_READ }),
+    ) {
+        if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
+            return Ok(t.to_string());
+        }
+    }
+    preview_read_file_shell(host, path)
+}
+
+fn preview_read_file_shell(host: &str, path: &str) -> Result<String, String> {
+    let size_out = preview_run_remote(host, &format!("wc -c < {}", shq(path)))?;
+    if let Ok(n) = String::from_utf8_lossy(&size_out).trim().parse::<u64>() {
+        if n > MAX_READ {
+            return Err("文件过大,无法预览(>5MB)".into());
+        }
+    }
+    let bytes = preview_run_remote(host, &format!("cat -- {}", shq(path)))?;
+    if bytes.iter().take(8000).any(|&b| b == 0) {
+        return Err("二进制文件,无法预览".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "非 UTF-8 文本,无法预览".to_string())
+}
+
 pub fn write_file(host: &str, path: &str, content: &str) -> Result<(), String> {
     if crate::agent_rpc::call(
         host,
@@ -597,6 +661,25 @@ pub fn write_file(host: &str, path: &str, content: &str) -> Result<(), String> {
         return Ok(());
     }
     run_remote_stdin(
+        host,
+        &format!("cat > {}", shq(path)),
+        Some(content.as_bytes()),
+    )
+    .map(|_| ())
+}
+
+/// HTML preview 专用写文本:走 preview RPC lane。
+pub fn preview_write_file(host: &str, path: &str, content: &str) -> Result<(), String> {
+    if crate::agent_rpc::call_preview(
+        host,
+        "write_file",
+        serde_json::json!({ "path": path, "content": content }),
+    )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    preview_run_remote_stdin(
         host,
         &format!("cat > {}", shq(path)),
         Some(content.as_bytes()),
@@ -634,6 +717,20 @@ pub fn read_bytes_b64(host: &str, path: &str, max: u64) -> Result<String, String
     read_bytes_b64_shell(host, path, max)
 }
 
+/// HTML preview 专用读二进制:走 preview RPC lane。
+pub fn preview_read_bytes_b64(host: &str, path: &str, max: u64) -> Result<String, String> {
+    if let Ok(v) = crate::agent_rpc::call_preview(
+        host,
+        "read_bytes",
+        serde_json::json!({ "path": path, "max": max }),
+    ) {
+        if let Some(b) = v.get("b64").and_then(|x| x.as_str()) {
+            return Ok(b.to_string());
+        }
+    }
+    preview_read_bytes_b64_shell(host, path, max)
+}
+
 fn read_bytes_b64_shell(host: &str, path: &str, max: u64) -> Result<String, String> {
     // 先判大小
     let size_out = run_remote_str(host, &format!("wc -c < {}", shq(path)))?;
@@ -648,6 +745,25 @@ fn read_bytes_b64_shell(host: &str, path: &str, max: u64) -> Result<String, Stri
         p = shq(path)
     );
     let out = run_remote(host, &cmd)?;
+    let s = String::from_utf8_lossy(&out).trim().to_string();
+    if s.is_empty() {
+        return Err("无法读取文件".into());
+    }
+    Ok(s)
+}
+
+fn preview_read_bytes_b64_shell(host: &str, path: &str, max: u64) -> Result<String, String> {
+    let size_out = preview_run_remote(host, &format!("wc -c < {}", shq(path)))?;
+    if let Ok(n) = String::from_utf8_lossy(&size_out).trim().parse::<u64>() {
+        if n > max {
+            return Err(format!("文件过大,无法预览(>{}MB)", max / 1024 / 1024));
+        }
+    }
+    let cmd = format!(
+        "base64 -w0 -- {p} 2>/dev/null || base64 -- {p} | tr -d '\\n'",
+        p = shq(path)
+    );
+    let out = preview_run_remote(host, &cmd)?;
     let s = String::from_utf8_lossy(&out).trim().to_string();
     if s.is_empty() {
         return Err("无法读取文件".into());

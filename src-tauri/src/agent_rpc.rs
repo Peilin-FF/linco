@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "4";
+const AGENT_VERSION: &str = "5";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -59,6 +59,7 @@ type Pending = Arc<Mutex<HashMap<u64, SyncSender<Result<Value, String>>>>>;
 enum RpcLane {
     Interactive,
     Background,
+    Preview,
 }
 
 impl RpcLane {
@@ -66,6 +67,7 @@ impl RpcLane {
         match self {
             RpcLane::Interactive => "interactive",
             RpcLane::Background => "background",
+            RpcLane::Preview => "preview",
         }
     }
 }
@@ -350,6 +352,11 @@ pub fn call_background(host: &str, op: &str, args: Value) -> Result<Value, Strin
     call_on_lane(host, RpcLane::Background, op, args)
 }
 
+/// HTML preview 专用 RPC lane:预览刷新是主路径,不与文件树/编辑器/后台任务排队。
+pub fn call_preview(host: &str, op: &str, args: Value) -> Result<Value, String> {
+    call_on_lane(host, RpcLane::Preview, op, args)
+}
+
 fn call_on_lane(host: &str, lane: RpcLane, op: &str, args: Value) -> Result<Value, String> {
     if !agent_enabled() {
         return Err("agent disabled".into());
@@ -395,6 +402,16 @@ pub fn warmup(host: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err("agent warmup 响应异常".into())
+    }
+}
+
+/// 预热 HTML preview 专用 lane,让首次 iframe 读取不承担建连/握手成本。
+pub fn warmup_preview(host: &str) -> Result<(), String> {
+    let v = call_preview(host, "ping", json!({}))?;
+    if v.get("pong").and_then(|x| x.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err("preview agent warmup 响应异常".into())
     }
 }
 
@@ -626,6 +643,49 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("interactive lane should not wait for background lane lock")
             .expect("interactive ping should succeed");
+        let _ = t.join();
+        drop_session(&host);
+
+        assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn preview_rpc_does_not_wait_for_interactive_or_background_lane_locks() {
+        let host = format!(
+            "local-preview-lane-test-{}",
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        {
+            let bg = host_handle_for(&host, RpcLane::Background);
+            let mut guard = bg.lock().unwrap();
+            *guard = Some(local_agent());
+        }
+        {
+            let ui = host_handle_for(&host, RpcLane::Interactive);
+            let mut guard = ui.lock().unwrap();
+            *guard = Some(local_agent());
+        }
+        {
+            let pv = host_handle_for(&host, RpcLane::Preview);
+            let mut guard = pv.lock().unwrap();
+            *guard = Some(local_agent());
+        }
+
+        let bg = host_handle_for(&host, RpcLane::Background);
+        let ui = host_handle_for(&host, RpcLane::Interactive);
+        let _bg_guard = bg.lock().unwrap();
+        let _ui_guard = ui.lock().unwrap();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let host_for_call = host.clone();
+        let t = std::thread::spawn(move || {
+            let _ = tx.send(call_preview(&host_for_call, "ping", json!({})));
+        });
+
+        let pong = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("preview lane should not wait for interactive/background lane locks")
+            .expect("preview ping should succeed");
         let _ = t.join();
         drop_session(&host);
 

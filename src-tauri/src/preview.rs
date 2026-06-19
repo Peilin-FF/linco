@@ -155,6 +155,9 @@ pub fn preview_set_target(
 pub fn preview_prefetch_assets(host: Option<String>) {
     let host = host.filter(|s| !s.is_empty());
     std::thread::spawn(move || {
+        if let Some(h) = host.as_deref() {
+            let _ = crate::agent_rpc::warmup_preview(h);
+        }
         for asset in [
             "notebook.css",
             "notebook.js",
@@ -179,7 +182,7 @@ fn preview_default_target_blocking(host: Option<String>, root: String) -> Result
     if let Some(h) = host.as_deref() {
         for c in candidates {
             let abs = join_rel(&root, c);
-            let out = crate::remote::run_remote(
+            let out = crate::remote::preview_run_remote(
                 h,
                 &format!("test -f {} && echo Y", crate::remote::shq(&abs)),
             )
@@ -194,7 +197,7 @@ fn preview_default_target_blocking(host: Option<String>, root: String) -> Result
             "find {} -maxdepth 3 -name '*.html' -not -path '*/node_modules/*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -1",
             crate::remote::shq(&root)
         );
-        let out = crate::remote::run_remote(h, &cmd)
+        let out = crate::remote::preview_run_remote(h, &cmd)
             .map(|b| String::from_utf8_lossy(&b).to_string())
             .unwrap_or_default();
         if let Some(p) = out.trim().split_whitespace().nth(1) {
@@ -354,7 +357,7 @@ fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
             "find {} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500",
             crate::remote::shq(base)
         );
-        if let Ok(b) = crate::remote::run_remote(h, &cmd) {
+        if let Ok(b) = crate::remote::preview_run_remote(h, &cmd) {
             let root_pref = format!("{}/", root.trim_end_matches('/'));
             for line in String::from_utf8_lossy(&b).lines() {
                 let line = line.trim();
@@ -428,7 +431,7 @@ fn read_remote_cached(host: &str, abs: &str) -> Result<Vec<u8>, String> {
             }
         }
     }
-    let b64 = crate::remote::read_bytes_b64(host, abs, MAX_PREVIEW_BYTES)?;
+    let b64 = crate::remote::preview_read_bytes_b64(host, abs, MAX_PREVIEW_BYTES)?;
     let data = B64.decode(b64.as_bytes()).map_err(|e| e.to_string())?;
     if let Ok(mut g) = global().lock() {
         g.cache.insert(key, (Instant::now(), data.clone()));
@@ -550,7 +553,7 @@ fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
 
     // 写回 + 失效缓存
     let write_res = if let Some(h) = host.as_deref() {
-        crate::remote::write_file(h, &abs, &out)
+        crate::remote::preview_write_file(h, &abs, &out)
     } else {
         std::fs::write(&abs, out.as_bytes()).map_err(|e| e.to_string())
     };
@@ -576,7 +579,7 @@ fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
 /// 读文本(本地/远程),供 seed 保存用。
 fn read_text(host: &Option<String>, abs: &str) -> Result<String, String> {
     if let Some(h) = host.as_deref() {
-        crate::remote::read_file(h, abs)
+        crate::remote::preview_read_file(h, abs)
     } else {
         std::fs::read_to_string(abs).map_err(|e| e.to_string())
     }
@@ -694,7 +697,7 @@ fn find_assets_remote(host: &str) -> Option<String> {
 \"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \
 $(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets -path '*html-vibe*' 2>/dev/null); do \
 [ -f \"$d/notebook.js\" ] && echo \"$d\" && break; done";
-    let out = crate::remote::run_remote(host, cmd).ok()?;
+    let out = crate::remote::preview_run_remote(host, cmd).ok()?;
     let s = String::from_utf8_lossy(&out).trim().to_string();
     if s.is_empty() {
         None
@@ -751,7 +754,7 @@ fn mtime_of(host: &Option<String>, abs: &str) -> Option<i64> {
             "stat -c %Y {p} 2>/dev/null || stat -f %m {p} 2>/dev/null",
             p = crate::remote::shq(abs)
         );
-        let out = crate::remote::run_remote(h, &cmd).ok()?;
+        let out = crate::remote::preview_run_remote(h, &cmd).ok()?;
         String::from_utf8_lossy(&out).trim().parse::<i64>().ok()
     } else {
         let meta = std::fs::metadata(abs).ok()?;
@@ -912,6 +915,64 @@ mod tests {
 #[cfg(test)]
 mod save_tests {
     use super::*;
+
+    #[test]
+    fn notebook_delete_cell_removes_insert_rail() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vendor/HTML-VibeCoding/plugins/html-vibe/assets/notebook.js");
+        let js = std::fs::read_to_string(path).expect("read notebook.js");
+
+        assert!(
+            js.contains("function removeCell(c)"),
+            "delete buttons must use the shared cell removal path"
+        );
+        assert_eq!(
+            js.matches("addEventListener('click',function(){removeCell(c);});")
+                .count(),
+            2,
+            "text and table cell delete buttons should both remove their paired insert rail"
+        );
+        assert!(
+            !js.contains("addEventListener('click',function(){c.remove();});"),
+            "bare cell removal leaves orphan insert rails behind"
+        );
+    }
+
+    #[test]
+    fn remote_preview_io_uses_dedicated_rpc_helpers() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/preview.rs");
+        let src = std::fs::read_to_string(path).expect("read preview.rs");
+
+        assert!(
+            src.contains("crate::remote::preview_run_remote"),
+            "preview shell-style probes should use the preview RPC lane"
+        );
+        assert!(
+            src.contains("crate::remote::preview_read_bytes_b64"),
+            "preview file bytes should use the preview RPC lane"
+        );
+        assert!(
+            src.contains("crate::remote::preview_read_file"),
+            "preview seed-save reads should use the preview RPC lane"
+        );
+        assert!(
+            src.contains("crate::remote::preview_write_file"),
+            "preview seed-save writes should use the preview RPC lane"
+        );
+
+        let forbidden = [
+            ["crate::remote::read_bytes_", "b64(host, abs"].concat(),
+            ["crate::remote::read_", "file(h, abs"].concat(),
+            ["crate::remote::write_", "file(h, &abs"].concat(),
+        ];
+        for pat in forbidden {
+            assert!(
+                !src.contains(&pat),
+                "preview.rs should not call shared remote helper: {pat}"
+            );
+        }
+    }
+
     #[test]
     fn replace_seed_script_body() {
         let src =

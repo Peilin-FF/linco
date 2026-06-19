@@ -147,10 +147,38 @@ export default function FilesView({
 
   // 监听文件变更(远程 agent / 本地扫描推送)→ debounce 后刷新受影响目录,
   // 实现"agent 改文件,文件树自动刷新"(灵敏)。
+  //
+  // 抗"训练跑"洪流:活跃训练目录(logs/outputs/...)会持续高频写盘,事件如雨。
+  // 朴素 debounce(每来一条就重置定时器)在持续写时要么永不触发、要么暴刷;
+  // 且每次刷新都跑一次**全仓库 git status**(loadGit),会把交互(展开目录)挤到队尾。
+  // 对策:
+  //  1) 目录刷新:debounce 400ms + 最长 1.2s 强制 flush(持续写也只是每 ~1.2s 刷一次)。
+  //  2) git 刷新:独立节流,最多每 3s 一次(全仓 git status 贵,不必跟每次文件变同频)。
   useEffect(() => {
     let un: (() => void) | undefined
     let timer: number | undefined
+    let firstAt = 0 // 本轮 pending 第一条事件时刻(用于最长等待上限)
+    let lastGit = 0 // 上次 loadGit 时刻(节流)
     const pendingDirs = new Set<string>()
+
+    const flush = (): void => {
+      if (timer) {
+        window.clearTimeout(timer)
+        timer = undefined
+      }
+      firstAt = 0
+      if (pendingDirs.size) {
+        refresh(...pendingDirs)
+        pendingDirs.clear()
+      }
+      // git 状态独立节流:全仓 status 贵,持续写时不必每次都跑
+      const now = Date.now()
+      if (now - lastGit > 3000) {
+        lastGit = now
+        void loadGit()
+      }
+    }
+
     onRemoteFsChange((e) => {
       // 只关心当前连接(host 一致;本地都为空串)
       if ((e.host || undefined) !== (host || undefined)) return
@@ -158,12 +186,15 @@ export default function FilesView({
         const dir = p.slice(0, p.lastIndexOf('/'))
         if (dir) pendingDirs.add(dir)
       }
+      const now = Date.now()
+      if (!firstAt) firstAt = now
+      // 已积压超过 1.2s → 立即 flush(防持续写把刷新无限推后)
+      if (now - firstAt >= 1200) {
+        flush()
+        return
+      }
       if (timer) window.clearTimeout(timer)
-      timer = window.setTimeout(() => {
-        refresh(...pendingDirs)
-        pendingDirs.clear()
-        void loadGit() // 文件变了 → git 标识也刷新
-      }, 150)
+      timer = window.setTimeout(flush, 400)
     }).then((f) => (un = f))
     return () => {
       if (timer) window.clearTimeout(timer)

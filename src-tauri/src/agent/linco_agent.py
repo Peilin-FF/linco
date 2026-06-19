@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "4"
+AGENT_VERSION = "5"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -224,6 +224,30 @@ def op_git(a):
         raise ValueError("git 未安装")
 
 
+def op_shell(a):
+    # 供 preview lane 复用既有 shell 探测命令,但仍走独立 RPC 进程/队列。
+    cmd = a["cmd"]
+    timeout = a.get("timeout", 45)
+    stdin_b64 = a.get("stdin_b64")
+    stdin_data = base64.b64decode(stdin_b64) if stdin_b64 else None
+    try:
+        p = subprocess.run(
+            cmd,
+            input=stdin_data,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+        return {
+            "stdout_b64": base64.b64encode(p.stdout).decode("ascii"),
+            "stderr": p.stderr.decode("utf-8", "replace"),
+            "code": p.returncode,
+        }
+    except subprocess.TimeoutExpired:
+        raise ValueError("shell 超时")
+
+
 # ---------- 文件监听(灵敏:agent 改文件 → 主动推 fileChange)----------
 # 优先 inotifywait(事件级,最灵敏);否则纯 Python 轮询 mtime(~0.5s)。
 # 变更去抖后批量推 {"event":"fileChange","paths":[...]}(无 id,主动)。
@@ -350,7 +374,7 @@ OPS = {
     "rename": op_rename, "delete": op_delete,
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
-    "git": op_git,
+    "git": op_git, "shell": op_shell,
 }
 
 
