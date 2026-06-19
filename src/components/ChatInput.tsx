@@ -43,6 +43,8 @@ interface ChatInputProps {
   extraHeight?: number
   /** 当前 agent 启动命令(claude/codex…),用于取补全数据 */
   commandBase?: string
+  /** 当前 agent/model 展示名 */
+  agentLabel?: string
   /** 远程主机(空=本地),补全数据/文件按此取 */
   host?: string
 }
@@ -83,6 +85,7 @@ export default function ChatInput({
   onToggleTerminal,
   extraHeight = 0,
   commandBase,
+  agentLabel = 'Agent',
   host
 }: ChatInputProps): JSX.Element {
   const [value, setValue] = useState('')
@@ -501,8 +504,11 @@ export default function ChatInput({
           <div className="flex-1" />
 
           <TerminalToggle open={terminalOpen} onClick={onToggleTerminal} />
-          <button className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-ink-muted hover:bg-black/5">
-            <span>claude-opus-4-8-cc</span>
+          <button
+            className="flex max-w-[220px] items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-ink-muted hover:bg-black/5"
+            title={agentLabel}
+          >
+            <span className="truncate">{agentLabel}</span>
             <ChevronDown size={14} className="text-ink-faint" />
           </button>
           <button className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-ink-muted hover:bg-black/5">

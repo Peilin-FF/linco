@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "8";
+const AGENT_VERSION: &str = "11";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -349,15 +349,36 @@ pub fn call(host: &str, op: &str, args: Value) -> Result<Value, String> {
 
 /// 后台 RPC lane:给 watch/git/search/diff 等非交互任务使用,避免抢占文件树/打开文件。
 pub fn call_background(host: &str, op: &str, args: Value) -> Result<Value, String> {
-    call_on_lane(host, RpcLane::Background, op, args)
+    call_on_lane_timeout(host, RpcLane::Background, op, args, RPC_TIMEOUT)
+}
+
+/// 后台 RPC,但用自定义超时。给「首次拍影子基线」这类一次性慢操作用:
+/// 234GB 大目录首次哈希 3 万文件可能要 ~60s,远超默认 45s。
+pub fn call_background_timeout(
+    host: &str,
+    op: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    call_on_lane_timeout(host, RpcLane::Background, op, args, timeout)
 }
 
 /// HTML preview 专用 RPC lane:预览刷新是主路径,不与文件树/编辑器/后台任务排队。
 pub fn call_preview(host: &str, op: &str, args: Value) -> Result<Value, String> {
-    call_on_lane(host, RpcLane::Preview, op, args)
+    call_on_lane_timeout(host, RpcLane::Preview, op, args, RPC_TIMEOUT)
 }
 
 fn call_on_lane(host: &str, lane: RpcLane, op: &str, args: Value) -> Result<Value, String> {
+    call_on_lane_timeout(host, lane, op, args, RPC_TIMEOUT)
+}
+
+fn call_on_lane_timeout(
+    host: &str,
+    lane: RpcLane,
+    op: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<Value, String> {
     if !agent_enabled() {
         return Err("agent disabled".into());
     }
@@ -374,7 +395,7 @@ fn call_on_lane(host: &str, lane: RpcLane, op: &str, args: Value) -> Result<Valu
             guard.as_ref().unwrap().endpoint()
         };
 
-        match rpc_on_endpoint(&endpoint, op, args.clone(), RPC_TIMEOUT) {
+        match rpc_on_endpoint(&endpoint, op, args.clone(), timeout) {
             Ok(v) => return Ok(v),
             Err(e) => {
                 // 会话级失败(EOF/超时/IO)→ 丢弃重连;业务错(ok:false)→ 直接返回
@@ -427,9 +448,15 @@ pub fn unwatch(host: &str) -> Result<(), String> {
 
 // ---- 影子快照(本轮 agent 改动)远程转发:逻辑在 linco_agent.py 的 op_shadow_* ----
 
-/// 远端拍本轮基线(独立影子仓库 add -A + commit)。
+// 影子操作专用超时:首次拍基线在大目录(实测 234GB / 3 万小文件)要哈希所有 blob,
+// 可达 ~60s,远超默认 45s。给足 4 分钟余量,避免「超时返回 Err 但 commit 没跑完 →
+// HEAD 不存在 → 后续 diff 全报错」这个把远端功能整个废掉的链式失败。
+const SHADOW_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// 远端拍本轮基线(独立影子仓库:自筛文件 + add -f + commit)。
 pub fn shadow_begin(host: &str, repo: &str) -> Result<(), String> {
-    call_background(host, "shadow_begin", json!({ "repo": repo })).map(|_| ())
+    call_background_timeout(host, "shadow_begin", json!({ "repo": repo }), SHADOW_TIMEOUT)
+        .map(|_| ())
 }
 
 /// 远端本轮改过哪些文件:绝对路径 → 状态字符(M/A/D)。
@@ -437,7 +464,12 @@ pub fn shadow_changed_remote(
     host: &str,
     repo: &str,
 ) -> Result<std::collections::HashMap<String, String>, String> {
-    let v = call_background(host, "shadow_changed", json!({ "repo": repo }))?;
+    let v = call_background_timeout(
+        host,
+        "shadow_changed",
+        json!({ "repo": repo }),
+        SHADOW_TIMEOUT,
+    )?;
     let mut map = std::collections::HashMap::new();
     if let Some(obj) = v.get("changed").and_then(|x| x.as_object()) {
         for (k, val) in obj {
@@ -451,7 +483,12 @@ pub fn shadow_changed_remote(
 
 /// 远端某文件本轮 diff(unified)。
 pub fn shadow_diff_remote(host: &str, repo: &str, path: &str) -> Result<String, String> {
-    let v = call_background(host, "shadow_diff", json!({ "repo": repo, "path": path }))?;
+    let v = call_background_timeout(
+        host,
+        "shadow_diff",
+        json!({ "repo": repo, "path": path }),
+        SHADOW_TIMEOUT,
+    )?;
     Ok(v.get("diff").and_then(|x| x.as_str()).unwrap_or("").to_string())
 }
 

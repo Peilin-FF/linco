@@ -5,7 +5,6 @@
 // 对话框的输入被重定向写入 PTY(等价于在终端键入),CLI 的输出在
 // 终端视图中实时渲染。对任何厂家的 CLI 都通用。
 
-mod agent;
 mod agent_rpc;
 mod blocking;
 mod completion;
@@ -20,7 +19,9 @@ mod shadow;
 mod terminal;
 mod watch;
 
-use agent::AgentState;
+#[cfg(test)]
+mod legacy_guard;
+
 use terminal::TerminalState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -34,7 +35,6 @@ pub fn run() {
             Ok(())
         })
         .manage(TerminalState::default())
-        .manage(AgentState::default())
         .invoke_handler(tauri::generate_handler![
             terminal::term_start,
             terminal::term_write,
@@ -42,8 +42,6 @@ pub fn run() {
             terminal::term_kill,
             config::load_config,
             config::save_config,
-            agent::agent_send,
-            agent::agent_cancel,
             completion::agent_completions,
             preview::preview_start,
             preview::preview_set_target,

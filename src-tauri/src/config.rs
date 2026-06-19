@@ -48,7 +48,7 @@ pub struct Connection {
 }
 
 /// 全量应用配置。
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// 已配置的 agent 列表
     #[serde(default)]
@@ -59,7 +59,7 @@ pub struct AppConfig {
     /// 打开 app 是否自动启动默认 agent
     #[serde(default = "default_true")]
     pub auto_start: bool,
-    /// 当前工作目录(claude 在此运行)
+    /// 当前工作目录(agent 在此运行)
     #[serde(default)]
     pub cwd: String,
     /// 最近用过的工作目录
@@ -71,6 +71,20 @@ pub struct AppConfig {
     /// 当前激活的连接 id(空 = 本地)
     #[serde(default)]
     pub active_connection: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            agents: builtin_agents(),
+            default_agent: "claude".into(),
+            auto_start: true,
+            cwd: String::new(),
+            recent_dirs: vec![],
+            connections: vec![],
+            active_connection: String::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -86,6 +100,44 @@ fn config_path() -> Result<PathBuf, String> {
     Ok(config_dir()?.join("config.json"))
 }
 
+fn builtin_agents() -> Vec<AgentConfig> {
+    vec![
+        AgentConfig {
+            id: "claude".into(),
+            name: "Claude Code".into(),
+            provider: "anthropic".into(),
+            command: "claude".into(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+        },
+        AgentConfig {
+            id: "codex".into(),
+            name: "Codex".into(),
+            provider: "openai".into(),
+            command: "codex".into(),
+            api_key: String::new(),
+            base_url: String::new(),
+            model: String::new(),
+        },
+    ]
+}
+
+fn ensure_builtin_agents(config: &mut AppConfig) {
+    for agent in builtin_agents() {
+        if !config.agents.iter().any(|a| a.id == agent.id) {
+            config.agents.push(agent);
+        }
+    }
+    if config.default_agent.is_empty() {
+        config.default_agent = config
+            .agents
+            .first()
+            .map(|a| a.id.clone())
+            .unwrap_or_default();
+    }
+}
+
 /// 读取配置;文件不存在时返回默认配置。
 #[tauri::command]
 pub fn load_config() -> Result<AppConfig, String> {
@@ -94,7 +146,10 @@ pub fn load_config() -> Result<AppConfig, String> {
         return Ok(AppConfig::default());
     }
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| format!("配置解析失败: {e}"))
+    let mut config: AppConfig =
+        serde_json::from_str(&text).map_err(|e| format!("配置解析失败: {e}"))?;
+    ensure_builtin_agents(&mut config);
+    Ok(config)
 }
 
 /// 保存配置到 ~/.linco/config.json。
@@ -106,4 +161,52 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_includes_codex_tui_agent() {
+        let cfg = AppConfig::default();
+        let codex = cfg
+            .agents
+            .iter()
+            .find(|a| a.id == "codex")
+            .expect("codex preset should exist");
+
+        assert_eq!(codex.provider, "openai");
+        assert_eq!(codex.command, "codex");
+        assert!(cfg.agents.iter().any(|a| a.id == "claude"));
+    }
+
+    #[test]
+    fn config_migration_adds_codex_without_overwriting_existing_agents() {
+        let mut cfg = AppConfig {
+            agents: vec![AgentConfig {
+                id: "claude".into(),
+                name: "My Claude".into(),
+                provider: "anthropic".into(),
+                command: "claude --dangerously-skip-permissions".into(),
+                api_key: String::new(),
+                base_url: String::new(),
+                model: String::new(),
+            }],
+            default_agent: "claude".into(),
+            ..AppConfig::default()
+        };
+
+        ensure_builtin_agents(&mut cfg);
+
+        assert!(cfg.agents.iter().any(|a| a.id == "codex"));
+        assert_eq!(cfg.agents.iter().filter(|a| a.id == "claude").count(), 1);
+        assert_eq!(
+            cfg.agents
+                .iter()
+                .find(|a| a.id == "claude")
+                .map(|a| a.command.as_str()),
+            Some("claude --dangerously-skip-permissions")
+        );
+    }
 }

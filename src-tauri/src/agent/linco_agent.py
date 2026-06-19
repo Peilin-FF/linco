@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "8"
+AGENT_VERSION = "11"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -226,10 +226,12 @@ def op_git(a):
 
 # ---------- 影子快照(本轮 agent 改动):与项目 git 无关的独立影子仓库 ----------
 # 语义与本地 shadow.rs 完全对称:在 $HOME/.linco/shadows/<repo哈希>/ 建独立 git 仓库,
-# work-tree 指向工作目录,add -A + commit 出「本轮基线」,捕获一切文件(含 untracked /
-# gitignored 产物)。changed/diff 都对比这个基线。远端零额外依赖,只用 git 本身。
+# work-tree 指向工作目录。关键:**不读项目 .gitignore**(自己遍历筛选 + git add -f),
+# 这样 agent 的临时产物(artifacts、被项目忽略的小文件)也能监控;同时**跳过噪声目录与
+# 大文件**(模型权重动辄上 GB,绝不能纳入,否则影子 git 会卡死/爆盘)。
 
-SHADOW_EXCLUDES = [".git/", "node_modules/", "target/", "__pycache__/", ".venv/", "dist/"]
+SHADOW_SKIP_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
+SHADOW_MAX_FILE = 1024 * 1024  # 1MB:超过则不纳入(不标记、不 diff)
 
 
 def _shadow_fnv1a(s):
@@ -266,11 +268,44 @@ def _shadow_ensure_init(repo):
         _shadow_git(repo, gitdir, ["init", "-q"])
         _shadow_git(repo, gitdir, ["config", "user.email", "linco@local"])
         _shadow_git(repo, gitdir, ["config", "user.name", "Linco"])
-    info = os.path.join(gitdir, "info")
-    os.makedirs(info, exist_ok=True)
-    with open(os.path.join(info, "exclude"), "w", encoding="utf-8") as f:
-        f.write("\n".join(SHADOW_EXCLUDES) + "\n")
     return gitdir
+
+
+def _shadow_collect(repo):
+    # 遍历工作目录,收集应纳入快照的文件(相对路径)。不读 .gitignore;只跳噪声目录 + 大文件。
+    root = repo.rstrip("/")
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SHADOW_SKIP_DIRS]
+        for n in filenames:
+            fp = os.path.join(dirpath, n)
+            try:
+                if os.path.islink(fp) or os.path.getsize(fp) > SHADOW_MAX_FILE:
+                    continue
+            except OSError:
+                continue
+            out.append(os.path.relpath(fp, root))
+        if len(out) > 100000:
+            return out
+    return out
+
+
+def _shadow_stage(repo, gitdir):
+    # 替换式刷 index:先清空,再用 git add -f(强制,绕过 .gitignore)加入收集到的文件。
+    _shadow_git(repo, gitdir, ["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."])
+    files = _shadow_collect(repo)
+    if not files:
+        return
+    listfile = os.path.join(gitdir, "linco-stage-list")
+    with open(listfile, "wb") as f:
+        f.write(b"\0".join(p.encode("utf-8") for p in files))
+    try:
+        _shadow_git(repo, gitdir, ["add", "-f", "--pathspec-from-file", listfile, "--pathspec-file-nul"])
+    finally:
+        try:
+            os.remove(listfile)
+        except OSError:
+            pass
 
 
 def _shadow_rel(repo, path):
@@ -281,7 +316,7 @@ def _shadow_rel(repo, path):
 def op_shadow_begin(a):
     repo = a["repo"]
     gitdir = _shadow_ensure_init(repo)
-    _shadow_git(repo, gitdir, ["add", "-A"])
+    _shadow_stage(repo, gitdir)
     _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
     return {}
 
@@ -291,8 +326,7 @@ def op_shadow_changed(a):
     gitdir = _shadow_dir(repo)
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"changed": {}}
-    # 先 add -A 纳入新建 untracked 文件,再 diff --cached(index vs 基线),否则漏新建产物
-    _shadow_git(repo, gitdir, ["add", "-A"])
+    _shadow_stage(repo, gitdir)
     code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--name-status", "HEAD"])
     base = repo.rstrip("/")
     changed = {}
@@ -315,7 +349,7 @@ def op_shadow_diff(a):
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"diff": ""}
     rel = _shadow_rel(repo, path)
-    _shadow_git(repo, gitdir, ["add", "-A"])
+    _shadow_stage(repo, gitdir)
     code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--no-color", "HEAD", "--", rel])
     return {"diff": out}
 
@@ -384,6 +418,42 @@ def _cwd_of(pid):
     except Exception:
         pass
     return None
+
+
+def _all_cwds():
+    # 一次性拿到「所有进程」的 cwd:{pid: cwd}。
+    # 关键性能点:macOS 上对每个进程单独 lsof 会慢到几十秒(789 进程 × 57ms ≈ 45s);
+    # 这里 Linux 批量 readlink /proc/*/cwd,macOS 一条 `lsof -d cwd` 拿全部(~0.4s)。
+    out = {}
+    # Linux:/proc 最快
+    if os.path.isdir("/proc"):
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            try:
+                out[int(name)] = os.readlink("/proc/%s/cwd" % name)
+            except OSError:
+                pass
+        if out:
+            return out
+    # macOS / 无 /proc:一条 lsof 批量取所有进程 cwd
+    try:
+        r = subprocess.run(
+            ["lsof", "-d", "cwd", "-F", "pn"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        ).stdout.decode("utf-8", "replace")
+        cur = None
+        for line in r.splitlines():
+            if line.startswith("p"):
+                try:
+                    cur = int(line[1:])
+                except ValueError:
+                    cur = None
+            elif line.startswith("n") and cur is not None:
+                out[cur] = line[1:]
+    except Exception:
+        pass
+    return out
 
 
 def _agent_descendants(cmd_base, cwd):
@@ -459,37 +529,121 @@ def _cwd_matches(proc_cwd, project_cwd):
     return a == b or a.startswith(b.rstrip("/") + "/")
 
 
+# 一闪而过的短命工具 / 纯 shell 外壳:不是用户想看的"训练长任务",从任务列表剔除。
+_NOISE_CMDS = {
+    "sh", "bash", "zsh", "dash", "fish", "ksh",
+    "head", "tail", "cat", "grep", "egrep", "fgrep", "ugrep", "rg", "ag",
+    "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq", "cut", "tr",
+    "which", "env", "echo", "printf", "true", "false", "test", "expr",
+    "date", "basename", "dirname", "readlink", "stat", "cmp", "diff",
+    "git", "ssh", "scp", "rsync", "tee", "xargs", "cp", "mv", "rm", "mkdir",
+}
+
+
+def _exe_name(args):
+    # 从命令行取「真正执行的程序名」:跳过 env / 解释器前缀,取第一个非选项 token 的 basename。
+    toks = args.split()
+    i = 0
+    # 跳过 env VAR=val 前缀
+    while i < len(toks) and ("=" in toks[i] or toks[i] in ("env", "nohup", "setsid", "stdbuf")):
+        i += 1
+    if i >= len(toks):
+        return os.path.basename(toks[0]) if toks else ""
+    return os.path.basename(toks[i])
+
+
+def _is_noise(p):
+    # 判断进程是否为噪声:纯 shell 外壳 / 短命工具 / claude 的 snapshot shell。
+    args = p.get("args", "")
+    if "shell-snapshot" in args or "snapshot-zsh" in args or "snapshot-bash" in args:
+        return True
+    exe = _exe_name(args)
+    return exe in _NOISE_CMDS
+
+
+def _etime_secs(etime):
+    # 解析 ps ELAPSED:[[DD-]HH:]MM:SS → 秒。解析失败返回一个大值(不因解析失败误删长任务)。
+    try:
+        days = 0
+        s = etime.strip()
+        if "-" in s:
+            d, s = s.split("-", 1)
+            days = int(d)
+        parts = [int(x) for x in s.split(":")]
+        if len(parts) == 3:
+            h, m, sec = parts
+        elif len(parts) == 2:
+            h, m, sec = 0, parts[0], parts[1]
+        else:
+            h, m, sec = 0, 0, parts[0]
+        return days * 86400 + h * 3600 + m * 60 + sec
+    except Exception:
+        return 10 ** 9
+
+
+MIN_TASK_SECS = 5  # 存活不足这么久的不显示(滤掉一闪而过的工具);无上限,长任务保留
+
+
 def op_agent_tasks(a):
-    # 列出 agent 起的、**输出已落盘成文件**的后台任务(可实时 tail 的)。
-    # 这正是「训练/长任务」:stdout 重定向到文件;前台命令(npm/lark 等)stdout 是
-    # 直连 agent 的管道,_fd_file 返回 None → 被过滤掉(也没法 tail)。
+    # 列出 agent 起的、**输出已落盘成文件**的「持续运行的任务」(可实时 tail 的)。
+    # 典型:训练 / 评测 / 数据处理。把盲盒(agent 后台到底在跑什么)变透明。
     #
-    # 检测策略(并集):一个进程算 agent 任务,需满足「输出落盘」且满足以下任一:
+    # 检测策略(并集):一个进程算候选,需满足「输出落盘」且满足以下任一:
     #   (a) 在 agent(cmd_base)进程子树下 —— 刚起、还挂在 agent shell 下的任务;
     #   (b) cwd 在项目目录(cwd 参数)下 —— 后台长任务常被 init 收养(ppid→1)而脱离
     #       子树,但工作目录不变,用 cwd 锚点仍能稳定捕获,tab 不会因 reparent 消失。
-    # 两路按 pid 去重合并。cwd 为空(没传项目目录)则只走 (a)。
+    # 去噪(只留"训练这种长任务"):
+    #   - 穿透外壳:sh -c "python train.py" 这种,外层 sh 是噪声,显示里层 python
+    #     (若一个噪声 shell 有干活的子进程,改纳入子进程);
+    #   - 剔除纯 shell / 短命工具(head/grep/cat/snapshot shell 等);
+    #   - 跳过存活 < MIN_TASK_SECS 秒的(一闪而过);无时间上限。
     cmd_base = a.get("command_base") or ""
     cwd = a.get("cwd") or ""
+
+    procs, children = _ps_snapshot()
+    by_pid = {p["pid"]: p for p in procs}
 
     cand = {}  # pid -> proc(去重)
     # (a) agent 子树
     for p in _agent_descendants(cmd_base, cwd):
         cand[p["pid"]] = p
-    # (b) cwd 命中项目目录的进程(不限进程树),排除 agent 自身
+    # (b) cwd 命中项目目录的进程(不限进程树),排除 agent 自身。
+    # 用一次性批量 _all_cwds()(macOS 一条 lsof,Linux 批量 /proc),避免对每个进程
+    # 单独 lsof —— 后者在 macOS 上 789 进程要 ~45s,会把前端轮询永久挂住。
     if cwd:
         base = os.path.basename(cmd_base) if cmd_base else ""
-        procs, _ = _ps_snapshot()
+        cwds = _all_cwds()
         for p in procs:
             if p["pid"] in cand:
                 continue
             if base and base in p["args"]:
                 continue  # 跳过 agent 本体
-            if _cwd_matches(_cwd_of(p["pid"]), cwd):
+            if _cwd_matches(cwds.get(p["pid"]), cwd):
                 cand[p["pid"]] = p
 
+    # 穿透外壳:候选若是噪声 shell 但有「干活的子进程」,用子进程替代它。
+    # (sh -c "python train.py":外层 sh 被里层 python 替代,避免重复 tab)
+    resolved = {}
+    for pid, p in cand.items():
+        target = p
+        # 最多下钻几层壳
+        for _ in range(4):
+            if not _is_noise(target):
+                break
+            kids = [by_pid[c] for c in children.get(target["pid"], []) if c in by_pid]
+            real = [k for k in kids if not _is_noise(k)]
+            if len(real) == 1:
+                target = real[0]
+            else:
+                break  # 没有唯一干活子进程 → 就地判定(下面会因 _is_noise 被剔除)
+        resolved[target["pid"]] = target
+
     tasks = []
-    for p in cand.values():
+    for p in resolved.values():
+        if _is_noise(p):
+            continue  # 仍是 shell/短命工具 → 剔除
+        if _etime_secs(p.get("etime", "")) < MIN_TASK_SECS:
+            continue  # 一闪而过
         f = _fd_file(p["pid"])
         if f:
             tasks.append({"pid": p["pid"], "args": p["args"],

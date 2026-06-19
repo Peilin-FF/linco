@@ -55,14 +55,18 @@ fn stable_hash(s: &str) -> u64 {
     hash
 }
 
-/// 噪声目录:不纳入影子快照(省扫描、避免几万文件;这些也不是「agent 本轮产物」)。
-const EXCLUDES: &[&str] = &[
-    ".git/",
-    "node_modules/",
-    "target/",
-    "__pycache__/",
-    ".venv/",
-    "dist/",
+/// 单文件纳入快照的大小上限:超过则不纳入(不标记、不 diff)。
+/// 训练产物里动辄上 GB 的模型权重必须挡在外面,否则影子 git 会被撑爆/卡死。
+const MAX_SNAPSHOT_FILE: u64 = 1024 * 1024; // 1MB
+
+/// 噪声目录:整目录跳过,不递归。
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "dist",
 ];
 
 /// 在影子仓库上跑一条 git 命令(本地)。`--git-dir`/`--work-tree` 把它和项目 git 隔离。
@@ -88,6 +92,83 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
     }
 }
 
+/// 遍历工作目录,收集应纳入快照的文件(相对路径)。
+/// 关键:**完全不读项目 .gitignore** —— agent 的临时产物(artifacts、被项目忽略的小文件)
+/// 也要监控。只跳 SKIP_DIRS 噪声目录 + 超过 MAX_SNAPSHOT_FILE 的大文件(模型权重等)。
+fn collect_files(repo: &str) -> Vec<String> {
+    let root = Path::new(repo);
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_symlink() {
+                continue; // 不跟随符号链接,避免环/越界
+            }
+            if ft.is_dir() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if !SKIP_DIRS.contains(&name.as_str()) {
+                    stack.push(p);
+                }
+            } else if ft.is_file() {
+                let too_big = e
+                    .metadata()
+                    .map(|m| m.len() > MAX_SNAPSHOT_FILE)
+                    .unwrap_or(true);
+                if too_big {
+                    continue;
+                }
+                if let Ok(rel) = p.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().to_string());
+                }
+            }
+        }
+        if out.len() > 100_000 {
+            break; // 文件数硬上限,防失控
+        }
+    }
+    out
+}
+
+/// 把当前工作目录的「应纳入文件集」刷进影子 index(替换式):
+/// 先清空 index,再用 `git add -f`(强制,绕过任何 .gitignore)逐批加入收集到的文件。
+/// 这样 index 永远 = collect_files 的结果:新增体现为 add、删除体现为「不在新集合里」。
+fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
+    // 清空 index(--ignore-unmatch:空仓库时不报错)。
+    let _ = shadow_git(repo, gitdir, &["rm", "-r", "--cached", "-q", "--ignore-unmatch", "."]);
+    let files = collect_files(repo);
+    if files.is_empty() {
+        return Ok(());
+    }
+    // 用 NUL 分隔的 pathspec 文件喂给 git add -f(避免文件名含空格/特殊字符出错;
+    // 也避免命令行参数过长)。
+    let mut buf = String::with_capacity(files.len() * 24);
+    for f in &files {
+        buf.push_str(f);
+        buf.push('\0');
+    }
+    let tmp = gitdir.join("linco-stage-list");
+    std::fs::write(&tmp, buf.as_bytes()).map_err(|e| e.to_string())?;
+    let res = shadow_git(
+        repo,
+        gitdir,
+        &[
+            "add",
+            "-f",
+            "--pathspec-from-file",
+            &tmp.to_string_lossy(),
+            "--pathspec-file-nul",
+        ],
+    );
+    let _ = std::fs::remove_file(&tmp);
+    res.map(|_| ())
+}
+
+
 /// 确保影子仓库已初始化(init + 写 excludes)。幂等:进程内只做一次真正的 init。
 fn ensure_init(host: &Option<String>, repo: &str) -> Result<PathBuf, String> {
     let gitdir = shadow_dir(repo);
@@ -106,11 +187,6 @@ fn ensure_init(host: &Option<String>, repo: &str) -> Result<PathBuf, String> {
         let _ = shadow_git(repo, &gitdir, &["config", "user.email", "linco@local"]);
         let _ = shadow_git(repo, &gitdir, &["config", "user.name", "Linco"]);
     }
-    // 写 excludes(每次覆盖,保证最新)
-    let info = gitdir.join("info");
-    std::fs::create_dir_all(&info).map_err(|e| e.to_string())?;
-    std::fs::write(info.join("exclude"), EXCLUDES.join("\n") + "\n")
-        .map_err(|e| e.to_string())?;
     if let Ok(mut m) = inited().lock() {
         m.insert(k, true);
     }
@@ -135,8 +211,8 @@ pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(),
             return crate::agent_rpc::shadow_begin(host.as_deref().unwrap(), &repo);
         }
         let gitdir = ensure_init(&host, &repo)?;
-        // add -A:纳入新增/修改/删除的一切(excludes 已挡掉噪声)。
-        shadow_git(&repo, &gitdir, &["add", "-A"])?;
+        // 自己遍历筛选(无视 .gitignore、跳噪声目录与大文件)后刷进 index。
+        stage_snapshot(&repo, &gitdir)?;
         // commit:--allow-empty 保证即便无改动也产出一个基线 commit(后续 diff 才有锚点)。
         shadow_git(
             &repo,
@@ -171,10 +247,9 @@ pub async fn shadow_diff(
             return Ok(String::new()); // 还没拍过基线
         }
         let rel = rel_of(&repo, &path);
-        // 关键:先 add -A 把当前工作区(含新建 untracked 文件)纳入影子 index,
-        // 再用 `diff --cached HEAD`(index vs 基线 commit)。否则 `diff HEAD` 看不到
-        // 基线之后新建的 untracked 文件 —— 而那正是 agent 产物的主力。
-        shadow_git(&repo, &gitdir, &["add", "-A"])?;
+        // 关键:先把当前工作区快照刷进 index(stage_snapshot 无视 .gitignore、含新建产物),
+        // 再用 `diff --cached HEAD`(index vs 基线 commit)。
+        stage_snapshot(&repo, &gitdir)?;
         shadow_git(
             &repo,
             &gitdir,
@@ -199,8 +274,8 @@ pub async fn shadow_changed(
         if !gitdir.join("HEAD").exists() {
             return Ok(HashMap::new());
         }
-        // 先 add -A 纳入新建 untracked 文件,再 diff --cached(index vs 基线)。
-        shadow_git(&repo, &gitdir, &["add", "-A"])?;
+        // 刷快照进 index(无视 .gitignore、含新建产物),再 diff --cached(index vs 基线)。
+        stage_snapshot(&repo, &gitdir)?;
         let out = shadow_git(&repo, &gitdir, &["diff", "--cached", "--name-status", "HEAD"])?;
         Ok(parse_name_status(&repo, &out))
     })

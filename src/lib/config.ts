@@ -16,7 +16,7 @@ export interface AppConfig {
   agents: AgentConfig[]
   defaultAgent: string
   autoStart: boolean
-  /** 当前工作目录(claude 在此运行) */
+  /** 当前工作目录(agent 在此运行) */
   cwd: string
   /** 最近用过的工作目录 */
   recentDirs: string[]
@@ -96,6 +96,51 @@ export async function saveConfig(cfg: AppConfig): Promise<void> {
   await invoke('save_config', { config: toRaw(cfg) })
 }
 
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`
+}
+
+function hasFlag(command: string, shortFlag: string, longFlag: string): boolean {
+  const parts = command.split(/\s+/).filter(Boolean)
+  return parts.some(
+    (p) =>
+      p === shortFlag ||
+      p.startsWith(`${shortFlag}=`) ||
+      p === longFlag ||
+      p.startsWith(`${longFlag}=`)
+  )
+}
+
+function commandHead(command: string): string {
+  return command.trim().split(/\s+/)[0] ?? ''
+}
+
+function defaultCommandForProvider(provider: string): string {
+  return provider === 'openai' ? 'codex' : 'claude'
+}
+
+/** 返回用于进程定位/补全缓存的 agent 可执行名,不带模型/权限参数。 */
+export function agentExecutable(agent: AgentConfig): string {
+  return commandHead(agent.command) || defaultCommandForProvider(agent.provider)
+}
+
+/** 生成真正写入 PTY 的 TUI 启动命令。 */
+export function agentLaunchCommand(agent: AgentConfig): string {
+  let cmd = agent.command.trim()
+  if (!cmd) cmd = defaultCommandForProvider(agent.provider)
+
+  const head = commandHead(cmd).split('/').pop() ?? ''
+  const model = agent.model.trim()
+  if (model) {
+    if (agent.provider === 'openai' || head === 'codex') {
+      if (!hasFlag(cmd, '-m', '--model')) cmd += ` -m ${shellQuote(model)}`
+    } else if (agent.provider === 'anthropic' || head === 'claude') {
+      if (!hasFlag(cmd, '--model', '--model')) cmd += ` --model ${shellQuote(model)}`
+    }
+  }
+  return cmd
+}
+
 /** 把 agent 配置展开成注入终端的环境变量。 */
 export function agentEnv(agent: AgentConfig): Record<string, string> {
   const env: Record<string, string> = {}
@@ -112,9 +157,19 @@ export function agentEnv(agent: AgentConfig): Record<string, string> {
   if (agent.baseUrl) {
     if (p === 'anthropic') env.ANTHROPIC_BASE_URL = agent.baseUrl
     else if (p === 'openai') env.OPENAI_BASE_URL = agent.baseUrl
-    else env.ANTHROPIC_BASE_URL = agent.baseUrl
+    else {
+      env.ANTHROPIC_BASE_URL = agent.baseUrl
+      env.OPENAI_BASE_URL = agent.baseUrl
+    }
   }
-  if (agent.model) env.ANTHROPIC_MODEL = agent.model
+  if (agent.model) {
+    if (p === 'openai') env.OPENAI_MODEL = agent.model
+    else if (p === 'anthropic') env.ANTHROPIC_MODEL = agent.model
+    else {
+      env.OPENAI_MODEL = agent.model
+      env.ANTHROPIC_MODEL = agent.model
+    }
+  }
   return env
 }
 

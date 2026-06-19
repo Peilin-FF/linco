@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus, Trash2, Check } from 'lucide-react'
 import {
   AGENT_PRESETS,
+  agentLaunchCommand,
   type AgentConfig,
   type AppConfig
 } from '@/lib/config'
@@ -26,6 +27,7 @@ export default function ModelSettings({
     config.agents[0]?.id ?? ''
   )
   const selected = config.agents.find((a) => a.id === selectedId)
+  const isOpenAI = selected?.provider === 'openai'
 
   const update = (next: Partial<AppConfig>): void =>
     onChange({ ...config, ...next })
@@ -182,10 +184,14 @@ export default function ModelSettings({
                 onChange={(e) =>
                   updateAgent(selected.id, { command: e.target.value })
                 }
-                placeholder="claude"
+                placeholder={isOpenAI ? 'codex' : 'claude'}
                 className={`${inputClass} font-mono`}
               />
             </Field>
+
+            <div className="rounded-lg bg-canvas px-3 py-2 font-mono text-[12px] text-ink-muted">
+              {agentLaunchCommand(selected)}
+            </div>
 
             <Field label="API Key" hint="作为环境变量注入,仅保存在本地 ~/.linco/config.json">
               <input
@@ -205,7 +211,11 @@ export default function ModelSettings({
                 onChange={(e) =>
                   updateAgent(selected.id, { baseUrl: e.target.value })
                 }
-                placeholder="https://api.anthropic.com"
+                placeholder={
+                  isOpenAI
+                    ? 'https://api.openai.com/v1'
+                    : 'https://api.anthropic.com'
+                }
                 className={`${inputClass} font-mono`}
               />
             </Field>
@@ -216,7 +226,7 @@ export default function ModelSettings({
                 onChange={(e) =>
                   updateAgent(selected.id, { model: e.target.value })
                 }
-                placeholder="claude-opus-4-8"
+                placeholder={isOpenAI ? 'gpt-5' : 'claude-opus-4-8'}
                 className={`${inputClass} font-mono`}
               />
             </Field>

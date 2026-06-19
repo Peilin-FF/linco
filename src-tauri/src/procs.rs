@@ -94,9 +94,11 @@ pub async fn agent_tasks(
         for p in parse_and_filter(&raw, &base, None) {
             cand.insert(p.pid, p);
         }
-        // (b) cwd 命中项目目录(后台任务被 init 收养后脱离子树,靠 cwd 锚点保住)
+        // (b) cwd 命中项目目录(后台任务被 init 收养后脱离子树,靠 cwd 锚点保住)。
+        // 用一次性批量 all_cwds() 避免对每个进程单独 lsof(macOS 几百进程要数十秒)。
         if !cwd.is_empty() {
             let base_name = base.rsplit('/').next().unwrap_or(&base);
+            let cwds = all_cwds();
             for p in parse_all(&raw) {
                 if cand.contains_key(&p.pid) {
                     continue;
@@ -104,14 +106,45 @@ pub async fn agent_tasks(
                 if !base_name.is_empty() && p.args.contains(base_name) {
                     continue; // 跳过 agent 本体
                 }
-                if cwd_matches(local_cwd(p.pid).as_deref(), &cwd) {
+                if cwd_matches(cwds.get(&p.pid).map(|s| s.as_str()), &cwd) {
                     cand.insert(p.pid, p);
                 }
             }
         }
 
-        let mut tasks = Vec::new();
+        // 去噪 + 穿透外壳(与 python op_agent_tasks 对称):
+        // sh -c "python train.py" → 显示里层 python;剔除纯 shell/短命工具;跳过 <5s。
+        let all = parse_all(&raw);
+        let by_pid: HashMap<i64, ProcInfo> = all.iter().map(|p| (p.pid, p.clone())).collect();
+        let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+        for p in &all {
+            children.entry(p.ppid).or_default().push(p.pid);
+        }
+        let mut resolved: HashMap<i64, ProcInfo> = HashMap::new();
         for p in cand.into_values() {
+            let mut target = p;
+            for _ in 0..4 {
+                if !is_noise(&target) {
+                    break;
+                }
+                let real: Vec<&ProcInfo> = children
+                    .get(&target.pid)
+                    .map(|ks| ks.iter().filter_map(|c| by_pid.get(c)).filter(|k| !is_noise(k)).collect())
+                    .unwrap_or_default();
+                if real.len() == 1 {
+                    target = real[0].clone();
+                } else {
+                    break;
+                }
+            }
+            resolved.insert(target.pid, target);
+        }
+
+        let mut tasks = Vec::new();
+        for p in resolved.into_values() {
+            if is_noise(&p) || etime_secs(&p.etime) < 5 {
+                continue;
+            }
             if let Some(f) = local_proc_output(p.pid).fd1 {
                 tasks.push(AgentTask { pid: p.pid, args: p.args, file: f, etime: p.etime });
             }
@@ -288,22 +321,40 @@ fn local_proc_output(pid: i64) -> ProcOutput {
     ProcOutput { fd1: resolve(1), fd2: resolve(2) }
 }
 
-/// 本地取进程工作目录(Linux /proc/PID/cwd;macOS lsof)。
-fn local_cwd(pid: i64) -> Option<String> {
+/// 一次性拿到所有进程的 cwd(pid→cwd)。性能关键:对每个进程单独 lsof 在 macOS 上
+/// 几百进程要数十秒,会把前端轮询挂死。Linux 批量 readlink /proc/*/cwd;macOS 一条
+/// `lsof -d cwd -F pn` 拿全部(~0.4s)。
+fn all_cwds() -> HashMap<i64, String> {
+    let mut out = HashMap::new();
     #[cfg(target_os = "linux")]
-    if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
-        return Some(p.to_string_lossy().to_string());
-    }
-    let out = Command::new("lsof")
-        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-F", "n"])
-        .output()
-        .ok()?;
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        if let Some(rest) = line.strip_prefix("n/") {
-            return Some(format!("/{rest}"));
+    {
+        if let Ok(rd) = std::fs::read_dir("/proc") {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if let Ok(pid) = name.parse::<i64>() {
+                    if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+                        out.insert(pid, p.to_string_lossy().to_string());
+                    }
+                }
+            }
+        }
+        if !out.is_empty() {
+            return out;
         }
     }
-    None
+    if let Ok(o) = Command::new("lsof").args(["-d", "cwd", "-F", "pn"]).output() {
+        let mut cur: Option<i64> = None;
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            if let Some(rest) = line.strip_prefix('p') {
+                cur = rest.parse::<i64>().ok();
+            } else if let Some(rest) = line.strip_prefix('n') {
+                if let Some(pid) = cur {
+                    out.insert(pid, rest.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// 进程 cwd 是否落在项目目录下(含子目录)。canonicalize 归一化(解 symlink,如
@@ -324,6 +375,63 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
     let a = norm(pc);
     let b = norm(project_cwd);
     a == b || a.starts_with(&format!("{}/", b.trim_end_matches('/')))
+}
+
+// 一闪而过的短命工具 / 纯 shell 外壳:不是用户想看的训练任务,剔除。
+const NOISE_CMDS: &[&str] = &[
+    "sh", "bash", "zsh", "dash", "fish", "ksh", "head", "tail", "cat", "grep", "egrep",
+    "fgrep", "ugrep", "rg", "ag", "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq",
+    "cut", "tr", "which", "env", "echo", "printf", "true", "false", "test", "expr", "date",
+    "basename", "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync",
+    "tee", "xargs", "cp", "mv", "rm", "mkdir",
+];
+
+/// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
+fn exe_name(args: &str) -> String {
+    let toks: Vec<&str> = args.split_whitespace().collect();
+    let mut i = 0;
+    while i < toks.len()
+        && (toks[i].contains('=')
+            || matches!(toks[i], "env" | "nohup" | "setsid" | "stdbuf"))
+    {
+        i += 1;
+    }
+    let t = toks.get(i).or_else(|| toks.first()).copied().unwrap_or("");
+    t.rsplit('/').next().unwrap_or(t).to_string()
+}
+
+/// 进程是否为噪声:纯 shell 外壳 / 短命工具 / claude snapshot shell。
+fn is_noise(p: &ProcInfo) -> bool {
+    if p.args.contains("shell-snapshot")
+        || p.args.contains("snapshot-zsh")
+        || p.args.contains("snapshot-bash")
+    {
+        return true;
+    }
+    NOISE_CMDS.contains(&exe_name(&p.args).as_str())
+}
+
+/// 解析 ps ELAPSED:[[DD-]HH:]MM:SS → 秒。解析失败返回大值(不误删长任务)。
+fn etime_secs(etime: &str) -> i64 {
+    let s = etime.trim();
+    if s.is_empty() {
+        return 1_000_000_000;
+    }
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<i64>().unwrap_or(0), r),
+        None => (0, s),
+    };
+    let parts: Vec<i64> = rest.split(':').map(|x| x.parse().unwrap_or(-1)).collect();
+    if parts.iter().any(|&n| n < 0) {
+        return 1_000_000_000;
+    }
+    let (h, m, sec) = match parts.as_slice() {
+        [h, m, s] => (*h, *m, *s),
+        [m, s] => (0, *m, *s),
+        [s] => (0, 0, *s),
+        _ => return 1_000_000_000,
+    };
+    days * 86400 + h * 3600 + m * 60 + sec
 }
 
 /// 本地从 offset 增量读文件。

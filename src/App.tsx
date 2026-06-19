@@ -23,7 +23,9 @@ import CodeMirrorWarmup from './components/CodeMirrorWarmup'
 import ResizeHandle from './components/ResizeHandle'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import {
+  agentExecutable,
   agentEnv,
+  agentLaunchCommand,
   loadConfig,
   saveConfig,
   type AppConfig
@@ -172,6 +174,19 @@ export default function App(): JSX.Element {
     () => (defaultAgent ? agentEnv(defaultAgent) : undefined),
     [defaultAgent]
   )
+  const agentCommand = useMemo(
+    () => (defaultAgent ? agentLaunchCommand(defaultAgent) : undefined),
+    [defaultAgent]
+  )
+  const agentCommandBase = useMemo(
+    () => (defaultAgent ? agentExecutable(defaultAgent) : undefined),
+    [defaultAgent]
+  )
+  const agentLabel = defaultAgent
+    ? defaultAgent.model
+      ? `${defaultAgent.name} · ${defaultAgent.model}`
+      : defaultAgent.name
+    : 'Agent'
 
   // 工作目录:远程用连接的远端目录,本地用配置的 cwd
   const cwd = (host ? activeConn?.cwd : config?.cwd) || undefined
@@ -215,7 +230,9 @@ export default function App(): JSX.Element {
   // 单次空结果/失败一律保留上次列表。
   const taskSeenRef = useRef<Map<number, { task: AgentTask; at: number }>>(new Map())
   useEffect(() => {
-    if (!remoteDataReady || !defaultAgent?.command) {
+    // 只要连接就绪且有工作目录就轮询:任务检测靠 cwd 锚点(命中项目目录)+ agent 子树
+    // 两路并集,即便没配 defaultAgent(commandBase 为空)也能靠 cwd 抓到后台任务。
+    if (!remoteDataReady || !cwd) {
       taskSeenRef.current.clear()
       setTasks([])
       return
@@ -235,7 +252,7 @@ export default function App(): JSX.Element {
       if (!stop) setTasks(merged)
     }
     const pull = (): void => {
-      agentTasks(host, cwd, defaultAgent?.command)
+      agentTasks(host, cwd, agentCommandBase)
         .then((list) => merge(list))
         .catch(() => {
           /* 失败:保留上次列表,不清空(下次再试) */
@@ -247,23 +264,23 @@ export default function App(): JSX.Element {
       stop = true
       window.clearInterval(t)
     }
-  }, [host, cwd, remoteDataReady, defaultAgent?.command])
+  }, [host, cwd, remoteDataReady, agentCommandBase])
 
 
   // 对话会话自动启动 claude/codex
-  const initialCommand =
-    config?.autoStart && defaultAgent ? defaultAgent.command : undefined
+  const initialCommand = config?.autoStart ? agentCommand : undefined
 
   // —— 每连接一个常驻对话会话 ——
   // 连接身份:'' = 本地 → 'local';远程用 activeConnection id。
   const connId = config?.activeConnection || 'local'
-  // 会话 id/key 仅含 connId + cwd:切集群=切到另一个常驻会话(不杀);
-  // 换工作目录=该会话按新 cwd 重启(有意);agent/env 不进 key(挂载时读一次)。
-  const activeChatId = `chat:${connId}:${cwd ?? ''}`
+  // 会话 id/key 含 connId + agent + cwd:切集群/切 agent/切项目都会进对应常驻会话。
+  // 切回旧组合时原 TUI 还在现场。
+  const agentId = defaultAgent?.id || 'agent'
+  const activeChatId = `chat:${connId}:${agentId}:${cwd ?? ''}`
 
   // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
-  // 每个 连接+工作目录 各一个会话(id 含 cwd):切到新项目=新会话(claude 在后台
-  // 起,不冻 UI);切回访问过的项目=原会话还在(claude 在对话、终端、渲染态全保留),
+  // 每个 连接+agent+工作目录 各一个会话:切到新项目/切 Codex=新会话(agent 在后台
+  // 起,不冻 UI);切回访问过的组合=原会话还在(agent 在对话、终端、渲染态全保留),
   // 瞬现。**不杀任何旧会话**——这正是"固化"。会话很轻(一个 PTY),保留到 app 退出。
   useEffect(() => {
     if (!config || !cwd) return
@@ -743,7 +760,8 @@ export default function App(): JSX.Element {
             compact={dockTerminalOpen}
             terminalOpen={dockTerminalOpen}
             extraHeight={chatBoxHeight}
-            commandBase={defaultAgent?.command}
+            commandBase={agentCommandBase}
+            agentLabel={agentLabel}
             host={host}
             onToggleTerminal={() => {
               setDockOpened(true)
