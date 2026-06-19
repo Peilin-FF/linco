@@ -1,0 +1,8 @@
+{
+  "name": "linco-shadow-diff",
+  "version": "1.0.0",
+  "description": "「本轮 agent 改动」可视化:在独立 git 影子仓库(与项目 .git 无关)追踪每一轮对话 agent 改了哪些文件,Linco 文件树标 A/M/D、点开显红绿 diff。注入说明并提供 shadow.sh CLI(begin/changed/diff/status)供 agent 主动调用。",
+  "author": {
+    "name": "fengpeilin"
+  }
+}

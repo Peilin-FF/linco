@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/shadow-session-start.sh\"",
+            "timeout": 10,
+            "statusMessage": "启用本轮改动 diff…"
+          }
+        ]
+      }
+    ]
+  }
+}

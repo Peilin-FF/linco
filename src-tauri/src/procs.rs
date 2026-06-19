@@ -112,6 +112,26 @@ pub async fn agent_tasks(
             }
         }
 
+        // (c) 输出文件落在项目目录下(launchctl/nohup 起的任务 cwd=/、ppid=1,两条
+        // 锚点都失效,但日志写进了项目目录 → 用输出文件路径兜底锚定)。
+        if !cwd.is_empty() {
+            let base_name = base.rsplit('/').next().unwrap_or(&base);
+            let fdfiles = all_fd_files();
+            for p in parse_all(&raw) {
+                if cand.contains_key(&p.pid) {
+                    continue;
+                }
+                if !base_name.is_empty() && p.args.contains(base_name) {
+                    continue;
+                }
+                if let Some(f) = fdfiles.get(&p.pid) {
+                    if cwd_matches(Some(f.as_str()), &cwd) {
+                        cand.insert(p.pid, p);
+                    }
+                }
+            }
+        }
+
         // 去噪 + 穿透外壳(与 python op_agent_tasks 对称):
         // sh -c "python train.py" → 显示里层 python;剔除纯 shell/短命工具;跳过 <5s。
         let all = parse_all(&raw);
@@ -357,6 +377,63 @@ fn all_cwds() -> HashMap<i64, String> {
     out
 }
 
+/// 一次性拿到所有进程 stdout/stderr(fd 1/2)指向的普通文件:{pid: path}。
+/// 用途:launchctl/nohup 起的任务 cwd=/、不在 agent 子树,唯一线索是日志写进了项目
+/// 目录,用输出文件路径兜底锚定。性能同 all_cwds(批量,避免逐进程 lsof)。
+fn all_fd_files() -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(rd) = std::fs::read_dir("/proc") {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                if let Ok(pid) = name.parse::<i64>() {
+                    for fd in [1, 2] {
+                        if out.contains_key(&pid) {
+                            break;
+                        }
+                        if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/fd/{fd}")) {
+                            let s = p.to_string_lossy().to_string();
+                            if s.starts_with('/') && !s.starts_with("/dev/") {
+                                out.insert(pid, s);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    if let Ok(o) = Command::new("lsof").args(["-d", "1,2", "-F", "ptn"]).output() {
+        let mut cur: Option<i64> = None;
+        let mut is_reg = false;
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            match line.split_at(1) {
+                ("p", rest) => {
+                    cur = rest.parse::<i64>().ok();
+                    is_reg = false;
+                }
+                ("t", rest) => is_reg = rest == "REG",
+                ("n", rest) => {
+                    if let Some(pid) = cur {
+                        if is_reg
+                            && !out.contains_key(&pid)
+                            && rest.starts_with('/')
+                            && !rest.starts_with("/dev/")
+                        {
+                            out.insert(pid, rest.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// 进程 cwd 是否落在项目目录下(含子目录)。canonicalize 归一化(解 symlink,如
 /// macOS /tmp→/private/tmp)+ 前缀匹配,容忍尾斜杠与软链差异。
 fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
@@ -400,12 +477,16 @@ fn exe_name(args: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
-/// 进程是否为噪声:纯 shell 外壳 / 短命工具 / claude snapshot shell。
+/// 进程是否为噪声:纯 shell 外壳 / 短命工具 / claude snapshot shell /
+/// Linco 自身基础设施(html-vibe 预览服务器、linco agent 自己)。
 fn is_noise(p: &ProcInfo) -> bool {
     if p.args.contains("shell-snapshot")
         || p.args.contains("snapshot-zsh")
         || p.args.contains("snapshot-bash")
     {
+        return true;
+    }
+    if p.args.contains("artifacts_server.py") || p.args.contains("linco_agent.py") {
         return true;
     }
     NOISE_CMDS.contains(&exe_name(&p.args).as_str())

@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "13"
+AGENT_VERSION = "16"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -230,8 +230,30 @@ def op_git(a):
 # 这样 agent 的临时产物(artifacts、被项目忽略的小文件)也能监控;同时**跳过噪声目录与
 # 大文件**(模型权重动辄上 GB,绝不能纳入,否则影子 git 会卡死/爆盘)。
 
-SHADOW_SKIP_DIRS = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
+SHADOW_SKIP_DIRS = {
+    ".git", "node_modules", "target", "__pycache__", ".venv", "venv", "env", "dist", "build",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", ".cache",
+    "site-packages", "swanlog", "wandb", "outputs", "checkpoints", "logs", ".ipynb_checkpoints",
+    ".conda", ".eggs", "__MACOSX",
+}
 SHADOW_MAX_FILE = 1024 * 1024  # 1MB:超过则不纳入(不标记、不 diff)
+# 只收人类会手改的源码/文本/配置类型;venv 库、模型权重、数据产物等一律不进影子。
+SHADOW_EXTS = {
+    ".py", ".pyi", ".pyx", ".ipynb", ".json", ".jsonl", ".md", ".markdown", ".rst", ".txt",
+    ".yaml", ".yml", ".toml", ".cfg", ".ini", ".conf", ".env", ".properties",
+    ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat",
+    ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte",
+    ".css", ".scss", ".less", ".html", ".htm", ".xml", ".svg",
+    ".c", ".h", ".cpp", ".cc", ".hpp", ".rs", ".go", ".java", ".kt", ".rb", ".php", ".lua",
+    ".sql", ".graphql", ".proto", ".tex", ".csv", ".tsv", ".dockerfile", ".gitignore",
+    ".gradle", ".cmake", ".mk", ".r", ".jl", ".scala", ".swift", ".m", ".mm",
+}
+# 无扩展名但人类常改的文件名(Dockerfile/Makefile 等)
+SHADOW_NAMES = {
+    "Dockerfile", "Makefile", "makefile", "CMakeLists.txt", "Justfile", "justfile",
+    "README", "LICENSE", "Procfile", ".gitignore", ".dockerignore", ".env",
+    "requirements.txt",
+}
 
 # 临时文件唯一序号:agent 是单进程多线程(MAX_WORKERS),os.getpid() 在并发线程间相同,
 # 会导致临时 index / 列表文件名冲突 → 并发的 changed/diff 互相踩 index(全删/空 index bug)。
@@ -290,12 +312,23 @@ def _shadow_ensure_init(repo):
 
 
 def _shadow_collect(repo):
-    # 遍历工作目录,收集应纳入快照的文件(相对路径)。不读 .gitignore;只跳噪声目录 + 大文件。
+    # 遍历工作目录,收集应纳入快照的文件(相对路径)。不读 .gitignore。
+    # 三重筛选,把噪声挡在外面(否则 venv/日志/产物动辄几万文件,首次哈希撞超时):
+    #   1) 跳 venv:目录含 pyvenv.cfg → 整个不进(抓住 .venv/.venv312/env 等所有命名变体)
+    #   2) 跳噪声目录 SHADOW_SKIP_DIRS + *.egg-info
+    #   3) 只收白名单类型(人类会改的源码/文本/配置)+ 少数无扩展名常见文件,且 <1MB
     root = repo.rstrip("/")
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SHADOW_SKIP_DIRS]
+        if "pyvenv.cfg" in filenames:
+            dirnames[:] = []
+            continue
+        dirnames[:] = [d for d in dirnames
+                       if d not in SHADOW_SKIP_DIRS and not d.endswith(".egg-info")]
         for n in filenames:
+            ext = os.path.splitext(n)[1].lower()
+            if ext not in SHADOW_EXTS and n not in SHADOW_NAMES:
+                continue
             fp = os.path.join(dirpath, n)
             try:
                 if os.path.islink(fp) or os.path.getsize(fp) > SHADOW_MAX_FILE:
@@ -335,12 +368,28 @@ def _shadow_rel(repo, path):
     return path[len(pref):] if path.startswith(pref) else path
 
 
+# 每仓库一把锁:begin/changed/diff 共享同一个常驻「热」index(保留 stat 缓存以增量哈希),
+# 所以必须串行,避免并发同时改 index 互相踩(空 index → 全 D/全红 bug)。每个操作都已是
+# 秒级(增量),串行无性能损失。
+_shadow_locks = {}
+_shadow_locks_guard = threading.Lock()
+
+
+def _shadow_lock(repo):
+    with _shadow_locks_guard:
+        lk = _shadow_locks.get(repo)
+        if lk is None:
+            lk = threading.Lock()
+            _shadow_locks[repo] = lk
+        return lk
+
+
 def op_shadow_begin(a):
     repo = a["repo"]
     gitdir = _shadow_ensure_init(repo)
-    # begin 要 commit,用持久 index。
-    _shadow_stage(repo, gitdir)
-    _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
+    with _shadow_lock(repo):
+        _shadow_stage(repo, gitdir)
+        _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
     return {}
 
 
@@ -349,17 +398,9 @@ def op_shadow_changed(a):
     gitdir = _shadow_dir(repo)
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"changed": {}}
-    # 用临时 index 算,绝不动持久 index → 并发安全、无空窗(全 D bug 的根因)。
-    idx = os.path.join(gitdir, "linco-idx-" + _shadow_uniq())
-    try:
-        _shadow_stage(repo, gitdir, idx)
-        code, out, _ = _shadow_git(repo, gitdir,
-                                   ["diff", "--cached", "--name-status", "HEAD"], idx)
-    finally:
-        try:
-            os.remove(idx)
-        except OSError:
-            pass
+    with _shadow_lock(repo):
+        _shadow_stage(repo, gitdir)
+        code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--name-status", "HEAD"])
     base = repo.rstrip("/")
     changed = {}
     for line in out.splitlines():
@@ -381,17 +422,10 @@ def op_shadow_diff(a):
     if not os.path.exists(os.path.join(gitdir, "HEAD")):
         return {"diff": ""}
     rel = _shadow_rel(repo, path)
-    # 临时 index,并发安全、不动持久状态。
-    idx = os.path.join(gitdir, "linco-idx-d-" + _shadow_uniq())
-    try:
-        _shadow_stage(repo, gitdir, idx)
+    with _shadow_lock(repo):
+        _shadow_stage(repo, gitdir)
         code, out, _ = _shadow_git(repo, gitdir,
-                                   ["diff", "--cached", "--no-color", "HEAD", "--", rel], idx)
-    finally:
-        try:
-            os.remove(idx)
-        except OSError:
-            pass
+                                   ["diff", "--cached", "--no-color", "HEAD", "--", rel])
     return {"diff": out}
 
 
@@ -497,6 +531,52 @@ def _all_cwds():
     return out
 
 
+def _all_fd_files():
+    # 一次性拿到「所有进程」stdout/stderr(fd 1/2)指向的普通文件:{pid: path}。
+    # 用途:launchctl/nohup 起的任务 cwd=/ 又不在 agent 子树下,唯一能关联到项目的
+    # 线索就是它把日志写进了项目目录 —— 用输出文件路径作第三条锚点。
+    # 性能同 _all_cwds:Linux 批量 readlink /proc/*/fd/{1,2},macOS 一条 lsof。
+    out = {}
+    if os.path.isdir("/proc"):
+        for name in os.listdir("/proc"):
+            if not name.isdigit():
+                continue
+            pid = int(name)
+            for fd in (1, 2):
+                try:
+                    p = os.readlink("/proc/%s/fd/%d" % (name, fd))
+                except OSError:
+                    continue
+                if p.startswith("/") and not p.startswith("/dev/"):
+                    out[pid] = p
+                    break  # fd1 优先;拿到即够
+        if out:
+            return out
+    # macOS / 无 /proc:一条 lsof 取所有进程的 fd 1/2(只认普通文件 REG)
+    try:
+        r = subprocess.run(
+            ["lsof", "-d", "1,2", "-F", "ptn"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        ).stdout.decode("utf-8", "replace")
+        cur = None
+        is_reg = False
+        for line in r.splitlines():
+            tag, val = line[:1], line[1:]
+            if tag == "p":
+                try:
+                    cur = int(val)
+                except ValueError:
+                    cur = None
+            elif tag == "t":
+                is_reg = (val == "REG")
+            elif tag == "n" and cur is not None and is_reg and cur not in out:
+                if val.startswith("/") and not val.startswith("/dev/"):
+                    out[cur] = val
+    except Exception:
+        pass
+    return out
+
+
 def _agent_descendants(cmd_base, cwd):
     # 定位 code agent(cmd_base)进程子树,返回其所有后代进程(不含根本身)。
     # 全量 ps 快照 → 按命令名(+cwd 收窄)找根 → 沿 ppid BFS。
@@ -595,9 +675,13 @@ def _exe_name(args):
 
 
 def _is_noise(p):
-    # 判断进程是否为噪声:纯 shell 外壳 / 短命工具 / claude 的 snapshot shell。
+    # 判断进程是否为噪声:纯 shell 外壳 / 短命工具 / claude snapshot shell /
+    # Linco 自身基础设施(html-vibe 预览服务器、linco agent 自己)。
     args = p.get("args", "")
     if "shell-snapshot" in args or "snapshot-zsh" in args or "snapshot-bash" in args:
+        return True
+    # Linco/插件自己的进程,不是用户关心的「agent 起的任务」
+    if "artifacts_server.py" in args or "linco_agent.py" in args:
         return True
     exe = _exe_name(args)
     return exe in _NOISE_CMDS
@@ -661,6 +745,20 @@ def op_agent_tasks(a):
             if base and base in p["args"]:
                 continue  # 跳过 agent 本体
             if _cwd_matches(cwds.get(p["pid"]), cwd):
+                cand[p["pid"]] = p
+    # (c) 输出文件落在项目目录下的进程(不限进程树/cwd)。覆盖 launchctl/nohup 起的
+    #     任务:它们 cwd=/、ppid=1(两条锚点都失效),但日志写进了项目目录,用输出
+    #     文件路径兜底锚定。同样用批量 _all_fd_files() 避免逐进程 lsof。
+    if cwd:
+        base = os.path.basename(cmd_base) if cmd_base else ""
+        fdfiles = _all_fd_files()
+        for p in procs:
+            if p["pid"] in cand:
+                continue
+            if base and base in p["args"]:
+                continue
+            f = fdfiles.get(p["pid"])
+            if f and _cwd_matches(f, cwd):
                 cand[p["pid"]] = p
 
     # 穿透外壳:候选若是噪声 shell 但有「干活的子进程」,用子进程替代它。

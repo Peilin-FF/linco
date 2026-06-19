@@ -1,7 +1,7 @@
 {
-  "name": "html-vibe",
+  "name": "linco-html",
   "version": "1.0.0",
-  "description": "默认用自包含 HTML 文件交互。每次会话自动启动 artifacts 预览服务器（带热刷新），并注入'实质性产物默认产出单文件 HTML'的工作流指令与统一设计套件。",
+  "description": "默认用自包含 HTML 文件交互。每次会话自动启动 artifacts 预览服务器（带热刷新），并注入'实质性产物默认产出单文件 HTML'的工作流指令与统一设计套件。Linco 预览引擎(notebook.js/katex)资源也在本插件 assets/ 下。",
   "author": {
     "name": "fengpeilin"
   }

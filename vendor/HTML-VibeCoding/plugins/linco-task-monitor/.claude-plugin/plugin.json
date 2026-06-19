@@ -1,0 +1,8 @@
+{
+  "name": "linco-task-monitor",
+  "version": "1.0.0",
+  "description": "把后台长任务(训练/评测/数据处理)的输出可视化到 Linco 终端的后台任务监控面板。每次会话注入'后台任务用 -u + 重定向到项目内 .log 文件 + 后台 &'的工作流指令,让用户实时看到 agent 在后台干什么。",
+  "author": {
+    "name": "fengpeilin"
+  }
+}

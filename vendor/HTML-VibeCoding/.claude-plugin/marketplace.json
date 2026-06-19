@@ -1,13 +1,24 @@
 {
-  "name": "html-vibe-marketplace",
+  "name": "linco-plugins-marketplace",
   "owner": {
     "name": "fengpeilin"
   },
   "plugins": [
     {
-      "name": "html-vibe",
-      "source": "./plugins/html-vibe",
-      "description": "默认用自包含 HTML 文件交互：每次会话自动启动 artifacts 预览服务器（热刷新），并注入'产物默认产出 HTML'的指令，附带统一设计套件。"
+      "name": "linco-html",
+      "source": "./plugins/linco-html",
+      "description": "默认用自包含 HTML 文件交互：每次会话自动启动 artifacts 预览服务器（热刷新），并注入'产物默认产出 HTML'的指令，附带统一设计套件。Linco 预览引擎资源也在本插件下。"
+    },
+    {
+      "name": "linco-task-monitor",
+      "source": "./plugins/linco-task-monitor",
+      "description": "把后台长任务输出可视化到 Linco 终端监控面板：注入'用 -u + 重定向到项目内 .log + 后台 &'启动后台任务的工作流指令。"
+    },
+    {
+      "name": "linco-shadow-diff",
+      "source": "./plugins/linco-shadow-diff",
+      "description": "「本轮 agent 改动」可视化:独立影子 git 追踪每轮对话改了哪些文件(A/M/D + 红绿 diff)。注入说明并提供 shadow.sh CLI 供 agent 主动调用。"
     }
   ]
 }
+

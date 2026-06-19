@@ -91,7 +91,10 @@
   .seg{display:inline-flex;border:1.5px solid var(--g300);border-radius:8px;overflow:hidden}
   .seg button{font-family:var(--mono);font-size:11px;border:none;background:#fff;color:var(--g500);padding:5px 10px;cursor:pointer} .seg button.on{background:var(--clay);color:#fff}
 
-  .adder{height:14px;position:relative;cursor:pointer}
+  /* adder(cell 间「双击加 cell」区)平时折叠到 4px 几乎不可见,cell 之间贴紧;
+     hover 才展开到 14px 并露出可点的横线提示。这样删 cell 后不再留下明显的横线占位。 */
+  .adder{height:4px;position:relative;cursor:pointer;transition:height .12s}
+  .adder:hover{height:14px}
   .add-hint{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:1.5px;background:transparent;transition:background .12s}
   .adder:hover .add-hint{background:var(--g200)}
   .adder:hover .add-hint::after{content:"双击插入 cell";position:absolute;left:50%;top:-7px;transform:translateX(-50%);font-family:var(--mono);font-size:9px;color:var(--g500);background:var(--ivory);padding:0 6px;white-space:nowrap}

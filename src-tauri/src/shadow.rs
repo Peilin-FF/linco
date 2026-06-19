@@ -38,6 +38,17 @@ fn inited() -> &'static Mutex<HashMap<String, bool>> {
     INITED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+// 每仓库一把锁:begin/changed/diff 共享同一个常驻「热」index(保留 stat 缓存以增量哈希),
+// 必须串行,避免并发同时改 index 互相踩(空 index → 全 D/全红 bug)。各操作已是秒级,串行无损。
+static REPO_LOCKS: OnceLock<Mutex<HashMap<String, std::sync::Arc<Mutex<()>>>>> = OnceLock::new();
+fn repo_lock(host: &Option<String>, repo: &str) -> std::sync::Arc<Mutex<()>> {
+    let m = REPO_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = m.lock().unwrap_or_else(|e| e.into_inner());
+    map.entry(key(host, repo))
+        .or_insert_with(|| std::sync::Arc::new(Mutex::new(())))
+        .clone()
+}
+
 fn key(host: &Option<String>, repo: &str) -> String {
     format!("{}|{}", host.as_deref().unwrap_or(""), repo)
 }
@@ -69,27 +80,33 @@ const MAX_SNAPSHOT_FILE: u64 = 1024 * 1024; // 1MB
 
 /// 噪声目录:整目录跳过,不递归。
 const SKIP_DIRS: &[&str] = &[
-    ".git",
-    "node_modules",
-    "target",
-    "__pycache__",
-    ".venv",
-    "dist",
+    ".git", "node_modules", "target", "__pycache__", ".venv", "venv", "env", "dist", "build",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", ".cache",
+    "site-packages", "swanlog", "wandb", "outputs", "checkpoints", "logs",
+    ".ipynb_checkpoints", ".conda", ".eggs", "__MACOSX",
+];
+
+/// 只收人类会手改的源码/文本/配置扩展名;venv 库、模型权重、数据产物等一律不进影子。
+const SNAPSHOT_EXTS: &[&str] = &[
+    "py", "pyi", "pyx", "ipynb", "json", "jsonl", "md", "markdown", "rst", "txt",
+    "yaml", "yml", "toml", "cfg", "ini", "conf", "env", "properties",
+    "sh", "bash", "zsh", "fish", "ps1", "bat",
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte",
+    "css", "scss", "less", "html", "htm", "xml", "svg",
+    "c", "h", "cpp", "cc", "hpp", "rs", "go", "java", "kt", "rb", "php", "lua",
+    "sql", "graphql", "proto", "tex", "csv", "tsv", "gradle", "cmake", "mk",
+    "r", "jl", "scala", "swift", "m", "mm",
+];
+
+/// 无扩展名但人类常改的文件名。
+const SNAPSHOT_NAMES: &[&str] = &[
+    "Dockerfile", "Makefile", "makefile", "CMakeLists.txt", "Justfile", "justfile",
+    "README", "LICENSE", "Procfile", ".gitignore", ".dockerignore", ".env",
+    "requirements.txt",
 ];
 
 /// 在影子仓库上跑一条 git 命令(本地)。`--git-dir`/`--work-tree` 把它和项目 git 隔离。
 fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String> {
-    shadow_git_idx(repo, gitdir, args, None)
-}
-
-/// 同上,但可指定独立 index(GIT_INDEX_FILE)。changed/diff 用临时 index 算,不动持久 index
-/// —— 避免「清空 index→重 add」空窗期被并发调用读到空 index(文件树全 D 的根因)。
-fn shadow_git_idx(
-    repo: &str,
-    gitdir: &Path,
-    args: &[&str],
-    index_file: Option<&Path>,
-) -> Result<String, String> {
     let mut full: Vec<String> = vec![
         format!("--git-dir={}", gitdir.to_string_lossy()),
         format!("--work-tree={}", repo),
@@ -100,12 +117,10 @@ fn shadow_git_idx(
         "commit.gpgsign=false".into(),
     ];
     full.extend(args.iter().map(|a| a.to_string()));
-    let mut cmd = Command::new("git");
-    cmd.args(&full);
-    if let Some(idx) = index_file {
-        cmd.env("GIT_INDEX_FILE", idx);
-    }
-    let out = cmd.output().map_err(|e| format!("无法执行 git: {e}"))?;
+    let out = Command::new("git")
+        .args(&full)
+        .output()
+        .map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -113,14 +128,20 @@ fn shadow_git_idx(
     }
 }
 
-/// 遍历工作目录,收集应纳入快照的文件(相对路径)。
-/// 关键:**完全不读项目 .gitignore** —— agent 的临时产物(artifacts、被项目忽略的小文件)
-/// 也要监控。只跳 SKIP_DIRS 噪声目录 + 超过 MAX_SNAPSHOT_FILE 的大文件(模型权重等)。
+/// 遍历工作目录,收集应纳入快照的文件(相对路径)。不读项目 .gitignore。
+/// 三重筛选,把噪声挡在外面(否则 venv/日志/产物动辄几万文件,首次哈希撞超时):
+///   1) 跳 venv:目录含 pyvenv.cfg → 整个不进(抓住 .venv/.venv312/env 等所有命名变体)
+///   2) 跳噪声目录 SKIP_DIRS + *.egg-info
+///   3) 只收白名单类型(人类会改的源码/文本/配置)+ 少数无扩展名常见文件,且 <1MB
 fn collect_files(repo: &str) -> Vec<String> {
     let root = Path::new(repo);
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
+        // venv 探测:该目录含 pyvenv.cfg 则整个跳过(不递归、不收文件)。
+        if dir.join("pyvenv.cfg").exists() {
+            continue;
+        }
         let Ok(rd) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -132,10 +153,20 @@ fn collect_files(repo: &str) -> Vec<String> {
             }
             if ft.is_dir() {
                 let name = e.file_name().to_string_lossy().to_string();
-                if !SKIP_DIRS.contains(&name.as_str()) {
+                if !SKIP_DIRS.contains(&name.as_str()) && !name.ends_with(".egg-info") {
                     stack.push(p);
                 }
             } else if ft.is_file() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let ext = name
+                    .rsplit_once('.')
+                    .map(|(_, e)| e.to_ascii_lowercase())
+                    .unwrap_or_default();
+                let wanted =
+                    SNAPSHOT_EXTS.contains(&ext.as_str()) || SNAPSHOT_NAMES.contains(&name.as_str());
+                if !wanted {
+                    continue;
+                }
                 let too_big = e
                     .metadata()
                     .map(|m| m.len() > MAX_SNAPSHOT_FILE)
@@ -155,39 +186,39 @@ fn collect_files(repo: &str) -> Vec<String> {
     out
 }
 
-/// 把当前工作目录的「应纳入文件集」刷进影子 index(替换式):
-/// 先清空 index,再用 `git add -f`(强制,绕过任何 .gitignore)逐批加入收集到的文件。
-/// 这样 index 永远 = collect_files 的结果:新增体现为 add、删除体现为「不在新集合里」。
-fn stage_snapshot(repo: &str, gitdir: &Path, index_file: Option<&Path>) -> Result<(), String> {
-    // 清空目标 index(read-tree --empty 比 rm --cached 干净)。
-    let _ = shadow_git_idx(repo, gitdir, &["read-tree", "--empty"], index_file);
+/// 增量刷新持久 index 到当前工作区状态(**绝不清空** → 保留 git 的 stat 缓存,
+/// `add` 只重哈希真正变动的文件,大目录从几十秒降到秒级 = 增量重置,不会爆机器):
+///   1) git add -f <当前文件列表>:纳入新增/修改(强制,绕过 .gitignore)
+///   2) git add -u:只更新已跟踪文件,识别「消失的文件」→ 记录为删除(D)
+/// -u 只动已在 index 的文件,不会把 .gitignore 忽略的新目录拉进来,故 .gitignore 安全。
+fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
     let files = collect_files(repo);
-    if files.is_empty() {
-        return Ok(());
+    if !files.is_empty() {
+        // 用 NUL 分隔的 pathspec 文件喂给 git add -f(避免文件名含空格/特殊字符出错;
+        // 也避免命令行参数过长)。文件名唯一,避免并发互相覆盖。
+        let mut buf = String::with_capacity(files.len() * 24);
+        for f in &files {
+            buf.push_str(f);
+            buf.push('\0');
+        }
+        let tmp = gitdir.join(format!("linco-stage-{}", shadow_uniq()));
+        std::fs::write(&tmp, buf.as_bytes()).map_err(|e| e.to_string())?;
+        let res = shadow_git(
+            repo,
+            gitdir,
+            &[
+                "add",
+                "-f",
+                "--pathspec-from-file",
+                &tmp.to_string_lossy(),
+                "--pathspec-file-nul",
+            ],
+        );
+        let _ = std::fs::remove_file(&tmp);
+        res?;
     }
-    // 用 NUL 分隔的 pathspec 文件喂给 git add -f(避免文件名含空格/特殊字符出错;
-    // 也避免命令行参数过长)。文件名带 pid 唯一,避免并发互相覆盖。
-    let mut buf = String::with_capacity(files.len() * 24);
-    for f in &files {
-        buf.push_str(f);
-        buf.push('\0');
-    }
-    let tmp = gitdir.join(format!("linco-stage-{}", shadow_uniq()));
-    std::fs::write(&tmp, buf.as_bytes()).map_err(|e| e.to_string())?;
-    let res = shadow_git_idx(
-        repo,
-        gitdir,
-        &[
-            "add",
-            "-f",
-            "--pathspec-from-file",
-            &tmp.to_string_lossy(),
-            "--pathspec-file-nul",
-        ],
-        index_file,
-    );
-    let _ = std::fs::remove_file(&tmp);
-    res.map(|_| ())
+    // 补删除:更新已跟踪文件,把磁盘上已消失的记为删除。
+    shadow_git(repo, gitdir, &["add", "-u"]).map(|_| ())
 }
 
 
@@ -233,8 +264,10 @@ pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(),
             return crate::agent_rpc::shadow_begin(host.as_deref().unwrap(), &repo);
         }
         let gitdir = ensure_init(&host, &repo)?;
-        // 自己遍历筛选(无视 .gitignore、跳噪声目录与大文件)后刷进持久 index。
-        stage_snapshot(&repo, &gitdir, None)?;
+        // 持仓库锁:与 changed/diff 串行共享同一个热 index。增量 stage(不清空 → 秒级)。
+        let lk = repo_lock(&host, &repo);
+        let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
+        stage_snapshot(&repo, &gitdir)?;
         // commit:--allow-empty 保证即便无改动也产出一个基线 commit(后续 diff 才有锚点)。
         shadow_git(
             &repo,
@@ -269,19 +302,15 @@ pub async fn shadow_diff(
             return Ok(String::new()); // 还没拍过基线
         }
         let rel = rel_of(&repo, &path);
-        // 用临时 index 算,绝不动持久 index → 并发安全、无空窗(文件树全 D bug 的根因)。
-        let idx = gitdir.join(format!("linco-idx-d-{}", shadow_uniq()));
-        let r = (|| {
-            stage_snapshot(&repo, &gitdir, Some(&idx))?;
-            shadow_git_idx(
-                &repo,
-                &gitdir,
-                &["diff", "--cached", "--no-color", "HEAD", "--", &rel],
-                Some(&idx),
-            )
-        })();
-        let _ = std::fs::remove_file(&idx);
-        r
+        // 持仓库锁:与 begin/changed 串行共享同一个热 index(增量哈希,秒级),不互相踩。
+        let lk = repo_lock(&host, &repo);
+        let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
+        stage_snapshot(&repo, &gitdir)?;
+        shadow_git(
+            &repo,
+            &gitdir,
+            &["diff", "--cached", "--no-color", "HEAD", "--", &rel],
+        )
     })
     .await
 }
@@ -301,19 +330,12 @@ pub async fn shadow_changed(
         if !gitdir.join("HEAD").exists() {
             return Ok(HashMap::new());
         }
-        // 临时 index,并发安全、不动持久状态(全 D bug 的根因正是共享 index 的空窗)。
-        let idx = gitdir.join(format!("linco-idx-{}", shadow_uniq()));
-        let out = (|| {
-            stage_snapshot(&repo, &gitdir, Some(&idx))?;
-            shadow_git_idx(
-                &repo,
-                &gitdir,
-                &["diff", "--cached", "--name-status", "HEAD"],
-                Some(&idx),
-            )
-        })();
-        let _ = std::fs::remove_file(&idx);
-        Ok(parse_name_status(&repo, &out?))
+        // 持仓库锁:与 begin/diff 串行共享同一个热 index(增量哈希,秒级),不互相踩。
+        let lk = repo_lock(&host, &repo);
+        let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
+        stage_snapshot(&repo, &gitdir)?;
+        let out = shadow_git(&repo, &gitdir, &["diff", "--cached", "--name-status", "HEAD"])?;
+        Ok(parse_name_status(&repo, &out))
     })
     .await
 }

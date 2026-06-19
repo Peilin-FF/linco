@@ -649,10 +649,12 @@ fn has_notebook_js(dir: &str) -> bool {
 
 fn find_assets_local() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
-    // 已知安装位置(按优先级):标准插件目录 > 开发副本 > 插件缓存搜索
+    // 已知安装位置(按优先级):新插件名 > 旧名(回退) > 开发副本 > 插件缓存搜索
     let mut cands = vec![
-        format!("{home}/.claude/plugins/html-vibe/assets"), // README 安装位置(主)
-        format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"), // 旧开发副本
+        format!("{home}/.claude/plugins/linco-html/assets"), // 新插件名(主)
+        format!("{home}/.claude/plugins/html-vibe/assets"),  // 旧插件名(兼容已部署)
+        format!("{home}/HTML-VibeCoding/plugins/linco-html/assets"), // 开发副本(新名)
+        format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"),  // 开发副本(旧名)
     ];
     // 插件缓存/市场里搜(marketplaces / cache 下的 html-vibe)
     for base in [
@@ -692,10 +694,12 @@ fn walk_find_assets(base: &str, max_depth: u32) -> Option<String> {
 
 /// 远程:find 插件 assets 目录(经持久 SSH;集群是 Linux)。
 fn find_assets_remote(host: &str) -> Option<String> {
-    // 优先标准安装位置,再回退开发副本,最后在插件目录里 find。
-    let cmd = "for d in \"$HOME/.claude/plugins/html-vibe/assets\" \
+    // 优先新插件名,再回退旧名/开发副本,最后在插件目录里 find(任意含 notebook.js 的 assets)。
+    let cmd = "for d in \"$HOME/.claude/plugins/linco-html/assets\" \
+\"$HOME/.claude/plugins/html-vibe/assets\" \
+\"$HOME/HTML-VibeCoding/plugins/linco-html/assets\" \
 \"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \
-$(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets -path '*html-vibe*' 2>/dev/null); do \
+$(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets 2>/dev/null); do \
 [ -f \"$d/notebook.js\" ] && echo \"$d\" && break; done";
     let out = crate::remote::preview_run_remote(host, cmd).ok()?;
     let s = String::from_utf8_lossy(&out).trim().to_string();
@@ -919,7 +923,7 @@ mod save_tests {
     #[test]
     fn notebook_delete_cell_removes_insert_rail() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../vendor/HTML-VibeCoding/plugins/html-vibe/assets/notebook.js");
+            .join("../vendor/HTML-VibeCoding/plugins/linco-html/assets/notebook.js");
         let js = std::fs::read_to_string(path).expect("read notebook.js");
 
         assert!(

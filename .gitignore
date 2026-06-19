@@ -10,3 +10,6 @@ src-tauri/gen/schemas/
 .DS_Store
 *.log
 icon-source.png
+
+# 本地临时文件 / 测试脚本(不入库)
+tmp/

@@ -19,15 +19,38 @@ fn host_opt(h: &Option<String>) -> Option<&str> {
 }
 
 /// 执行 git 命令(本地或远程),返回 stdout(失败返回 Err(stderr))。
+/// 周期性/后台 git(status、log 等)默认走后台 lane,见 `git`;
+/// 用户**主动点击**触发的(看 diff、stage、discard…)走 `git_ix`(交互 lane),
+/// 不与频繁的 status/shadow/watch 在后台 lane 排队,点开即出、不卡顿。
 fn git(host: &Option<String>, repo: &str, args: &[&str]) -> Result<String, String> {
+    git_lane(host, repo, args, false)
+}
+
+/// 交互 lane 版本:供用户主动触发的 git 操作使用(点 diff、stage/unstage、discard、commit)。
+fn git_ix(host: &Option<String>, repo: &str, args: &[&str]) -> Result<String, String> {
+    git_lane(host, repo, args, true)
+}
+
+fn git_lane(
+    host: &Option<String>,
+    repo: &str,
+    args: &[&str],
+    interactive: bool,
+) -> Result<String, String> {
     if let Some(h) = host_opt(host) {
         // 优先走常驻 agent(RPC,一次往返);失败回退 shell。
-        if let Ok(v) = crate::agent_rpc::call_background(
-            h,
-            "git",
-            serde_json::json!({ "repo": repo, "args": args }),
-        )
-        {
+        // interactive=true 走 Interactive lane(只有文件树/打开文件,基本空闲),
+        // 否则走 Background lane(与 watch/shadow/status 共用)。
+        let rpc = if interactive {
+            crate::agent_rpc::call(h, "git", serde_json::json!({ "repo": repo, "args": args }))
+        } else {
+            crate::agent_rpc::call_background(
+                h,
+                "git",
+                serde_json::json!({ "repo": repo, "args": args }),
+            )
+        };
+        if let Ok(v) = rpc {
             let code = v.get("code").and_then(|x| x.as_i64()).unwrap_or(-1);
             if code == 0 {
                 return Ok(v
@@ -105,7 +128,13 @@ pub async fn git_status(repo: String, host: Option<String>) -> Result<GitStatus,
                 files: vec![],
             });
         }
-        let raw = git(&host, &repo, &["status", "--porcelain=v1", "--branch"])?;
+        // -uall:把未跟踪「目录」展开到文件级。默认 git 会把整个新目录折叠成一条
+        // `?? dir/`,导致 Git 视图只看得到「文件夹有改动」却展不开看里面具体哪些文件。
+        let raw = git(
+            &host,
+            &repo,
+            &["status", "--porcelain=v1", "--branch", "-uall"],
+        )?;
 
         let mut branch = String::new();
         let mut ahead = 0;
@@ -174,15 +203,25 @@ pub async fn git_diff_file(
 ) -> Result<String, String> {
     crate::blocking::run(move || {
         if untracked {
-            // 未跟踪:no-index 对比 /dev/null。有差异时退出码为 1(正常),
-            // 故远程加 `; true`、本地忽略退出码。
-            if let Some(h) = host_opt(&host) {
-                let cmd = format!(
-                    "cd {} && git diff --no-index --no-color -- /dev/null {} 2>/dev/null; true",
-                    shq(&repo),
-                    shq(&path)
-                );
-                return run_remote(h, &cmd).map(|b| String::from_utf8_lossy(&b).to_string());
+            // 未跟踪:no-index 对比 /dev/null。有差异时退出码为 1(正常,不当失败)。
+            // 走交互 lane 的 agent op_git(与点 diff 同一条快路径);本地直接跑。
+            if host_opt(&host).is_some() {
+                // op_git 返回 stdout 不看退出码,故 no-index 的 code=1 不影响取 diff
+                return git_ix(
+                    &host,
+                    &repo,
+                    &["diff", "--no-index", "--no-color", "--", "/dev/null", &path],
+                )
+                .or_else(|_| {
+                    // 回退:shell(no-index code=1,加 ; true)
+                    let h = host_opt(&host).unwrap();
+                    let cmd = format!(
+                        "cd {} && git diff --no-index --no-color -- /dev/null {} 2>/dev/null; true",
+                        shq(&repo),
+                        shq(&path)
+                    );
+                    run_remote(h, &cmd).map(|b| String::from_utf8_lossy(&b).to_string())
+                });
             }
             let out = Command::new("git")
                 .args(["diff", "--no-index", "--", "/dev/null", &path])
@@ -197,32 +236,32 @@ pub async fn git_diff_file(
         }
         args.push("--");
         args.push(&path);
-        git(&host, &repo, &args)
+        git_ix(&host, &repo, &args)
     })
     .await
 }
 
 #[tauri::command]
 pub async fn git_stage(repo: String, path: String, host: Option<String>) -> Result<(), String> {
-    crate::blocking::run(move || git(&host, &repo, &["add", "--", &path]).map(|_| ())).await
+    crate::blocking::run(move || git_ix(&host, &repo, &["add", "--", &path]).map(|_| ())).await
 }
 
 #[tauri::command]
 pub async fn git_unstage(repo: String, path: String, host: Option<String>) -> Result<(), String> {
     crate::blocking::run(move || {
-        git(&host, &repo, &["restore", "--staged", "--", &path]).map(|_| ())
+        git_ix(&host, &repo, &["restore", "--staged", "--", &path]).map(|_| ())
     })
     .await
 }
 
 #[tauri::command]
 pub async fn git_stage_all(repo: String, host: Option<String>) -> Result<(), String> {
-    crate::blocking::run(move || git(&host, &repo, &["add", "-A"]).map(|_| ())).await
+    crate::blocking::run(move || git_ix(&host, &repo, &["add", "-A"]).map(|_| ())).await
 }
 
 #[tauri::command]
 pub async fn git_unstage_all(repo: String, host: Option<String>) -> Result<(), String> {
-    crate::blocking::run(move || git(&host, &repo, &["reset"]).map(|_| ())).await
+    crate::blocking::run(move || git_ix(&host, &repo, &["reset"]).map(|_| ())).await
 }
 
 /// 丢弃单个文件的工作区改动(未跟踪文件则删除)。
@@ -246,7 +285,7 @@ pub async fn git_discard(
                 std::fs::remove_file(p).map_err(|e| e.to_string())
             }
         } else {
-            git(&host, &repo, &["checkout", "--", &path]).map(|_| ())
+            git_ix(&host, &repo, &["checkout", "--", &path]).map(|_| ())
         }
     })
     .await
