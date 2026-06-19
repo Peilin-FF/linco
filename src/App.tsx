@@ -153,13 +153,14 @@ export default function App(): JSX.Element {
 
   // 工作目录:远程用连接的远端目录,本地用配置的 cwd
   const cwd = (host ? activeConn?.cwd : config?.cwd) || undefined
+  const remoteDataReady = !host || connState === 'connected'
 
   // 后台预热三视图:连接/工作目录就绪后,空闲时悄悄把 文件/Git/预览 挂载好
   // (含各自首次数据拉取),用户真正点开时已热好=瞬现,不再卡那一下。
   // 切连接(host/cwd 变)时重置重热。
   useEffect(() => {
     setPrewarmed(false)
-    if (!cwd) return // 没选工作目录就别空跑
+    if (!cwd || !remoteDataReady) return // 没选工作目录/远端未 ready 就别空跑
     const ric =
       window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 600))
     const id = ric(() => setPrewarmed(true))
@@ -168,11 +169,11 @@ export default function App(): JSX.Element {
         window.cancelIdleCallback(id)
       }
     }
-  }, [host, cwd])
+  }, [host, cwd, remoteDataReady])
   // 启动文件监听:工作目录/连接就绪后,让 agent(远程)或本地扫描盯住工作目录,
   // 变更经 remote-fs-change 事件实时推给文件树/Git/预览(灵敏自动刷新)。
   useEffect(() => {
-    if (!cwd) {
+    if (!cwd || !remoteDataReady) {
       watchStop().catch(() => {})
       return
     }
@@ -180,7 +181,7 @@ export default function App(): JSX.Element {
     return () => {
       watchStop().catch(() => {})
     }
-  }, [host, cwd])
+  }, [host, cwd, remoteDataReady])
 
 
   // 对话会话自动启动 claude/codex
@@ -239,6 +240,17 @@ export default function App(): JSX.Element {
     }
   }
 
+  // 恢复上次远程连接 / 切换连接后,先把 SSH master 与 RPC agent 都预热到 ready。
+  // 文件/Git/watch 的数据请求只在 connState=connected 后挂载,避免首次点击承担冷启动。
+  useEffect(() => {
+    if (!host) {
+      setConnState('idle')
+      return
+    }
+    void tryConnect(host, activeConn?.identity || undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, activeConn?.identity, activeConn?.id])
+
   // 切到本地
   const selectLocal = (): void => {
     if (!config) return
@@ -251,9 +263,8 @@ export default function App(): JSX.Element {
   const selectConnection = (id: string): void => {
     if (!config) return
     console.log('[switch] → connection', id, 'at', performance.now().toFixed(0))
+    setConnState('connecting')
     handleConfigChange({ ...config, activeConnection: id })
-    const conn = config.connections.find((c) => c.id === id)
-    if (conn?.host) void tryConnect(conn.host, conn.identity || undefined)
   }
 
   // 从 ~/.ssh/config 主机一键连接:创建一个连接并激活
@@ -271,8 +282,8 @@ export default function App(): JSX.Element {
     const connections = exists
       ? config.connections
       : [...config.connections, conn]
+    setConnState('connecting')
     handleConfigChange({ ...config, connections, activeConnection: conn.id })
-    void tryConnect(h)
   }
 
   // 灵动岛:输入 ssh 指令 → 解析 → 写 ~/.ssh/config → 新增连接并激活。
@@ -293,9 +304,9 @@ export default function App(): JSX.Element {
       const connections = config.connections.some((c) => c.id === id)
         ? config.connections
         : [...config.connections, conn]
+      setConnState('connecting')
       handleConfigChange({ ...config, connections, activeConnection: id })
       sshConfigHosts().then(setSshHosts).catch(() => {}) // 刷新主机列表
-      void tryConnect(t.alias)
       return null
     } catch (e) {
       return String(e)
@@ -465,6 +476,12 @@ export default function App(): JSX.Element {
             </div>
           ))}
 
+          {!remoteDataReady && host && view !== 'chat' && view !== 'terminal' && (
+            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-canvas text-[13px] text-ink-faint shadow-card ring-1 ring-black/5">
+              正在连接远端…
+            </div>
+          )}
+
           {/* 终端视图:独立 shell,可多开 */}
           {view === 'terminal' && (
             <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
@@ -533,7 +550,7 @@ export default function App(): JSX.Element {
           )}
 
           {/* 预览:预热后或访问过即常驻挂载(iframe 状态保留),切回瞬时显示 */}
-          {(prewarmed || visited.has('preview')) && (
+          {remoteDataReady && (prewarmed || visited.has('preview')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'preview'
@@ -549,7 +566,7 @@ export default function App(): JSX.Element {
             </div>
           )}
           {/* 文件 / Git:预热后或访问过即常驻挂载,切回瞬时显示(不重挂载、不重拉) */}
-          {(prewarmed || visited.has('files')) && (
+          {remoteDataReady && (prewarmed || visited.has('files')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'files'
@@ -566,7 +583,7 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-          {(prewarmed || visited.has('git')) && (
+          {remoteDataReady && (prewarmed || visited.has('git')) && (
             <div
               className={`absolute inset-0 ${
                 view === 'git'
@@ -682,4 +699,3 @@ export default function App(): JSX.Element {
     </div>
   )
 }
-

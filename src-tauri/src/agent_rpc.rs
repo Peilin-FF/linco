@@ -131,6 +131,7 @@ fn host_handle_for(host: &str, lane: RpcLane) -> Handle {
         .clone()
 }
 
+#[cfg(test)]
 fn host_handle(host: &str) -> Handle {
     host_handle_for(host, RpcLane::Interactive)
 }
@@ -439,15 +440,15 @@ mod tests {
 
     #[test]
     fn rpc_ping_and_readdir() {
-        let mut s = local_agent();
-        let pong = rpc_on(&mut s, "ping", json!({}), Duration::from_secs(5)).unwrap();
+        let s = local_agent();
+        let pong = rpc_on(&s, "ping", json!({}), Duration::from_secs(5)).unwrap();
         assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
 
         let dir = std::env::temp_dir().join("linco_rpc_test");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("x.txt"), "hi").unwrap();
         let r = rpc_on(
-            &mut s,
+            &s,
             "readdir",
             json!({ "path": dir.to_string_lossy() }),
             Duration::from_secs(5),
@@ -462,36 +463,36 @@ mod tests {
 
     #[test]
     fn rpc_business_error_not_session_error() {
-        let mut s = local_agent();
+        let s = local_agent();
         // 读不存在的文件 → agent 返回 ok:false,rpc_on 返回 Err(业务错)
         let r = rpc_on(
-            &mut s,
+            &s,
             "read_file",
             json!({ "path": "/nonexistent/zzz.txt" }),
             Duration::from_secs(5),
         );
         assert!(r.is_err());
         // 会话仍可用:再发一次 ping 成功
-        let pong = rpc_on(&mut s, "ping", json!({}), Duration::from_secs(5)).unwrap();
+        let pong = rpc_on(&s, "ping", json!({}), Duration::from_secs(5)).unwrap();
         assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[test]
     fn rpc_bytes_roundtrip() {
-        let mut s = local_agent();
+        let s = local_agent();
         let dir = std::env::temp_dir().join("linco_rpc_bytes");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("b.bin");
         let raw = [0u8, 1, 255, 65, 66, 67];
         rpc_on(
-            &mut s,
+            &s,
             "write_bytes",
             json!({ "path": p.to_string_lossy(), "b64": B64.encode(raw) }),
             Duration::from_secs(5),
         )
         .unwrap();
         let r = rpc_on(
-            &mut s,
+            &s,
             "read_bytes",
             json!({ "path": p.to_string_lossy() }),
             Duration::from_secs(5),
@@ -579,7 +580,7 @@ mod tests {
             return;
         }
 
-        let mut s = local_agent();
+        let s = local_agent();
         let dir = std::env::temp_dir().join(format!(
             "linco_watch_no_poll_{}",
             SEQ.fetch_add(1, Ordering::Relaxed)
