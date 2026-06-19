@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "5";
+const AGENT_VERSION: &str = "6";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -586,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn watch_without_inotify_does_not_start_polling_walker() {
+    fn watch_without_inotify_falls_back_to_poll() {
         let has_inotify = Command::new("sh")
             .arg("-c")
             .arg("command -v inotifywait >/dev/null 2>&1")
@@ -594,12 +594,12 @@ mod tests {
             .map(|s| s.success())
             .unwrap_or(false);
         if has_inotify {
-            return;
+            return; // 装了 inotify 的机器走 inotify 路径,本测试只验证回退分支
         }
 
         let s = local_agent();
         let dir = std::env::temp_dir().join(format!(
-            "linco_watch_no_poll_{}",
+            "linco_watch_poll_{}",
             SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -610,10 +610,11 @@ mod tests {
             Duration::from_secs(5),
         )
         .unwrap();
+        // 无 inotifywait → 回退纯 Python mtime 轮询(mode=poll),而非放弃监听(none)。
+        // 这保证 agent 写出的产物(含 untracked / artifacts)也能被监控到。
+        assert_eq!(result.get("mode").and_then(|v| v.as_str()), Some("poll"));
         let _ = rpc_on(&s, "unwatch", json!({}), Duration::from_secs(5));
         let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(result.get("mode").and_then(|v| v.as_str()), Some("none"));
     }
 
     #[test]

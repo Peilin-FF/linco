@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "5"
+AGENT_VERSION = "6"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -248,6 +248,63 @@ def op_shell(a):
         raise ValueError("shell 超时")
 
 
+def op_ps(a):
+    # 列出 code agent(command_base,如 claude/codex)进程子树下的所有后代进程,
+    # 供「后台进程」面板把 agent 起的后台 shell/子进程从盲盒里暴露出来。
+    # 策略:全量 ps 快照 → 按命令名(+cwd 收窄)定位 agent 根进程 → 沿 ppid 向下
+    # BFS 收集后代(不含根本身)。本地远程同一套逻辑;Linux 用 /proc 读 cwd 收窄,
+    # 其它平台读不到则仅按命令名匹配(不致命)。
+    cmd_base = a.get("command_base") or ""
+    cwd = a.get("cwd") or ""
+    out = subprocess.run(
+        ["ps", "-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    ).stdout.decode("utf-8", "replace")
+    procs = []        # [{pid,ppid,etime,pcpu,pmem,stat,args}]
+    children = {}     # ppid -> [pid]
+    for line in out.splitlines():
+        parts = line.split(None, 6)   # 前 6 列定宽,args 收尾(含空格)
+        if len(parts) < 7:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        procs.append({"pid": pid, "ppid": ppid, "etime": parts[2],
+                      "pcpu": parts[3], "pmem": parts[4],
+                      "stat": parts[5], "args": parts[6]})
+        children.setdefault(ppid, []).append(pid)
+    by_pid = {p["pid"]: p for p in procs}
+
+    base = os.path.basename(cmd_base) if cmd_base else ""
+
+    def cwd_of(pid):
+        try:
+            return os.readlink("/proc/%d/cwd" % pid)
+        except OSError:
+            return None
+
+    # 找根:命令行含 agent 命令名;cwd 可读时进一步要求与会话 cwd 一致
+    roots = []
+    for p in procs:
+        if base and base in p["args"]:
+            c = cwd_of(p["pid"])
+            if not cwd or c is None or c == cwd:
+                roots.append(p["pid"])
+
+    # 从根 BFS 收后代(排除根自己——根=agent 本身,要看的是它「起的」进程)
+    seen = set(roots)
+    result = []
+    stack = list(roots)
+    while stack:
+        for ch in children.get(stack.pop(), []):
+            if ch not in seen:
+                seen.add(ch)
+                result.append(by_pid[ch])
+                stack.append(ch)
+    return {"procs": result}
+
+
 # ---------- 文件监听(灵敏:agent 改文件 → 主动推 fileChange)----------
 # 优先 inotifywait(事件级,最灵敏);否则纯 Python 轮询 mtime(~0.5s)。
 # 变更去抖后批量推 {"event":"fileChange","paths":[...]}(无 id,主动)。
@@ -302,8 +359,14 @@ def _watch_inotify(root, stop):
         _emit_changes(batch)
 
 
+# 轮询监听的文件数上限:超过则放弃轮询(巨型目录全扫会拖垮交互)。
+# 9k~1w 量级的常规仓库远在阈值内;真遇到超大目录就降级为"不自动刷新"。
+MAX_WATCH_FILES = 50000
+
+
 def _scan_mtimes(root):
-    # 返回 {path: mtime},跳过噪声目录,限制规模
+    # 返回 (out, truncated):out = {path: mtime}(跳过噪声目录);
+    # 文件数超 MAX_WATCH_FILES 时提前返回,truncated=True 通知调用方放弃轮询。
     out = {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in WATCH_SKIP]
@@ -313,17 +376,28 @@ def _scan_mtimes(root):
                 out[p] = os.stat(p).st_mtime
             except OSError:
                 pass
-        if len(out) > 20000:
-            return out
-    return out
+        if len(out) > MAX_WATCH_FILES:
+            return out, True
+    return out, False
+
+
+WATCH_POLL_INTERVAL = 1.0  # 轮询间隔(秒)。近万文件每秒全扫一次,CPU 可控;产物/代码刷新 1s 够用
 
 
 def _watch_poll(root, stop):
-    prev = _scan_mtimes(root)
+    # 纯 Python mtime 轮询(无 inotifywait 时的兜底):周期性全量扫 root(只跳 WATCH_SKIP
+    # 噪声目录),对比上一轮 mtime,变更/删除批量推 fileChange。语义与 inotify 路径一致——
+    # 关键:全量覆盖,所以 agent 写到 artifacts/ 等 untracked / .gitignore 产物也照样被监控到。
+    prev, truncated = _scan_mtimes(root)
+    if truncated:
+        return  # 目录过大,放弃轮询(op_watch 已据此把 mode 标为 none)
     while not stop.is_set():
-        if stop.wait(0.5):
+        if stop.wait(WATCH_POLL_INTERVAL):
             break
-        cur = _scan_mtimes(root)
+        cur, too_big = _scan_mtimes(root)
+        if too_big:
+            # 运行中目录膨胀到超阈值(如训练写出海量文件)→ 停止轮询,避免持续卡顿
+            return
         changed = []
         for p, m in cur.items():
             if prev.get(p) != m:
@@ -346,14 +420,21 @@ def op_watch(a, rid):
             _watch_stop.set()
         _watch_stop = None
         _watch_thread = None
-        # 没有 inotifywait 时不要做全项目轮询。大仓库/远端盘会把首次展开目录拖到
-        # 数秒甚至十几秒;交互优先,自动刷新可以降级为手动/操作后局部刷新。
+        # 优先 inotifywait(事件级、最灵敏);远端没装时回退到纯 Python mtime 轮询。
+        # 轮询全量覆盖工作目录(只跳 WATCH_SKIP 噪声),所以 agent 写到 artifacts/ 等
+        # untracked / .gitignore 产物也照样被监控到 —— 这正是文件树标记 + diff 自动刷新的来源。
+        # 超大目录由 _watch_poll 内部的 MAX_WATCH_FILES 兜底:直接退出、mode 仍报 poll,
+        # 前端不会误以为有实时刷新(已知局限,常规仓库远在阈值内)。
+        _watch_stop = threading.Event()
+        stop = _watch_stop
         if _has_inotifywait():
-            _watch_stop = threading.Event()
-            stop = _watch_stop
-            _watch_thread = threading.Thread(target=_watch_inotify, args=(root, stop), daemon=True)
-            _watch_thread.start()
+            target = _watch_inotify
             mode = "inotify"
+        else:
+            target = _watch_poll
+            mode = "poll"
+        _watch_thread = threading.Thread(target=target, args=(root, stop), daemon=True)
+        _watch_thread.start()
     _send({"id": rid, "ok": True, "result": {"watching": root, "mode": mode}})
 
 
@@ -374,7 +455,7 @@ OPS = {
     "rename": op_rename, "delete": op_delete,
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
-    "git": op_git, "shell": op_shell,
+    "git": op_git, "shell": op_shell, "ps": op_ps,
 }
 
 

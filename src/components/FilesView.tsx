@@ -145,6 +145,15 @@ export default function FilesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, host])
 
+  // 发消息(新一轮)时主动重拉 git 标记:贴合"按对话回合看改动"的心智,
+  // 不必干等文件监听轮询。由 App 在 shadowBeginTurn 完成后派发。
+  useEffect(() => {
+    const onTurn = (): void => void loadGit()
+    window.addEventListener('linco:turn-refresh', onTurn)
+    return () => window.removeEventListener('linco:turn-refresh', onTurn)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, host])
+
   // 监听文件变更(远程 agent / 本地扫描推送)→ debounce 后刷新受影响目录,
   // 实现"agent 改文件,文件树自动刷新"(灵敏)。
   //

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linco · 项目解读</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"html","html":"<div class=\"eyebrow\" style=\"font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--g500)\">Tauri · React + TS · Rust · ~13k LOC · MIT</div><h1 style=\"font-family:var(--serif);font-weight:500;letter-spacing:-.01em;color:var(--slate);font-size:40px;margin:.2em 0 .3em\">Linco 项目解读</h1><p style=\"font-size:18px;max-width:760px\">一款<b>直接驱动 Claude Code / Codex 等 CLI agent</b> 的桌面应用。它本身<b>不实现任何 agent</b>——而是把各家命令行 AI 包进一个有对话、终端、文件、Git、HTML 实时预览的原生工作台,并能让这些 agent <b>无缝跑在远程集群</b>上。</p><p style=\"display:flex;flex-wrap:wrap;gap:8px;margin-top:14px\"><span class=\"tag\">Tauri 2</span><span class=\"tag\">React 18 + TS</span><span class=\"tag\">Rust 后端</span><span class=\"tag\">PTY 终端</span><span class=\"tag\">SSH Remote</span><span class=\"tag\">stream-json</span></p>"},
+
+  {"type":"html","html":"<div class=\"callout\"><b>一句话抓住本质:Linco 是 agent 的“外壳 / IDE”,不是 agent 本身。</b><br>它开一个<b>真正的伪终端(PTY)</b>跑你的 shell,你照常在终端里装 / 跑各家 CLI(<code>claude</code> / <code>codex</code> / …)。对话框里打的字会被重定向写进 PTY——等价于你亲手敲字,CLI 输出实时渲染回来。因此 Linco <b>对任何厂家 CLI 都通用</b>,不绑模型、不拦截、不二次封装,CLI 的全部能力(读写文件、跑命令、用工具、读 <code>CLAUDE.md</code> / MCP)原样保留。</div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">两条并存的驱动路径</h2><div class=\"flex\"><div class=\"card\"><div class=\"tag\">路径 A · 终端</div><h3 style=\"margin:.4em 0\">PTY 借壳</h3><p><code>terminal.rs</code> 用 <code>portable-pty</code> 开真 PTY 跑 shell,xterm.js 渲染。对话框输入可重定向写入 = 亲手敲字。<b>通用、无损</b>,但是 TUI 形态。</p></div><div class=\"card\"><div class=\"tag\">路径 B · 对话</div><h3 style=\"margin:.4em 0\">stream-json 气泡</h3><p><code>agent.rs</code> 用 <code>claude -p --output-format stream-json</code> 非交互模式,按行吐结构化 JSON,前端 <code>StreamParser</code> 解析成<b>丝滑流式气泡</b>。多轮靠 <code>--resume</code>。</p></div></div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">一次对话怎么跑</h2><div class=\"flex\" style=\"align-items:stretch\"><div class=\"card\" style=\"flex:1\"><div class=\"tag\">01 · 前端</div><p style=\"margin:.5em 0 0\"><code>agentSend()</code> 经 Tauri invoke 把 prompt / cwd / env / sessionId 传给 Rust。</p></div><div class=\"card\" style=\"flex:1\"><div class=\"tag\">02 · Rust</div><p style=\"margin:.5em 0 0\"><code>agent.rs</code> 用登录 shell 拉起 <code>claude -p</code>,管道接 stdout / stderr。</p></div><div class=\"card\" style=\"flex:1\"><div class=\"tag\">03 · 线程</div><p style=\"margin:.5em 0 0\">读取线程按行把原始 JSON 作为 <code>agent-event</code> 事件 emit 回前端。</p></div><div class=\"card\" style=\"flex:1\"><div class=\"tag\">04 · 前端</div><p style=\"margin:.5em 0 0\"><code>StreamParser</code> 累积 text_delta / tool_use,实时刷新气泡。</p></div></div><div class=\"note\" style=\"margin-top:14px\"><b>多轮上下文</b>:每个连接(本地 / 各集群)常驻一个会话,续接靠 <code>--resume &lt;session_id&gt;</code>;session_id 从 <code>system/init</code> 或 <code>result</code> 事件捕获。取消则直接 <code>kill</code> 子进程。</div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">架构分层</h2><p>四层结构,且<b>每个前端 <code>lib/*.ts</code> 都精确对应一个 Rust 模块</b>。</p><div class=\"card\"><div class=\"tag\">① 前端 React · src/components</div><p style=\"margin:.4em 0 0\">5 个主视图常驻挂载(首访后不卸载、切回瞬现);后台空闲预热 文件 / Git / 预览 三视图。<br><code>App.tsx</code> · <code>ChatView</code> · <code>TerminalView</code> · <code>ScreenView</code> · <code>FilesView</code> · <code>GitView</code> · <code>ConnectionPicker</code></p></div><div class=\"card\"><div class=\"tag\">② 前端 lib · src/lib</div><p style=\"margin:.4em 0 0\">薄封装 <code>invoke()</code> + 事件监听,一文件一能力。<br><code>agent.ts</code>(StreamParser) · <code>terminal</code> · <code>fs</code> · <code>git</code> · <code>search</code> · <code>connection</code> · <code>preview</code> · <code>watch</code> · <code>shadow</code></p></div><div class=\"card\"><div class=\"tag\">③ Rust 命令层 · src-tauri/src</div><p style=\"margin:.4em 0 0\">~60 个 <code>#[tauri::command]</code> 在 <code>lib.rs</code> 注册,本地直接做、远程则转发。<br><code>agent.rs</code> · <code>terminal.rs</code>(PTY) · <code>preview.rs</code>(本机 HTTP) · <code>fs</code> · <code>git</code> · <code>search</code> · <code>watch</code> · <code>shadow</code> · <code>config</code></p></div><div class=\"card\"><div class=\"tag\">④ 远程层 · Remote</div><p style=\"margin:.4em 0 0\">借鉴 VS Code Remote-SSH:一次认证、连接复用、<b>远端零安装</b>。<br><code>remote.rs</code>(SSH ControlMaster + 常驻 shell) · <code>agent_rpc.rs</code>(JSON-RPC over SSH) · <code>linco_agent.py</code>(远端常驻助手,纯标准库)</p></div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">五大视图 + 远程</h2><div class=\"flex\"><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">💬 对话</h3><p>stream-json 流式气泡,文本增量 + 工具调用卡片。每连接一个常驻多轮会话。</p></div><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">⌨️ 终端</h3><p>真 PTY 跑 shell,xterm 渲染。对话框输入可重定向写入。</p></div><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">👁️ 预览</h3><p>本机 127.0.0.1 HTTP 服务器伺服工作目录 HTML,iframe 加载;轮询 mtime 热刷新。</p></div><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">🗂️ 文件</h3><p>文件树 + CodeMirror 编辑器 + 表格查看(xlsx),右键可“在预览中打开”。</p></div><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">🌿 Git</h3><p>status / diff / stage / commit / push / 分支 / log / stash 全套,远程仓库一样可用。</p></div><div class=\"card\" style=\"flex:1 1 240px\"><h3 style=\"margin:.2em 0\">🌐 远程</h3><p>读 <code>~/.ssh/config</code> 别名,密码 / 2FA 在 PTY 交互一次,之后全部复用 socket。</p></div></div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">远程为何不卡</h2><p>远程是 Linco 工程上最用心的部分,层层兜底,<b>“永不崩”是设计目标</b>。下表可直接编辑补充。</p>"},
+
+  {"type":"table","head":["机制","做法","解决什么"],"rows":[
+    ["连接复用","SSH ControlMaster=auto + ControlPersist=3600","一次认证,后续命令复用同一 socket,瞬时"],
+    ["保活","ServerAliveInterval=15 ×8 + TCP keepalive","扛网络抖动 / 路由器掐空闲连接"],
+    ["常驻 shell","一条 ssh 里跑常驻 /bin/sh,stdin/stdout 复用","每次开销降到接近一次网络往返(~75ms→更低)"],
+    ["RPC 升级","远端常驻 linco_agent.py,JSON-RPC,支持主动推送","文件变更等事件可被 agent 主动推回前端"],
+    ["二进制安全","读写字节走 base64,信道只承载 ASCII + nonce 标记","文件内容绝不与协议标记冲突"],
+    ["层层回退","RPC 失败→常驻 shell→一次性 ssh host cmd","任何环节挂掉都有下一级兜底"],
+    ["零安装","linco_agent.py 仅依赖标准库,经管道注入,空闲 30min 自退","不在集群留垃圾,Python 3.6+ 即可"]
+  ]},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">看一眼关键代码</h2><p style=\"margin-bottom:6px\"><b>agent.rs</b> —— 用 stream-json 驱动对话</p><div class=\"code\"><span class=\"cm\">// 通过登录 shell 启动,确保 PATH 能找到用户装的 CLI(homebrew/npm)</span><br><span class=\"kw\">let</span> args = vec![<br>&nbsp;&nbsp;base,&nbsp;&nbsp;<span class=\"cm\">// \"claude\" 或 \"codex\" 等兼容 CLI</span><br>&nbsp;&nbsp;<span class=\"str\">\"-p\"</span>, shell_quote(&amp;prompt),<br>&nbsp;&nbsp;<span class=\"str\">\"--output-format\"</span>, <span class=\"str\">\"stream-json\"</span>,<br>&nbsp;&nbsp;<span class=\"str\">\"--verbose\"</span>, <span class=\"str\">\"--include-partial-messages\"</span>,<br>];<br><span class=\"kw\">if let</span> Some(sid) = session_id { args.push(<span class=\"str\">\"--resume\"</span>); … } <span class=\"cm\">// 多轮续接</span></div><p style=\"margin:16px 0 6px\"><b>agent.ts</b> —— 前端把 JSON 行解析成气泡</p><div class=\"code\"><span class=\"kw\">switch</span> (ev.type) {<br>&nbsp;&nbsp;<span class=\"kw\">case</span> <span class=\"str\">'stream_event'</span>: <span class=\"cm\">// 文本增量 / 工具调用开始 → 实时刷新气泡</span><br>&nbsp;&nbsp;<span class=\"kw\">case</span> <span class=\"str\">'assistant'</span>: <span class=\"cm\">// 完整消息:补全 tool_use 的 input</span><br>&nbsp;&nbsp;<span class=\"kw\">case</span> <span class=\"str\">'result'</span>: <span class=\"cm\">// 兜底文本 + 捕获 session_id + 收尾</span><br>&nbsp;&nbsp;<span class=\"kw\">case</span> <span class=\"str\">'linco_stderr'</span>: <span class=\"cm\">// 后端把 stderr 也包成事件,前端可显示</span><br>}</div><div class=\"note\" style=\"margin-top:12px\"><b>测试可证</b>:<code>agent.rs</code> 有单测覆盖 <code>shell_quote</code>(单引号转义)与 <code>json_string</code>(合法 JSON 字面量)——把任意用户输入安全塞进登录 shell 命令行,是这套“借壳”设计的安全底座。</div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">HTML-VibeCoding 插件</h2><div class=\"callout olive\"><b>预览能力背后是随项目 vendored 的 Claude Code 插件</b>(<code>vendor/HTML-VibeCoding/</code>)。它让 claude 默认把“实质性产物”产出为<b>自包含 HTML</b> 写到当前项目的 <code>./artifacts/</code>:<br>· <b>SessionStart 钩子</b>注入“默认产出 HTML”工作流指令;<br>· <b>html-kit 技能</b>提供统一设计套件 + notebook 模板(引擎与内容分离);<br>· 约定 <b>claude 在哪运行,插件就装在哪</b>(跑远程则 rsync 到远端 <code>~/.claude/plugins/</code>)。<br>Linco 的预览服务器复刻了插件的 <code>/__assets/</code> 引擎资源与 <code>/__save</code> 保存接口,因此<b>不依赖</b>插件自带的 Python 预览服务器。</div><div class=\"note\">README 那句话很能说明这个项目的气质:<b>“btw,其实我已经在用它来更新它自己了 🤫”</b>。而<b>这份解读本身</b>就是按它的约定写成 notebook 薄壳——只填 <code>seed</code> JSON,引擎走 <code>/__assets/</code>,可在 Linco 预览页双击编辑、Ctrl+S 存回磁盘。</div>"},
+
+  {"type":"html","html":"<h2 style=\"font-family:var(--serif);font-weight:500;color:var(--slate)\">目录速查</h2>"},
+
+  {"type":"table","head":["路径","作用"],"rows":[
+    ["src/App.tsx","应用外壳:视图路由、连接管理、会话生命周期(701 行)"],
+    ["src/components/","各视图组件:Chat / Terminal / Screen / Files / Git / Settings"],
+    ["src/lib/","Rust 命令的前端绑定,一文件一能力"],
+    ["src-tauri/src/lib.rs","Tauri 入口:注册全部 ~60 个 command"],
+    ["src-tauri/src/agent*.rs","本地进程驱动 + 远程 RPC 客户端"],
+    ["src-tauri/src/remote.rs","SSH 复用、常驻 shell、二进制安全信道(1297 行,最大)"],
+    ["src-tauri/src/preview.rs","本机 HTTP 预览服务器 + 热刷新(996 行)"],
+    ["src-tauri/src/agent/linco_agent.py","注入到远端的常驻助手进程(纯标准库)"],
+    ["vendor/HTML-VibeCoding/","vendored 的 Claude Code 插件:HTML 产出工作流 + 渲染引擎资源"]
+  ]}
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

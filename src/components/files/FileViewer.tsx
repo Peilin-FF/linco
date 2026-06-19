@@ -141,9 +141,14 @@ function TextOrDiff({
       if ((e.host || undefined) !== (host || undefined)) return
       if (e.paths.some((p) => p === path)) load()
     }).then((f) => (un = f))
+    // 发消息(新一轮)时主动重拉本轮 diff:基线已被 shadowBeginTurn 重置,
+    // 立即反映上一轮对该文件的增删,无需等远端轮询。
+    const onTurn = (): void => load()
+    window.addEventListener('linco:turn-refresh', onTurn)
     return () => {
       alive = false
       un?.()
+      window.removeEventListener('linco:turn-refresh', onTurn)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, host, repo])

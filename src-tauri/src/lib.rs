@@ -13,6 +13,7 @@ mod config;
 mod fs;
 mod git;
 mod preview;
+mod procs;
 mod remote;
 mod search;
 mod shadow;
@@ -97,6 +98,7 @@ pub fn run() {
             remote::parse_ssh_command,
             remote::ssh_config_add,
             remote::remote_home,
+            procs::agent_processes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linco");

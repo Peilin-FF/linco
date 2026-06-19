@@ -7,6 +7,7 @@ import {
   GitBranch,
   Settings as SettingsIcon,
   Plus,
+  Activity,
   X
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
@@ -14,6 +15,7 @@ import TerminalView, { type TerminalHandle } from './components/TerminalView'
 import ChatInput from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'
+import AgentShellsView from './components/AgentShellsView'
 import Settings from './components/Settings'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
@@ -38,6 +40,9 @@ import { watchStart, watchStop } from '@/lib/watch'
 import { shadowBeginTurn } from '@/lib/shadow'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
+
+// 终端视图里「后台进程」固定标签的 activeShell 哨兵值(与各 shell id 区分)。
+const PROCS_TAB = '__procs__'
 
 const VIEWS: { id: ViewId; label: string; icon: typeof Eye }[] = [
   { id: 'chat', label: '对话', icon: MessagesSquare },
@@ -389,7 +394,13 @@ export default function App(): JSX.Element {
   // 底部对话框:始终与「对话」会话通信。发送/输入不切换当前视图。
   const handleSend = (): void => {
     // 用户发消息 = 新一轮:记 git 基线,之后的改动即"本轮 agent 改动"(Cursor 式 diff)。
-    if (cwd) shadowBeginTurn(cwd, host).catch(() => {})
+    // 基线建好后派发 turn-refresh:让文件树重拉 git 标记、已打开文件重拉 diff,
+    // 这样即便远端轮询有 ~1s 延迟,"发消息"这一刻也立即反映上一轮已落盘的改动。
+    if (cwd) {
+      shadowBeginTurn(cwd, host)
+        .then(() => window.dispatchEvent(new CustomEvent('linco:turn-refresh')))
+        .catch(() => {})
+    }
     // 实际写入由 onForward 的兜底重发完成(Ctrl-U + 文本 + 回车)
   }
   const handleForward = (data: string): void => {
@@ -487,6 +498,19 @@ export default function App(): JSX.Element {
             <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
               {/* 终端标签条 */}
               <div className="flex shrink-0 items-center gap-1 border-b border-black/8 px-2 py-1.5">
+                {/* 固定「后台进程」标签:监测 agent 在后台起的 shell/子进程(不可关闭) */}
+                <button
+                  onClick={() => setActiveShell(PROCS_TAB)}
+                  className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
+                    activeShell === PROCS_TAB || activeShell === ''
+                      ? 'bg-sidebar text-ink'
+                      : 'text-ink-muted hover:bg-black/5'
+                  }`}
+                  title="agent 后台进程"
+                >
+                  <Activity size={13} />
+                  后台进程
+                </button>
                 {shells.map((s) => (
                   <div
                     key={s.id}
@@ -514,37 +538,43 @@ export default function App(): JSX.Element {
                   新建终端
                 </button>
               </div>
-              {/* 终端内容:每个 shell 常驻挂载,用显隐切换 */}
+              {/* 终端内容:后台进程面板 + 各 shell 常驻挂载,用显隐切换 */}
               <div className="relative min-h-0 flex-1">
-                {shells.length === 0 ? (
-                  <div className="flex h-full items-center justify-center">
-                    <button
-                      onClick={() => newShell()}
-                      className="flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-2 text-[13px] text-ink hover:bg-black/5"
-                    >
-                      <Plus size={15} />
-                      新建终端
-                    </button>
+                {/* 后台进程面板(常驻挂载;仅可见时轮询) */}
+                <div
+                  className={`absolute inset-0 ${
+                    activeShell === PROCS_TAB || activeShell === ''
+                      ? 'z-10 opacity-100'
+                      : 'pointer-events-none opacity-0'
+                  }`}
+                >
+                  <AgentShellsView
+                    host={host}
+                    cwd={cwd}
+                    commandBase={defaultAgent?.command}
+                    active={
+                      view === 'terminal' &&
+                      (activeShell === PROCS_TAB || activeShell === '')
+                    }
+                  />
+                </div>
+                {shells.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`absolute inset-0 ${
+                      s.id === activeShell
+                        ? 'z-10 opacity-100'
+                        : 'pointer-events-none opacity-0'
+                    }`}
+                  >
+                    <TerminalView
+                      id={s.id}
+                      cwd={s.cwd}
+                      host={s.host}
+                      identity={s.identity}
+                    />
                   </div>
-                ) : (
-                  shells.map((s) => (
-                    <div
-                      key={s.id}
-                      className={`absolute inset-0 ${
-                        s.id === activeShell
-                          ? 'z-10 opacity-100'
-                          : 'pointer-events-none opacity-0'
-                      }`}
-                    >
-                      <TerminalView
-                        id={s.id}
-                        cwd={s.cwd}
-                        host={s.host}
-                        identity={s.identity}
-                      />
-                    </div>
-                  ))
-                )}
+                ))}
               </div>
             </div>
           )}
