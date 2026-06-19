@@ -15,7 +15,7 @@ import TerminalView, { type TerminalHandle } from './components/TerminalView'
 import ChatInput from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'
-import AgentShellsView from './components/AgentShellsView'
+import AgentTaskOutput from './components/AgentTaskOutput'
 import Settings from './components/Settings'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
@@ -38,11 +38,26 @@ import {
 } from '@/lib/connection'
 import { watchStart, watchStop } from '@/lib/watch'
 import { shadowBeginTurn } from '@/lib/shadow'
+import { agentTasks, type AgentTask } from '@/lib/procs'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
 
-// 终端视图里「后台进程」固定标签的 activeShell 哨兵值(与各 shell id 区分)。
-const PROCS_TAB = '__procs__'
+// agent 后台任务 tab 的短标题:从命令行里挑一个有意义的词(脚本名/可执行名)。
+function taskLabel(args: string): string {
+  const toks = args.split(/\s+/).filter(Boolean)
+  // 找第一个像脚本/程序的 token(.py/.sh 结尾,或非选项的可执行名)
+  for (const t of toks) {
+    const base = t.split('/').pop() || t
+    if (/\.(py|sh|js|ts)$/.test(base)) return base
+  }
+  // 退而求其次:第一个非解释器、非选项的词
+  const skip = new Set(['python', 'python3', 'node', 'bash', 'sh', 'nohup', 'env'])
+  for (const t of toks) {
+    const base = t.split('/').pop() || t
+    if (!t.startsWith('-') && !skip.has(base)) return base.slice(0, 18)
+  }
+  return (toks[0]?.split('/').pop() || 'task').slice(0, 18)
+}
 
 const VIEWS: { id: ViewId; label: string; icon: typeof Eye }[] = [
   { id: 'chat', label: '对话', icon: MessagesSquare },
@@ -120,6 +135,8 @@ export default function App(): JSX.Element {
   // 独立终端列表(可多开)
   const [shells, setShells] = useState<Shell[]>([])
   const [activeShell, setActiveShell] = useState<string>('')
+  // agent 起的后台任务(输出落盘可实时看):每个 → 终端区一个 tab,自动出现/消失。
+  const [tasks, setTasks] = useState<AgentTask[]>([])
 
   // 启动时加载本地配置 + 读取 ssh config 主机
   useEffect(() => {
@@ -187,6 +204,50 @@ export default function App(): JSX.Element {
       watchStop().catch(() => {})
     }
   }, [host, cwd, remoteDataReady])
+
+  // 轮询 agent 起的后台任务(输出落盘的):每 3s 拉一次,终端区据此自动增删 tab。
+  // 仅当连接就绪 + 有 agent 命令时跑(没 agent 无从定位根进程)。轻量:一条 RPC。
+  //
+  // 抗抖动(关键):远程要走 SSH→agent→ps 树走→逐个解析 fd,任何一次 RPC 超时/
+  // 某轮 lsof 没返回都可能让本次结果偶发为空。若直接 setTasks(空) 会把所有 tab 和
+  // 正在看的输出**瞬间清掉**(用户看到的"点一下就没了")。对策:任务"黏住"——
+  // 记每个 pid 最后一次出现的时刻,只有**连续消失超过宽限期(9s)**才真正移除;
+  // 单次空结果/失败一律保留上次列表。
+  const taskSeenRef = useRef<Map<number, { task: AgentTask; at: number }>>(new Map())
+  useEffect(() => {
+    if (!remoteDataReady || !defaultAgent?.command) {
+      taskSeenRef.current.clear()
+      setTasks([])
+      return
+    }
+    let stop = false
+    const GRACE_MS = 9000
+    const merge = (list: AgentTask[]): void => {
+      const now = Date.now()
+      const seen = taskSeenRef.current
+      for (const t of list) seen.set(t.pid, { task: t, at: now })
+      // 超过宽限期仍未再出现的才删
+      for (const [pid, v] of seen) {
+        if (now - v.at > GRACE_MS) seen.delete(pid)
+      }
+      // 按 pid 稳定排序,保持 tab 顺序不乱跳
+      const merged = [...seen.values()].map((v) => v.task).sort((a, b) => a.pid - b.pid)
+      if (!stop) setTasks(merged)
+    }
+    const pull = (): void => {
+      agentTasks(host, cwd, defaultAgent?.command)
+        .then((list) => merge(list))
+        .catch(() => {
+          /* 失败:保留上次列表,不清空(下次再试) */
+        })
+    }
+    pull()
+    const t = window.setInterval(pull, 3000)
+    return () => {
+      stop = true
+      window.clearInterval(t)
+    }
+  }, [host, cwd, remoteDataReady, defaultAgent?.command])
 
 
   // 对话会话自动启动 claude/codex
@@ -434,6 +495,12 @@ export default function App(): JSX.Element {
           >
             <Icon size={15} />
             <span>{label}</span>
+            {/* 终端 tab:有 agent 后台任务在跑时显示绿点计数 */}
+            {id === 'terminal' && tasks.length > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-semibold text-white">
+                {tasks.length}
+              </span>
+            )}
           </button>
         ))}
         <div className="flex-1" />
@@ -493,28 +560,31 @@ export default function App(): JSX.Element {
             </div>
           )}
 
-          {/* 终端视图:独立 shell,可多开 */}
+          {/* 终端视图:agent 后台任务(自动 tab)+ 用户独立 shell(可多开) */}
           {view === 'terminal' && (
             <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
               {/* 终端标签条 */}
-              <div className="flex shrink-0 items-center gap-1 border-b border-black/8 px-2 py-1.5">
-                {/* 固定「后台进程」标签:监测 agent 在后台起的 shell/子进程(不可关闭) */}
-                <button
-                  onClick={() => setActiveShell(PROCS_TAB)}
-                  className={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
-                    activeShell === PROCS_TAB || activeShell === ''
-                      ? 'bg-sidebar text-ink'
-                      : 'text-ink-muted hover:bg-black/5'
-                  }`}
-                  title="agent 后台进程"
-                >
-                  <Activity size={13} />
-                  后台进程
-                </button>
+              <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-black/8 px-2 py-1.5">
+                {/* agent 后台任务 tab(自动出现/消失,不可手动关——进程结束即移除) */}
+                {tasks.map((t) => (
+                  <button
+                    key={`task:${t.pid}`}
+                    onClick={() => setActiveShell(`task:${t.pid}`)}
+                    className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
+                      activeShell === `task:${t.pid}`
+                        ? 'bg-sidebar text-ink'
+                        : 'text-ink-muted hover:bg-black/5'
+                    }`}
+                    title={t.args}
+                  >
+                    <Activity size={12} className="text-emerald-500" />
+                    {taskLabel(t.args)}
+                  </button>
+                ))}
                 {shells.map((s) => (
                   <div
                     key={s.id}
-                    className={`group flex items-center gap-1 rounded-lg pl-2.5 pr-1 py-1 text-[12px] ${
+                    className={`group flex shrink-0 items-center gap-1 rounded-lg pl-2.5 pr-1 py-1 text-[12px] ${
                       s.id === activeShell
                         ? 'bg-sidebar text-ink'
                         : 'text-ink-muted hover:bg-black/5'
@@ -531,50 +601,72 @@ export default function App(): JSX.Element {
                 ))}
                 <button
                   onClick={() => newShell()}
-                  className="flex items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5"
+                  className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5"
                   title="新建终端"
                 >
                   <Plus size={13} />
                   新建终端
                 </button>
               </div>
-              {/* 终端内容:后台进程面板 + 各 shell 常驻挂载,用显隐切换 */}
+              {/* 终端内容 */}
               <div className="relative min-h-0 flex-1">
-                {/* 后台进程面板(常驻挂载;仅可见时轮询) */}
-                <div
-                  className={`absolute inset-0 ${
-                    activeShell === PROCS_TAB || activeShell === ''
-                      ? 'z-10 opacity-100'
-                      : 'pointer-events-none opacity-0'
-                  }`}
-                >
-                  <AgentShellsView
-                    host={host}
-                    cwd={cwd}
-                    commandBase={defaultAgent?.command}
-                    active={
-                      view === 'terminal' &&
-                      (activeShell === PROCS_TAB || activeShell === '')
-                    }
-                  />
-                </div>
-                {shells.map((s) => (
-                  <div
-                    key={s.id}
-                    className={`absolute inset-0 ${
-                      s.id === activeShell
-                        ? 'z-10 opacity-100'
-                        : 'pointer-events-none opacity-0'
-                    }`}
-                  >
-                    <TerminalView
-                      id={s.id}
-                      cwd={s.cwd}
-                      host={s.host}
-                      identity={s.identity}
-                    />
+                {tasks.length === 0 && shells.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-ink-faint">
+                    <span>agent 起的后台任务会在这里自动出现</span>
+                    <span className="text-[11px]">
+                      (训练等长任务的实时输出 · 前台命令不占 tab)
+                    </span>
+                    <button
+                      onClick={() => newShell()}
+                      className="mt-1 flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-2 text-[13px] text-ink hover:bg-black/5"
+                    >
+                      <Plus size={15} />
+                      新建终端
+                    </button>
                   </div>
-                ))}
+                ) : (
+                  <>
+                    {/* agent 任务输出面板(每个 task 一个,常驻挂载) */}
+                    {tasks.map((t) => {
+                      const id = `task:${t.pid}`
+                      const selected =
+                        activeShell === id ||
+                        // 没选任何 tab 时默认显示第一个任务
+                        (activeShell === '' && tasks[0]?.pid === t.pid)
+                      return (
+                        <div
+                          key={id}
+                          className={`absolute inset-0 ${
+                            selected ? 'z-10 opacity-100' : 'pointer-events-none opacity-0'
+                          }`}
+                        >
+                          <AgentTaskOutput
+                            file={t.file}
+                            host={host}
+                            active={view === 'terminal' && selected}
+                          />
+                        </div>
+                      )
+                    })}
+                    {shells.map((s) => (
+                      <div
+                        key={s.id}
+                        className={`absolute inset-0 ${
+                          s.id === activeShell
+                            ? 'z-10 opacity-100'
+                            : 'pointer-events-none opacity-0'
+                        }`}
+                      >
+                        <TerminalView
+                          id={s.id}
+                          cwd={s.cwd}
+                          host={s.host}
+                          identity={s.identity}
+                        />
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             </div>
           )}

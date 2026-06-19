@@ -15,7 +15,7 @@ import {
   type DirEntry
 } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
-import { gitStatus } from '@/lib/git'
+import { shadowChanged } from '@/lib/shadow'
 
 interface FilesViewProps {
   /** 工作目录(资源管理器根) */
@@ -111,27 +111,19 @@ export default function FilesView({
     setRefreshKey((k) => k + 1)
   }
 
-  // 拉取 Git 逐文件状态,建 绝对路径→状态字符 的 map(供文件树显标)。
+  // 拉取「本轮 agent 改动」逐文件状态,建 绝对路径→状态字符 的 map(供文件树显标)。
+  // 数据源是 shadow(本轮基线 diff),不是 git 工作区状态:没发过消息 = 空 map = 全树无标记;
+  // 发消息后只标这一轮 agent 改过的文件(M/A/D)。git 工作区的未提交改动归 Git 页面管。
   const loadGit = async (): Promise<void> => {
     if (!root) return
     try {
-      const s = await gitStatus(root, host)
-      if (!s.isRepo) {
-        setGitMap(new Map())
-        return
-      }
+      const changed = await shadowChanged(root, host)
       const m = new Map<string, string>()
       const base = root.replace(/\/+$/, '')
-      for (const f of s.files) {
-        // 状态字符:未跟踪=? 删除=D 新增=A 其余=M
-        const ch = f.untracked
-          ? '?'
-          : f.index === 'A' || f.work === 'A'
-            ? 'A'
-            : f.index === 'D' || f.work === 'D'
-              ? 'D'
-              : 'M'
-        m.set(`${base}/${f.path}`, ch)
+      for (const [rel, ch] of Object.entries(changed)) {
+        // shadowChanged 已返回绝对路径(repo/rel);兜底:相对路径补全为绝对
+        const abs = rel.startsWith('/') ? rel : `${base}/${rel}`
+        m.set(abs, ch)
       }
       setGitMap(m)
     } catch {

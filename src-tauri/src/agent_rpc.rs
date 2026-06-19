@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "6";
+const AGENT_VERSION: &str = "8";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -423,6 +423,36 @@ pub fn watch(host: &str, root: &str) -> Result<(), String> {
 /// 停止监听。
 pub fn unwatch(host: &str) -> Result<(), String> {
     call_background(host, "unwatch", json!({})).map(|_| ())
+}
+
+// ---- 影子快照(本轮 agent 改动)远程转发:逻辑在 linco_agent.py 的 op_shadow_* ----
+
+/// 远端拍本轮基线(独立影子仓库 add -A + commit)。
+pub fn shadow_begin(host: &str, repo: &str) -> Result<(), String> {
+    call_background(host, "shadow_begin", json!({ "repo": repo })).map(|_| ())
+}
+
+/// 远端本轮改过哪些文件:绝对路径 → 状态字符(M/A/D)。
+pub fn shadow_changed_remote(
+    host: &str,
+    repo: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let v = call_background(host, "shadow_changed", json!({ "repo": repo }))?;
+    let mut map = std::collections::HashMap::new();
+    if let Some(obj) = v.get("changed").and_then(|x| x.as_object()) {
+        for (k, val) in obj {
+            if let Some(s) = val.as_str() {
+                map.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    Ok(map)
+}
+
+/// 远端某文件本轮 diff(unified)。
+pub fn shadow_diff_remote(host: &str, repo: &str, path: &str) -> Result<String, String> {
+    let v = call_background(host, "shadow_diff", json!({ "repo": repo, "path": path }))?;
+    Ok(v.get("diff").and_then(|x| x.as_str()).unwrap_or("").to_string())
 }
 
 #[cfg(test)]

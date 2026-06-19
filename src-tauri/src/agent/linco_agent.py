@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "6"
+AGENT_VERSION = "8"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -224,6 +224,102 @@ def op_git(a):
         raise ValueError("git 未安装")
 
 
+# ---------- 影子快照(本轮 agent 改动):与项目 git 无关的独立影子仓库 ----------
+# 语义与本地 shadow.rs 完全对称:在 $HOME/.linco/shadows/<repo哈希>/ 建独立 git 仓库,
+# work-tree 指向工作目录,add -A + commit 出「本轮基线」,捕获一切文件(含 untracked /
+# gitignored 产物)。changed/diff 都对比这个基线。远端零额外依赖,只用 git 本身。
+
+SHADOW_EXCLUDES = [".git/", "node_modules/", "target/", "__pycache__/", ".venv/", "dist/"]
+
+
+def _shadow_fnv1a(s):
+    h = 0xcbf29ce484222325
+    for b in s.encode("utf-8"):
+        h ^= b
+        h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return "%016x" % h
+
+
+def _shadow_dir(repo):
+    home = os.environ.get("HOME", "/tmp")
+    return os.path.join(home, ".linco", "shadows", _shadow_fnv1a(repo))
+
+
+def _shadow_git(repo, gitdir, args):
+    # 用 --git-dir/--work-tree 把影子仓库与项目 git 隔离;关掉 hooks/gpg 保证干净快速。
+    full = [
+        "git",
+        "--git-dir=" + gitdir,
+        "--work-tree=" + repo,
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "commit.gpgsign=false",
+    ] + list(args)
+    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+
+
+def _shadow_ensure_init(repo):
+    gitdir = _shadow_dir(repo)
+    head = os.path.join(gitdir, "HEAD")
+    if not os.path.exists(head):
+        os.makedirs(gitdir, exist_ok=True)
+        _shadow_git(repo, gitdir, ["init", "-q"])
+        _shadow_git(repo, gitdir, ["config", "user.email", "linco@local"])
+        _shadow_git(repo, gitdir, ["config", "user.name", "Linco"])
+    info = os.path.join(gitdir, "info")
+    os.makedirs(info, exist_ok=True)
+    with open(os.path.join(info, "exclude"), "w", encoding="utf-8") as f:
+        f.write("\n".join(SHADOW_EXCLUDES) + "\n")
+    return gitdir
+
+
+def _shadow_rel(repo, path):
+    pref = repo.rstrip("/") + "/"
+    return path[len(pref):] if path.startswith(pref) else path
+
+
+def op_shadow_begin(a):
+    repo = a["repo"]
+    gitdir = _shadow_ensure_init(repo)
+    _shadow_git(repo, gitdir, ["add", "-A"])
+    _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
+    return {}
+
+
+def op_shadow_changed(a):
+    repo = a["repo"]
+    gitdir = _shadow_dir(repo)
+    if not os.path.exists(os.path.join(gitdir, "HEAD")):
+        return {"changed": {}}
+    # 先 add -A 纳入新建 untracked 文件,再 diff --cached(index vs 基线),否则漏新建产物
+    _shadow_git(repo, gitdir, ["add", "-A"])
+    code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--name-status", "HEAD"])
+    base = repo.rstrip("/")
+    changed = {}
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        st = parts[0].strip()
+        p = parts[-1].strip()
+        if not st or not p:
+            continue
+        changed[base + "/" + p] = st[0]
+    return {"changed": changed}
+
+
+def op_shadow_diff(a):
+    repo = a["repo"]
+    path = a["path"]
+    gitdir = _shadow_dir(repo)
+    if not os.path.exists(os.path.join(gitdir, "HEAD")):
+        return {"diff": ""}
+    rel = _shadow_rel(repo, path)
+    _shadow_git(repo, gitdir, ["add", "-A"])
+    code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--no-color", "HEAD", "--", rel])
+    return {"diff": out}
+
+
 def op_shell(a):
     # 供 preview lane 复用既有 shell 探测命令,但仍走独立 RPC 进程/队列。
     cmd = a["cmd"]
@@ -248,22 +344,16 @@ def op_shell(a):
         raise ValueError("shell 超时")
 
 
-def op_ps(a):
-    # 列出 code agent(command_base,如 claude/codex)进程子树下的所有后代进程,
-    # 供「后台进程」面板把 agent 起的后台 shell/子进程从盲盒里暴露出来。
-    # 策略:全量 ps 快照 → 按命令名(+cwd 收窄)定位 agent 根进程 → 沿 ppid 向下
-    # BFS 收集后代(不含根本身)。本地远程同一套逻辑;Linux 用 /proc 读 cwd 收窄,
-    # 其它平台读不到则仅按命令名匹配(不致命)。
-    cmd_base = a.get("command_base") or ""
-    cwd = a.get("cwd") or ""
+def _ps_snapshot():
+    # 全量进程快照:返回 (procs 列表, children 映射 ppid->[pid])。
     out = subprocess.run(
         ["ps", "-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     ).stdout.decode("utf-8", "replace")
-    procs = []        # [{pid,ppid,etime,pcpu,pmem,stat,args}]
-    children = {}     # ppid -> [pid]
+    procs = []
+    children = {}
     for line in out.splitlines():
-        parts = line.split(None, 6)   # 前 6 列定宽,args 收尾(含空格)
+        parts = line.split(None, 6)
         if len(parts) < 7:
             continue
         try:
@@ -274,25 +364,42 @@ def op_ps(a):
                       "pcpu": parts[3], "pmem": parts[4],
                       "stat": parts[5], "args": parts[6]})
         children.setdefault(ppid, []).append(pid)
-    by_pid = {p["pid"]: p for p in procs}
+    return procs, children
 
+
+def _cwd_of(pid):
+    # 进程工作目录:Linux 读 /proc/<pid>/cwd;其它平台(macOS)用 lsof。
+    try:
+        return os.readlink("/proc/%d/cwd" % pid)
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(
+            ["lsof", "-p", str(pid), "-a", "-d", "cwd", "-F", "n"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        ).stdout.decode("utf-8", "replace")
+        for line in r.splitlines():
+            if line.startswith("n/"):
+                return line[1:]
+    except Exception:
+        pass
+    return None
+
+
+def _agent_descendants(cmd_base, cwd):
+    # 定位 code agent(cmd_base)进程子树,返回其所有后代进程(不含根本身)。
+    # 全量 ps 快照 → 按命令名(+cwd 收窄)找根 → 沿 ppid BFS。
+    procs, children = _ps_snapshot()
+    by_pid = {p["pid"]: p for p in procs}
     base = os.path.basename(cmd_base) if cmd_base else ""
 
-    def cwd_of(pid):
-        try:
-            return os.readlink("/proc/%d/cwd" % pid)
-        except OSError:
-            return None
-
-    # 找根:命令行含 agent 命令名;cwd 可读时进一步要求与会话 cwd 一致
     roots = []
     for p in procs:
         if base and base in p["args"]:
-            c = cwd_of(p["pid"])
+            c = _cwd_of(p["pid"])
             if not cwd or c is None or c == cwd:
                 roots.append(p["pid"])
 
-    # 从根 BFS 收后代(排除根自己——根=agent 本身,要看的是它「起的」进程)
     seen = set(roots)
     result = []
     stack = list(roots)
@@ -302,37 +409,100 @@ def op_ps(a):
                 seen.add(ch)
                 result.append(by_pid[ch])
                 stack.append(ch)
-    return {"procs": result}
+    return result
+
+
+def _fd_file(pid):
+    # 取进程 stdout/stderr(fd 1/2)指向的普通文件路径;管道/tty/dev 等返回 None。
+    # Linux:readlink /proc/<pid>/fd/N;其它平台(macOS)用 lsof 兜底。
+    for fd in (1, 2):
+        try:
+            p = os.readlink("/proc/%d/fd/%d" % (pid, fd))
+            if p.startswith("/") and not p.startswith("/dev/"):
+                return p
+            continue  # 是 pipe:/socket: 等 → 试下一个 fd
+        except OSError:
+            pass
+        try:
+            r = subprocess.run(
+                ["lsof", "-p", str(pid), "-a", "-d", str(fd), "-F", "tn"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            ).stdout.decode("utf-8", "replace")
+            is_reg = False
+            for line in r.splitlines():
+                if line.startswith("t"):
+                    is_reg = (line[1:] == "REG")  # 只认普通文件
+                elif line.startswith("n") and is_reg:
+                    path = line[1:]
+                    if path.startswith("/") and not path.startswith("/dev/"):
+                        return path
+        except Exception:
+            pass
+    return None
+
+
+def op_ps(a):
+    # 列出 code agent 进程子树下的所有后代进程(不做落盘过滤)。
+    return {"procs": _agent_descendants(a.get("command_base") or "", a.get("cwd") or "")}
+
+
+def _cwd_matches(proc_cwd, project_cwd):
+    # 进程 cwd 是否落在项目目录下(含子目录)。realpath 归一化(解 symlink,如
+    # macOS /tmp→/private/tmp)+ 前缀匹配,容忍尾斜杠与软链差异。
+    if not proc_cwd or not project_cwd:
+        return False
+    try:
+        a = os.path.realpath(proc_cwd)
+        b = os.path.realpath(project_cwd)
+    except OSError:
+        a, b = proc_cwd, project_cwd
+    return a == b or a.startswith(b.rstrip("/") + "/")
+
+
+def op_agent_tasks(a):
+    # 列出 agent 起的、**输出已落盘成文件**的后台任务(可实时 tail 的)。
+    # 这正是「训练/长任务」:stdout 重定向到文件;前台命令(npm/lark 等)stdout 是
+    # 直连 agent 的管道,_fd_file 返回 None → 被过滤掉(也没法 tail)。
+    #
+    # 检测策略(并集):一个进程算 agent 任务,需满足「输出落盘」且满足以下任一:
+    #   (a) 在 agent(cmd_base)进程子树下 —— 刚起、还挂在 agent shell 下的任务;
+    #   (b) cwd 在项目目录(cwd 参数)下 —— 后台长任务常被 init 收养(ppid→1)而脱离
+    #       子树,但工作目录不变,用 cwd 锚点仍能稳定捕获,tab 不会因 reparent 消失。
+    # 两路按 pid 去重合并。cwd 为空(没传项目目录)则只走 (a)。
+    cmd_base = a.get("command_base") or ""
+    cwd = a.get("cwd") or ""
+
+    cand = {}  # pid -> proc(去重)
+    # (a) agent 子树
+    for p in _agent_descendants(cmd_base, cwd):
+        cand[p["pid"]] = p
+    # (b) cwd 命中项目目录的进程(不限进程树),排除 agent 自身
+    if cwd:
+        base = os.path.basename(cmd_base) if cmd_base else ""
+        procs, _ = _ps_snapshot()
+        for p in procs:
+            if p["pid"] in cand:
+                continue
+            if base and base in p["args"]:
+                continue  # 跳过 agent 本体
+            if _cwd_matches(_cwd_of(p["pid"]), cwd):
+                cand[p["pid"]] = p
+
+    tasks = []
+    for p in cand.values():
+        f = _fd_file(p["pid"])
+        if f:
+            tasks.append({"pid": p["pid"], "args": p["args"],
+                          "file": f, "etime": p["etime"]})
+    tasks.sort(key=lambda t: t["pid"])
+    return {"tasks": tasks}
 
 
 def op_proc_output(a):
-    # 取某进程 stdout/stderr(fd 1/2)指向的文件路径——code agent 起的后台进程
-    # 输出会被重定向到文件,读这个文件即可实时看到训练 log 等。
-    # Linux:readlink /proc/<pid>/fd/1;其它平台(macOS)用 lsof 兜底。
+    # 取某进程 stdout/stderr(fd 1/2)指向的文件路径。
     pid = int(a["pid"])
-    out = {"fd1": None, "fd2": None}
-    for fd, key in ((1, "fd1"), (2, "fd2")):
-        try:
-            p = os.readlink("/proc/%d/fd/%d" % (pid, fd))
-            # 只认普通文件(排除 pipe:/socket:/dev/null 等不可 tail 的)
-            if p.startswith("/") and not p.startswith("/dev/"):
-                out[key] = p
-            continue
-        except OSError:
-            pass
-        # 兜底:lsof(macOS 无 /proc)
-        try:
-            r = subprocess.run(
-                ["lsof", "-p", str(pid), "-a", "-d", str(fd), "-F", "n"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            ).stdout.decode("utf-8", "replace")
-            for line in r.splitlines():
-                if line.startswith("n/") and not line.startswith("n/dev/"):
-                    out[key] = line[1:]
-                    break
-        except Exception:
-            pass
-    return out
+    f = _fd_file(pid)
+    return {"fd1": f, "fd2": None}
 
 
 def op_tail_file(a):
@@ -513,7 +683,11 @@ OPS = {
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
     "git": op_git, "shell": op_shell, "ps": op_ps,
+    "shadow_begin": op_shadow_begin,
+    "shadow_changed": op_shadow_changed,
+    "shadow_diff": op_shadow_diff,
     "proc_output": op_proc_output, "tail_file": op_tail_file,
+    "agent_tasks": op_agent_tasks,
 }
 
 

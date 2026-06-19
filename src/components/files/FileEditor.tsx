@@ -19,6 +19,7 @@ import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import { yaml } from '@codemirror/lang-yaml'
 import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
+import { onRemoteFsChange } from '@/lib/watch'
 
 // VS Code 式编辑能力(显式接入,不依赖 basicSetup 默认):
 //   ⌘F 查找 / ⌘⌥F 替换(search panel)、⌘G 下一个、⇧⌘G 上一个
@@ -85,6 +86,7 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const savedRef = useRef('')
+  const dirtyRef = useRef(false) // 与 dirty 同步,供事件回调里读最新值(避免闭包旧值)
 
   const extensions = useMemo(
     () => [...EDIT_EXTENSIONS, ...langFor(baseName(path))],
@@ -93,23 +95,45 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
 
   useEffect(() => {
     let alive = true
-    setError(null)
-    readFileCached(path, host)
-      .then((text) => {
-        if (!alive) return
-        setContent(text)
-        savedRef.current = text
-        setDirty(false)
-        setLoaded(true)
-      })
-      .catch((e) => {
-        if (!alive) return
-        setError(String(e))
-        setLoaded(true)
-      })
+    let un: (() => void) | undefined
+    // 读取文件到编辑器。reload=true 表示是「外部改动后重读」:先失效缓存拿最新盘内容,
+    // 且只在用户没有未保存编辑(非 dirty)时才覆盖,避免吞掉用户正在输入的内容。
+    const load = (reload = false): void => {
+      if (reload) {
+        if (dirtyRef.current) return // 用户正在编辑,别覆盖
+        invalidateFile(path, host)
+      }
+      setError(null)
+      readFileCached(path, host)
+        .then((text) => {
+          if (!alive) return
+          setContent(text)
+          savedRef.current = text
+          setDirty(false)
+          dirtyRef.current = false
+          setLoaded(true)
+        })
+        .catch((e) => {
+          if (!alive) return
+          setError(String(e))
+          setLoaded(true)
+        })
+    }
+    load()
+    // agent 改完文件(watch 推送)或发新消息(turn-refresh)→ 重读最新内容,
+    // 这样 agent 改动后编辑器不再停留在旧文本(之前 readFileCached 命中旧缓存的 bug)。
+    onRemoteFsChange((e) => {
+      if ((e.host || undefined) !== (host || undefined)) return
+      if (e.paths.some((p) => p === path)) load(true)
+    }).then((f) => (un = f))
+    const onTurn = (): void => load(true)
+    window.addEventListener('linco:turn-refresh', onTurn)
     return () => {
       alive = false
+      un?.()
+      window.removeEventListener('linco:turn-refresh', onTurn)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, host])
 
   const save = async (): Promise<void> => {
@@ -120,6 +144,7 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
       savedRef.current = content
       invalidateFile(path, host) // 保存后失效缓存,避免下次读到旧内容
       setDirty(false)
+      dirtyRef.current = false
     } catch (e) {
       setError(String(e))
     } finally {
@@ -129,7 +154,9 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
 
   const onChange = (v: string): void => {
     setContent(v)
-    setDirty(v !== savedRef.current)
+    const d = v !== savedRef.current
+    setDirty(d)
+    dirtyRef.current = d
   }
 
   return (

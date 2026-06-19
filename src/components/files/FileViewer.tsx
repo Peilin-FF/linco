@@ -3,7 +3,6 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { Loader2, FileQuestion, Download, GitCompare, FileText } from 'lucide-react'
 import { readBytesCached } from '@/lib/fs'
 import { shadowDiff } from '@/lib/shadow'
-import { gitDiffFile } from '@/lib/git'
 import { onRemoteFsChange } from '@/lib/watch'
 import FileEditor from './FileEditor'
 import TableViewer, { isTableFile } from './TableViewer'
@@ -102,16 +101,15 @@ function TextOrDiff({
 }): JSX.Element {
   const [diff, setDiff] = useState<string | null>(null)
   const [mode, setMode] = useState<'diff' | 'file'>('file')
-  // 文件有未提交改动(相对 HEAD)、但本轮基线下无 diff → 提示"发消息后才显本轮改动"
-  const [changedNoTurn, setChangedNoTurn] = useState(false)
   // 用户是否手动切过:手动切了就尊重选择,不再自动跳回 diff
   const [touched, setTouched] = useState(false)
 
-  // 拉本轮 diff;文件变更事件来时重拉(灵敏:agent 改完即更新)
+  // 拉本轮 diff;文件变更事件来时重拉(灵敏:agent 改完即更新)。
+  // 文件页只反映「本轮 agent 改动」:本轮有 diff → 显红绿;本轮没改 → 直接显完整文件,
+  // 不提示任何「未提交改动」(那是 Git 页面的职责,文件页不越界)。
   useEffect(() => {
     if (!repo) {
       setDiff(null)
-      setChangedNoTurn(false)
       return
     }
     let alive = true
@@ -122,17 +120,9 @@ function TextOrDiff({
           if (!alive) return
           const has = d.trim().length > 0
           setDiff(has ? d : null)
-          // 有改动且用户没手动切过 → 默认显 diff
+          // 本轮有改动且用户没手动切过 → 默认显 diff;没改 → 完整文件
           if (has && !touched) setMode('diff')
-          if (!has) {
-            setMode('file')
-            // 本轮无 diff:看该文件是否相对 HEAD 有未提交改动,有则提示用户
-            gitDiffFile(repo, path, false, false, host)
-              .then((hd) => alive && setChangedNoTurn(hd.trim().length > 0))
-              .catch(() => alive && setChangedNoTurn(false))
-          } else {
-            setChangedNoTurn(false)
-          }
+          if (!has) setMode('file')
         })
         .catch(() => alive && setDiff(null))
     }
@@ -184,11 +174,6 @@ function TextOrDiff({
           }}
           name={baseName(path)}
         />
-      )}
-      {!diff && changedNoTurn && (
-        <div className="shrink-0 border-b border-black/8 bg-[#fff7e6] px-3 py-1.5 text-[12px] text-ink-muted">
-          此文件有未提交改动,但本轮对话还没改动它 —— 在对话框给 claude 发消息后,这一轮的增删会在这里以红绿 diff 显示。
-        </div>
       )}
       <div className="min-h-0 flex-1">
         <FileEditor path={path} host={host} />

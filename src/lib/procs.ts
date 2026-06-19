@@ -14,6 +14,27 @@ export interface ProcInfo {
 
 const h = (host?: string): string | null => host || null
 
+export interface AgentTask {
+  pid: number
+  args: string // 完整命令行
+  file: string // stdout/stderr 落盘的文件路径(实时 tail 它)
+  etime: string // 运行时长
+}
+
+/// 列出 agent 起的、输出落盘成文件的后台任务(可实时查看;已滤掉管道噪声)。
+/// 每个任务 → 终端区一个 tab。host 空=本地。
+export async function agentTasks(
+  host?: string,
+  cwd?: string,
+  commandBase?: string
+): Promise<AgentTask[]> {
+  return invoke<AgentTask[]>('agent_tasks', {
+    host: h(host),
+    cwd: cwd || null,
+    commandBase: commandBase || null
+  })
+}
+
 /// 列出 agent 进程子树下的后代进程。host 空=本地。
 export async function agentProcesses(
   host?: string,

@@ -28,6 +28,109 @@ pub struct ProcInfo {
     pub args: String,
 }
 
+/// agent 起的、输出已落盘成文件的后台任务(可实时 tail)。每个 → 终端区一个 tab。
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct AgentTask {
+    pub pid: i64,
+    pub args: String,
+    pub file: String, // stdout/stderr 落盘的文件路径(实时 tail 它)
+    pub etime: String,
+}
+
+/// 列出 agent 起的、**输出落盘成文件**的后台任务(过滤掉 npm/lark 等管道噪声)。
+/// 这正是训练/长任务:stdout 重定向到文件,可 tail;前台命令是直连 agent 的管道,
+/// 没有文件可读 → 不列出。host 空=本地。
+#[tauri::command]
+pub async fn agent_tasks(
+    host: Option<String>,
+    cwd: Option<String>,
+    command_base: Option<String>,
+) -> Result<Vec<AgentTask>, String> {
+    crate::blocking::run(move || {
+        let base = command_base.unwrap_or_default();
+        let cwd = cwd.unwrap_or_default();
+
+        if let Some(h) = host.filter(|s| !s.is_empty()) {
+            // 远程:agent op 已在远端做「树走 + 落盘过滤」
+            if let Ok(v) = crate::agent_rpc::call(
+                &h,
+                "agent_tasks",
+                serde_json::json!({ "command_base": base, "cwd": cwd }),
+            ) {
+                if let Some(arr) = v.get("tasks").and_then(|x| x.as_array()) {
+                    return Ok(arr.iter().filter_map(task_from_json).collect());
+                }
+            }
+            // 回退:列进程后逐个解析 fd(多往返,少用)
+            let raw = crate::remote::run_remote(&h, PS_CMD)
+                .map(|b| String::from_utf8_lossy(&b).to_string())?;
+            let procs = parse_and_filter(&raw, &base, None);
+            let mut tasks = Vec::new();
+            for p in procs {
+                let cmd = format!(
+                    "readlink /proc/{pid}/fd/1 2>/dev/null || lsof -p {pid} -a -d 1 -F n 2>/dev/null | sed -n 's/^n//p' | head -1",
+                    pid = p.pid
+                );
+                if let Ok(b) = crate::remote::run_remote(&h, &cmd) {
+                    let f = String::from_utf8_lossy(&b).trim().to_string();
+                    if f.starts_with('/') && !f.starts_with("/dev/") {
+                        tasks.push(AgentTask { pid: p.pid, args: p.args, file: f, etime: p.etime });
+                    }
+                }
+            }
+            return Ok(tasks);
+        }
+
+        // 本地:并集策略(与远端 op_agent_tasks 对称)——
+        // (a) agent 子树下的进程 + (b) cwd 命中项目目录的进程,去重,只留输出落盘的。
+        let out = Command::new("ps")
+            .args(["-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="])
+            .output()
+            .map_err(|e| format!("无法执行 ps: {e}"))?;
+        let raw = String::from_utf8_lossy(&out.stdout).to_string();
+
+        let mut cand: HashMap<i64, ProcInfo> = HashMap::new();
+        // (a) 子树
+        for p in parse_and_filter(&raw, &base, None) {
+            cand.insert(p.pid, p);
+        }
+        // (b) cwd 命中项目目录(后台任务被 init 收养后脱离子树,靠 cwd 锚点保住)
+        if !cwd.is_empty() {
+            let base_name = base.rsplit('/').next().unwrap_or(&base);
+            for p in parse_all(&raw) {
+                if cand.contains_key(&p.pid) {
+                    continue;
+                }
+                if !base_name.is_empty() && p.args.contains(base_name) {
+                    continue; // 跳过 agent 本体
+                }
+                if cwd_matches(local_cwd(p.pid).as_deref(), &cwd) {
+                    cand.insert(p.pid, p);
+                }
+            }
+        }
+
+        let mut tasks = Vec::new();
+        for p in cand.into_values() {
+            if let Some(f) = local_proc_output(p.pid).fd1 {
+                tasks.push(AgentTask { pid: p.pid, args: p.args, file: f, etime: p.etime });
+            }
+        }
+        tasks.sort_by_key(|t| t.pid);
+        Ok(tasks)
+    })
+    .await
+}
+
+fn task_from_json(v: &serde_json::Value) -> Option<AgentTask> {
+    Some(AgentTask {
+        pid: v.get("pid")?.as_i64()?,
+        args: v.get("args").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        file: v.get("file")?.as_str()?.to_string(),
+        etime: v.get("etime").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+    })
+}
+
 /// 列出 agent 进程子树下的后代进程。host 空=本地。
 #[tauri::command]
 pub async fn agent_processes(
@@ -185,6 +288,44 @@ fn local_proc_output(pid: i64) -> ProcOutput {
     ProcOutput { fd1: resolve(1), fd2: resolve(2) }
 }
 
+/// 本地取进程工作目录(Linux /proc/PID/cwd;macOS lsof)。
+fn local_cwd(pid: i64) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
+        return Some(p.to_string_lossy().to_string());
+    }
+    let out = Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-F", "n"])
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(rest) = line.strip_prefix("n/") {
+            return Some(format!("/{rest}"));
+        }
+    }
+    None
+}
+
+/// 进程 cwd 是否落在项目目录下(含子目录)。canonicalize 归一化(解 symlink,如
+/// macOS /tmp→/private/tmp)+ 前缀匹配,容忍尾斜杠与软链差异。
+fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
+    let pc = match proc_cwd {
+        Some(s) if !s.is_empty() => s,
+        _ => return false,
+    };
+    if project_cwd.is_empty() {
+        return false;
+    }
+    let norm = |s: &str| {
+        std::fs::canonicalize(s)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| s.trim_end_matches('/').to_string())
+    };
+    let a = norm(pc);
+    let b = norm(project_cwd);
+    a == b || a.starts_with(&format!("{}/", b.trim_end_matches('/')))
+}
+
 /// 本地从 offset 增量读文件。
 fn local_tail(path: &str, offset: i64, max: i64) -> Result<TailChunk, String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -218,9 +359,8 @@ fn proc_from_json(v: &serde_json::Value) -> Option<ProcInfo> {
 
 /// 解析 ps 输出,定位命令名为 base 的根进程,沿 ppid 向下 BFS 收后代(不含根)。
 /// cwd 为本地/shell 回退路径,不做 cwd 收窄(远程 cwd 收窄在 agent op_ps 内完成)。
-fn parse_and_filter(raw: &str, base: &str, _cwd: Option<&str>) -> Vec<ProcInfo> {
+fn parse_all(raw: &str) -> Vec<ProcInfo> {
     let mut procs: Vec<ProcInfo> = Vec::new();
-    let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
     for line in raw.lines() {
         // 前 6 列定宽空白分隔,args 收尾(含空格)
         let mut it = line.split_whitespace();
@@ -237,8 +377,16 @@ fn parse_and_filter(raw: &str, base: &str, _cwd: Option<&str>) -> Vec<ProcInfo> 
         let pmem = it.next().unwrap_or("").to_string();
         let stat = it.next().unwrap_or("").to_string();
         let args = it.collect::<Vec<_>>().join(" ");
-        children.entry(ppid).or_default().push(pid);
         procs.push(ProcInfo { pid, ppid, etime, pcpu, pmem, stat, args });
+    }
+    procs
+}
+
+fn parse_and_filter(raw: &str, base: &str, _cwd: Option<&str>) -> Vec<ProcInfo> {
+    let procs = parse_all(raw);
+    let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+    for p in &procs {
+        children.entry(p.ppid).or_default().push(p.pid);
     }
     let by_pid: HashMap<i64, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
 

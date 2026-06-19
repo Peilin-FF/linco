@@ -99,6 +99,7 @@ pub fn run() {
             remote::ssh_config_add,
             remote::remote_home,
             procs::agent_processes,
+            procs::agent_tasks,
             procs::proc_output_file,
             procs::tail_file,
         ])
