@@ -17,6 +17,10 @@ import {
   termStart,
   termWrite
 } from '@/lib/terminal'
+import {
+  usageIngestTerminalOutput,
+  type UsageAgentContext
+} from '@/lib/usage'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 // 跟随系统深浅色:深色模式下 claude 等 TUI 会用深色背景的 ANSI 块,
@@ -86,11 +90,13 @@ interface TerminalViewProps {
   onActivity?: (id: string) => void
   /** 会话退出(PTY 结束)时回调 */
   onExit?: (id: string) => void
+  /** 对话 agent 会话的使用统计上下文;普通终端不传。 */
+  usage?: UsageAgentContext
 }
 
 const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
   function TerminalView(
-    { id, cwd, env, initialCommand, host, identity, onActivity, onExit },
+    { id, cwd, env, initialCommand, host, identity, onActivity, onExit, usage },
     ref
   ) {
     const hostRef = useRef<HTMLDivElement>(null)
@@ -110,6 +116,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     // 回调用 ref 持有,避免父组件每次重渲染传新函数触发终端重挂载。
     const onActivityRef = useRef(onActivity)
     const onExitRef = useRef(onExit)
+    const usageRef = useRef(usage)
+    const usageBufferRef = useRef('')
+    const usageTimerRef = useRef<number | null>(null)
+    const decoderRef = useRef(new TextDecoder())
     hostRef2.current = host
     identityRef.current = identity
     cwdRef.current = cwd
@@ -117,6 +127,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     initCmdRef.current = initialCommand
     onActivityRef.current = onActivity
     onExitRef.current = onExit
+    usageRef.current = usage
 
     useImperativeHandle(ref, () => ({
       send: (text: string) => {
@@ -129,6 +140,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       },
       focus: () => termRef.current?.focus()
     }))
+
+    const flushUsageOutput = (): void => {
+      const usage = usageRef.current
+      const text = usageBufferRef.current
+      usageBufferRef.current = ''
+      usageTimerRef.current = null
+      if (!usage || !text.trim()) return
+      usageIngestTerminalOutput({ ...usage, sessionId: id }, text).catch(() => {})
+    }
 
     useEffect(() => {
       const host = hostRef.current
@@ -188,6 +208,18 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         unlistenOut = await onTermOutput(id, (bytes) => {
           if (!disposed) {
             term.write(bytes)
+            const usage = usageRef.current
+            if (usage) {
+              usageBufferRef.current += decoderRef.current.decode(bytes, { stream: true })
+              if (usageBufferRef.current.length > 5000) {
+                if (usageTimerRef.current !== null) {
+                  window.clearTimeout(usageTimerRef.current)
+                }
+                flushUsageOutput()
+              } else if (usageTimerRef.current === null) {
+                usageTimerRef.current = window.setTimeout(flushUsageOutput, 900)
+              }
+            }
             onActivityRef.current?.(id) // 上报活动 → 侧栏判忙/空闲
           }
         })
@@ -225,6 +257,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         ro.disconnect()
         mql.removeEventListener?.('change', onScheme)
         dataSub.dispose()
+        if (usageTimerRef.current !== null) {
+          window.clearTimeout(usageTimerRef.current)
+        }
+        flushUsageOutput()
         unlistenOut?.()
         unlistenExit?.()
         termKill(id)

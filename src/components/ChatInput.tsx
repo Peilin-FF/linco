@@ -72,6 +72,27 @@ export default function ChatInput({
   // 三个下拉的开合(模型/权限/effort),互斥
   const [openMenu, setOpenMenu] = useState<'model' | 'perm' | 'effort' | null>(null)
   const [dirOpen, setDirOpen] = useState(false)
+  // 点下拉外部 / 按 Esc → 关闭下拉(不用回去再点一次)
+  useEffect(() => {
+    if (!openMenu && !dirOpen) return
+    const onDown = (e: PointerEvent): void => {
+      const t = e.target as HTMLElement | null
+      if (!t?.closest('[data-chatmenu]')) setOpenMenu(null)
+      if (!t?.closest('[data-dirmenu]')) setDirOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setOpenMenu(null)
+        setDirOpen(false)
+      }
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [openMenu, dirOpen])
   const composingRef = useRef(false) // 中文输入法合成中
   const prevRef = useRef('') // 已转发到 PTY 的内容
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -128,7 +149,10 @@ export default function ChatInput({
   return (
     <div className="rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
       {/* 顶部:工作目录选择 + (紧凑模式)终端开关 */}
-      <div className={compact ? 'relative flex items-center pr-2' : 'relative'}>
+      <div
+        data-dirmenu
+        className={compact ? 'relative flex items-center pr-2' : 'relative'}
+      >
         <button
           onClick={() => setDirOpen((o) => !o)}
           className={`flex items-center gap-1.5 rounded-t-2xl px-4 pt-3 pb-1 text-[14px] text-ink-muted hover:text-ink ${
@@ -269,7 +293,7 @@ export default function ChatInput({
               caps.permissions.find((o) => o.value === agent.permission) ??
               caps.permissions[0]
             return (
-              <div className="relative">
+              <div className="relative" data-chatmenu>
                 <button
                   onClick={() =>
                     setOpenMenu((m) => (m === 'perm' ? null : 'perm'))
@@ -278,7 +302,11 @@ export default function ChatInput({
                 >
                   <ShieldAlert size={15} />
                   <span>{cur.label}</span>
-                  <ChevronDown size={14} />
+                  {openMenu === 'perm' ? (
+                    <ChevronUp size={14} />
+                  ) : (
+                    <ChevronDown size={14} />
+                  )}
                 </button>
                 {openMenu === 'perm' && (
                   <Menu
@@ -300,14 +328,18 @@ export default function ChatInput({
 
           {/* 模型下拉:列 agent.models(空则只显当前) */}
           {agent && onPatchAgent && (agent.models?.length ?? 0) > 0 ? (
-            <div className="relative">
+            <div className="relative" data-chatmenu>
               <button
                 onClick={() => setOpenMenu((m) => (m === 'model' ? null : 'model'))}
                 className="flex max-w-[220px] items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] text-ink-muted hover:bg-black/5"
                 title={agentLabel}
               >
                 <span className="truncate">{agentLabel}</span>
-                <ChevronDown size={14} className="text-ink-faint" />
+                {openMenu === 'model' ? (
+                  <ChevronUp size={14} className="text-ink-faint" />
+                ) : (
+                  <ChevronDown size={14} className="text-ink-faint" />
+                )}
               </button>
               {openMenu === 'model' && (
                 <Menu
@@ -337,7 +369,7 @@ export default function ChatInput({
                 caps.efforts.find((o) => o.value === agent.effort) ??
                 caps.efforts[0]
               return (
-                <div className="relative">
+                <div className="relative" data-chatmenu>
                   <button
                     onClick={() =>
                       setOpenMenu((m) => (m === 'effort' ? null : 'effort'))
@@ -346,7 +378,11 @@ export default function ChatInput({
                   >
                     <Brain size={15} />
                     <span>{cur.label}</span>
-                    <ChevronDown size={14} className="text-ink-faint" />
+                    {openMenu === 'effort' ? (
+                      <ChevronUp size={14} className="text-ink-faint" />
+                    ) : (
+                      <ChevronDown size={14} className="text-ink-faint" />
+                    )}
                   </button>
                   {openMenu === 'effort' && (
                     <Menu
@@ -391,11 +427,19 @@ function Menu({
   onPick: (value: string) => void
 }): JSX.Element {
   return (
-    <div className="absolute bottom-full right-0 z-30 mb-1 min-w-[150px] overflow-hidden rounded-xl bg-canvas py-1 shadow-card ring-1 ring-black/10">
+    <div
+      data-chatmenu
+      className="absolute bottom-full right-0 z-50 mb-1 min-w-[160px] overflow-hidden rounded-xl bg-canvas py-1 shadow-card ring-1 ring-black/10"
+    >
       {options.map((o) => (
         <button
-          key={o.value}
-          onClick={() => onPick(o.value)}
+          key={o.value || '__default'}
+          // 用 mousedown 提交:确保在任何「失焦/外部点击」关闭之前先选中,不会点了没反应
+          onMouseDown={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onPick(o.value)
+          }}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-black/5"
         >
           <span className="flex-1 truncate">{o.label}</span>

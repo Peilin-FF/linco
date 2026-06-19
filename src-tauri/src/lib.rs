@@ -10,13 +10,14 @@ mod blocking;
 mod config;
 mod fs;
 mod git;
-mod preview;
 mod plugins;
+mod preview;
 mod procs;
 mod remote;
 mod search;
 mod shadow;
 mod terminal;
+mod usage;
 mod watch;
 
 #[cfg(test)]
@@ -37,11 +38,15 @@ pub fn run() {
             Ok(())
         })
         .manage(TerminalState::default())
+        .manage(usage::UsageState::default())
         .invoke_handler(tauri::generate_handler![
             terminal::term_start,
             terminal::term_write,
             terminal::term_resize,
             terminal::term_kill,
+            usage::usage_load,
+            usage::usage_record_turn,
+            usage::usage_ingest_terminal_output,
             config::load_config,
             config::save_config,
             config::sync_config_to_remote,

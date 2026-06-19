@@ -50,6 +50,7 @@ import {
 import { watchStart, watchStop } from '@/lib/watch'
 import { shadowBeginTurn } from '@/lib/shadow'
 import { agentTasks, type AgentTask } from '@/lib/procs'
+import { usageRecordTurn, type UsageAgentContext } from '@/lib/usage'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 
@@ -99,6 +100,7 @@ interface ChatSession {
   identity?: string
   env?: Record<string, string>
   command?: string
+  usage: UsageAgentContext
 }
 
 let shellSeq = 0
@@ -359,7 +361,13 @@ export default function App(): JSX.Element {
         host,
         identity: activeConn?.identity || undefined,
         env: agentEnvVars,
-        command: initialCommand
+        command: initialCommand,
+        usage: {
+          agentId: defaultAgent?.id || 'agent',
+          agentName: defaultAgent?.name || 'Agent',
+          provider: defaultAgent?.provider || '',
+          model: defaultAgent?.model || ''
+        }
       }
       return [...prev, next]
     })
@@ -625,7 +633,7 @@ export default function App(): JSX.Element {
   }
 
   // 底部对话框:始终与「对话」会话通信。发送/输入不切换当前视图。
-  const handleSend = (): void => {
+  const handleSend = (text: string): void => {
     // 用户发消息 = 新一轮:记 git 基线,之后的改动即"本轮 agent 改动"(Cursor 式 diff)。
     // 基线建好后派发 turn-refresh:让文件树重拉 git 标记、已打开文件重拉 diff,
     // 这样即便远端轮询有 ~1s 延迟,"发消息"这一刻也立即反映上一轮已落盘的改动。
@@ -633,6 +641,18 @@ export default function App(): JSX.Element {
       shadowBeginTurn(cwd, host)
         .then(() => window.dispatchEvent(new CustomEvent('linco:turn-refresh')))
         .catch(() => {})
+    }
+    if (defaultAgent) {
+      usageRecordTurn(
+        {
+          agentId: defaultAgent.id,
+          agentName: defaultAgent.name,
+          provider: defaultAgent.provider,
+          model: defaultAgent.model
+        },
+        text,
+        { host, cwd }
+      ).catch(() => {})
     }
     // 实际写入由 onForward 的兜底重发完成(Ctrl-U + 文本 + 回车)
   }
@@ -692,7 +712,7 @@ export default function App(): JSX.Element {
             )}
           </button>
         ))}
-        <div className="flex-1" />
+        <div data-tauri-drag-region className="flex-1" />
         {availableUpdate && (
           <button
             onClick={() => {
@@ -767,12 +787,15 @@ export default function App(): JSX.Element {
                   }}
                   id={s.id}
                   cwd={s.cwd}
-                  env={s.env}
-                  initialCommand={s.command}
+                  env={s.id === activeChatId ? agentEnvVars : s.env}
+                  initialCommand={
+                    s.id === activeChatId ? initialCommand : s.command
+                  }
                   host={s.host}
                   identity={s.identity}
                   onActivity={markActivity}
                   onExit={markExited}
+                  usage={s.usage}
                 />
               </div>
             )

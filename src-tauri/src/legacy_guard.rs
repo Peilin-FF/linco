@@ -90,11 +90,15 @@ fn release_updater_is_wired_for_signed_github_updates() {
         .and_then(serde_json::Value::as_array)
         .expect("default capability should declare permissions");
     assert!(
-        permissions.iter().any(|p| p.as_str() == Some("updater:default")),
+        permissions
+            .iter()
+            .any(|p| p.as_str() == Some("updater:default")),
         "frontend updater APIs must be granted"
     );
     assert!(
-        permissions.iter().any(|p| p.as_str() == Some("process:default")),
+        permissions
+            .iter()
+            .any(|p| p.as_str() == Some("process:default")),
         "relaunch API must be granted after installing updates"
     );
 
@@ -125,7 +129,7 @@ fn update_notice_sits_immediately_left_of_connection_picker() {
         .expect("ConnectionPicker should exist in header");
     let before_picker = &app[..picker];
     let spacer = before_picker
-        .rfind("<div className=\"flex-1\" />")
+        .rfind("className=\"flex-1\"")
         .expect("header spacer should precede right-side controls");
     let install_button = before_picker
         .rfind("handleInstallUpdate")
@@ -147,7 +151,14 @@ fn settings_nav_only_shows_ready_sections() {
     let settings =
         std::fs::read_to_string(repo.join("src").join("components").join("Settings.tsx"))
             .expect("read Settings.tsx");
-    let hidden_until_ready = ["代码预览", "技能", "MCP 服务器", "插件管理", "命令", "索引库"];
+    let hidden_until_ready = [
+        "代码预览",
+        "技能",
+        "MCP 服务器",
+        "插件管理",
+        "命令",
+        "索引库",
+    ];
     let hits = hidden_until_ready
         .iter()
         .filter(|label| settings.contains(**label))

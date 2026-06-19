@@ -10,6 +10,7 @@ import {
 import type { AppConfig } from '@/lib/config'
 import ModelSettings from './settings/ModelSettings'
 import Connections from './settings/Connections'
+import UsageStats from './settings/UsageStats'
 
 type SectionId =
   | 'general'
@@ -80,6 +81,8 @@ export default function Settings({
             <ModelSettings config={config} onChange={onChange} />
           ) : section === 'connections' ? (
             <Connections config={config} onChange={onChange} />
+          ) : section === 'usage' ? (
+            <UsageStats />
           ) : (
             <SectionPlaceholder
               title={NAV.find((n) => n.id === section)?.label ?? ''}
