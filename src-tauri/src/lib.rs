@@ -15,6 +15,7 @@ mod preview;
 mod remote;
 mod search;
 mod terminal;
+mod watch;
 
 use agent::AgentState;
 use terminal::TerminalState;
@@ -24,6 +25,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
+            agent_rpc::set_app(app.handle().clone());
+            Ok(())
+        })
         .manage(TerminalState::default())
         .manage(AgentState::default())
         .invoke_handler(tauri::generate_handler![
@@ -40,6 +46,8 @@ pub fn run() {
             preview::preview_set_target,
             preview::preview_default_target,
             preview::preview_prefetch_assets,
+            watch::watch_start,
+            watch::watch_stop,
             fs::fs_list_dir,
             fs::fs_read_file,
             fs::fs_read_bytes,

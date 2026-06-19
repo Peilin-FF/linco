@@ -14,6 +14,7 @@ import {
   revealInFinder,
   type DirEntry
 } from '@/lib/fs'
+import { onRemoteFsChange } from '@/lib/watch'
 
 interface FilesViewProps {
   /** 工作目录(资源管理器根) */
@@ -47,11 +48,14 @@ export default function FilesView({
   const [active, setActive] = useState('')
   const [menu, setMenu] = useState<TreeContextTarget | null>(null)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
+  // 文件树当前选中节点(文件或文件夹),供键盘快捷键(F2/Delete/⌘C/⌘X/⌘V)作用
+  const [treeSel, setTreeSel] = useState<DirEntry | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [refreshPaths, setRefreshPaths] = useState<string[]>([])
   // 文件树定位请求(active 变化时让左侧树跳转到该文件,VS Code 式)
   const [revealReq, setRevealReq] = useState('')
   const revealSeq = useRef(0)
+  const treePanelRef = useRef<HTMLDivElement | null>(null)
   // 应用内输入弹窗(替代 WKWebView 不支持的 window.prompt)
   const { prompt, dialog } = usePrompt()
 
@@ -103,6 +107,32 @@ export default function FilesView({
     setRefreshPaths(dirs)
     setRefreshKey((k) => k + 1)
   }
+
+  // 监听文件变更(远程 agent / 本地扫描推送)→ debounce 后刷新受影响目录,
+  // 实现"agent 改文件,文件树自动刷新"(灵敏)。
+  useEffect(() => {
+    let un: (() => void) | undefined
+    let timer: number | undefined
+    const pendingDirs = new Set<string>()
+    onRemoteFsChange((e) => {
+      // 只关心当前连接(host 一致;本地都为空串)
+      if ((e.host || undefined) !== (host || undefined)) return
+      for (const p of e.paths) {
+        const dir = p.slice(0, p.lastIndexOf('/'))
+        if (dir) pendingDirs.add(dir)
+      }
+      if (timer) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        refresh(...pendingDirs)
+        pendingDirs.clear()
+      }, 150)
+    }).then((f) => (un = f))
+    return () => {
+      if (timer) window.clearTimeout(timer)
+      un?.()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host])
 
   // 取某 entry 的“所在目录”:文件夹用自身,文件用其父目录
   const dirOf = (entry: DirEntry): string =>
@@ -224,7 +254,38 @@ export default function FilesView({
   return (
     <div className="flex h-full w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
       {/* 左:文件树 */}
-      <div className="flex w-[260px] shrink-0 flex-col border-r border-black/8">
+      <div
+        className="flex w-[260px] shrink-0 flex-col border-r border-black/8 outline-none"
+        tabIndex={-1}
+        ref={(el) => {
+          treePanelRef.current = el
+        }}
+        onMouseDown={() => treePanelRef.current?.focus()}
+        onKeyDown={(e) => {
+          if (!treeSel) return
+          const meta = e.metaKey || e.ctrlKey
+          if (e.key === 'F2') {
+            e.preventDefault()
+            void handleAction('rename', treeSel)
+          } else if (e.key === 'Delete' || e.key === 'Backspace') {
+            e.preventDefault()
+            void handleAction('delete', treeSel)
+          } else if (meta && (e.key === 'c' || e.key === 'C')) {
+            e.preventDefault()
+            void handleAction('copy', treeSel)
+          } else if (meta && (e.key === 'x' || e.key === 'X')) {
+            e.preventDefault()
+            void handleAction('cut', treeSel)
+          } else if (meta && (e.key === 'v' || e.key === 'V')) {
+            // 粘贴到:选中文件夹则进其内,选中文件则进其父目录
+            e.preventDefault()
+            const destDir = treeSel.isDir
+              ? treeSel.path
+              : treeSel.path.slice(0, treeSel.path.lastIndexOf('/'))
+            void handleAction('paste', { name: '', path: destDir, isDir: true })
+          }
+        }}
+      >
         <div className="flex shrink-0 items-center justify-between px-3 py-2 text-[12px] font-medium uppercase tracking-wide text-ink-faint">
           <span className="truncate">{root.split('/').pop() || root}</span>
         </div>
@@ -233,6 +294,7 @@ export default function FilesView({
             root={root}
             selectedPath={active}
             onSelectFile={openFile}
+            onSelect={setTreeSel}
             onContext={setMenu}
             onMove={handleMove}
             refreshKey={refreshKey}

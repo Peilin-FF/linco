@@ -32,6 +32,8 @@ interface FileTreeProps {
   root: string
   selectedPath: string
   onSelectFile: (path: string) => void
+  /** 点击任意节点(文件或文件夹)时回调,记录树选中项供键盘快捷键用 */
+  onSelect?: (entry: DirEntry) => void
   onContext: (t: TreeContextTarget) => void
   /** 拖拽移动:把 src 移动到 destDir 下 */
   onMove: (src: string, destDir: string) => void
@@ -56,6 +58,7 @@ const Node = memo(function Node({
   depth,
   selectedPath,
   onSelectFile,
+  onSelect,
   onContext,
   onMove,
   refreshKey,
@@ -105,6 +108,7 @@ const Node = memo(function Node({
   }
 
   const toggle = (): void => {
+    onSelect?.(entry) // 记录树选中节点(文件或文件夹),供键盘快捷键作用
     if (!entry.isDir) {
       onSelectFile(entry.path)
       return
@@ -237,6 +241,7 @@ const Node = memo(function Node({
                 depth={depth + 1}
                 selectedPath={selectedPath}
                 onSelectFile={onSelectFile}
+                onSelect={onSelect}
                 onContext={onContext}
                 onMove={onMove}
                 refreshKey={refreshKey}
@@ -256,6 +261,7 @@ export default function FileTree({
   root,
   selectedPath,
   onSelectFile,
+  onSelect,
   onContext,
   onMove,
   refreshKey,
@@ -604,6 +610,7 @@ export default function FileTree({
               depth={0}
               selectedPath={selectedPath}
               onSelectFile={onSelectFile}
+              onSelect={onSelect}
               onContext={onContext}
               onMove={onMove}
               refreshKey={refreshKey}

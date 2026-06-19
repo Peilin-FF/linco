@@ -34,6 +34,7 @@ import {
   remoteHome,
   type Connection
 } from '@/lib/connection'
+import { watchStart, watchStop } from '@/lib/watch'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
 
@@ -167,6 +168,20 @@ export default function App(): JSX.Element {
       }
     }
   }, [host, cwd])
+  // 启动文件监听:工作目录/连接就绪后,让 agent(远程)或本地扫描盯住工作目录,
+  // 变更经 remote-fs-change 事件实时推给文件树/Git/预览(灵敏自动刷新)。
+  useEffect(() => {
+    if (!cwd) {
+      watchStop().catch(() => {})
+      return
+    }
+    watchStart(cwd, host).catch(() => {})
+    return () => {
+      watchStop().catch(() => {})
+    }
+  }, [host, cwd])
+
+
   // 对话会话自动启动 claude/codex
   const initialCommand =
     config?.autoStart && defaultAgent ? defaultAgent.command : undefined

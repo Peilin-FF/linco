@@ -41,6 +41,7 @@ import {
   type GitStash,
   type GitStatus
 } from '@/lib/git'
+import { onRemoteFsChange } from '@/lib/watch'
 import { iconForFile } from './files/icons'
 import DiffView from './git/DiffView'
 import { usePrompt } from './usePrompt'
@@ -92,6 +93,22 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // 监听文件变更(agent 改文件)→ debounce 后刷新 git 状态(灵敏)。
+  useEffect(() => {
+    if (!repo) return
+    let un: (() => void) | undefined
+    let timer: number | undefined
+    onRemoteFsChange((e) => {
+      if ((e.host || undefined) !== (host || undefined)) return
+      if (timer) window.clearTimeout(timer)
+      timer = window.setTimeout(() => void refresh(), 200)
+    }).then((f) => (un = f))
+    return () => {
+      if (timer) window.clearTimeout(timer)
+      un?.()
+    }
+  }, [repo, host, refresh])
 
   // 自动 fetch:进入视图后静默 fetch(延迟,让 status 先渲染),之后每 3 分钟一次。
   // fetch 完成后刷新 status,远端有新提交则 behind 数更新 → 顶部出现拉取提示。

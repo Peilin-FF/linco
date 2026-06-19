@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading
 
-AGENT_VERSION = "2"
+AGENT_VERSION = "3"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 
@@ -221,6 +221,116 @@ def op_git(a):
         raise ValueError("git 未安装")
 
 
+# ---------- 文件监听(灵敏:agent 改文件 → 主动推 fileChange)----------
+# 优先 inotifywait(事件级,最灵敏);否则纯 Python 轮询 mtime(~0.5s)。
+# 变更去抖后批量推 {"event":"fileChange","paths":[...]}(无 id,主动)。
+
+_watch_thread = None
+_watch_stop = None  # threading.Event
+WATCH_SKIP = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
+
+
+def _emit_changes(paths):
+    if paths:
+        _send({"event": "fileChange", "paths": sorted(set(paths))})
+
+
+def _has_inotifywait():
+    return shutil.which("inotifywait") is not None
+
+
+def _watch_inotify(root, stop):
+    # 递归监听;批量收集 ~0.3s 内的事件再推一次
+    excludes = "(/(" + "|".join(WATCH_SKIP) + ")(/|$))"
+    cmd = ["inotifywait", "-m", "-r", "-q",
+           "-e", "modify", "-e", "create", "-e", "delete", "-e", "moved_to", "-e", "moved_from",
+           "--exclude", excludes, "--format", "%w%f", root]
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except Exception:
+        return _watch_poll(root, stop)  # 起不来则回退轮询
+    batch = []
+    last_flush = time.time()
+    import select as _select
+    while not stop.is_set():
+        r, _, _ = _select.select([p.stdout], [], [], 0.3)
+        if r:
+            line = p.stdout.readline()
+            if not line:
+                break
+            path = line.decode("utf-8", "replace").strip()
+            if path:
+                batch.append(path)
+        # 去抖:积累 0.3s 或攒够一批就推
+        if batch and (time.time() - last_flush > 0.3):
+            _emit_changes(batch)
+            batch = []
+            last_flush = time.time()
+    try:
+        p.terminate()
+    except Exception:
+        pass
+    if batch:
+        _emit_changes(batch)
+
+
+def _scan_mtimes(root):
+    # 返回 {path: mtime},跳过噪声目录,限制规模
+    out = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in WATCH_SKIP]
+        for n in filenames:
+            p = os.path.join(dirpath, n)
+            try:
+                out[p] = os.stat(p).st_mtime
+            except OSError:
+                pass
+        if len(out) > 20000:
+            return out
+    return out
+
+
+def _watch_poll(root, stop):
+    prev = _scan_mtimes(root)
+    while not stop.is_set():
+        if stop.wait(0.5):
+            break
+        cur = _scan_mtimes(root)
+        changed = []
+        for p, m in cur.items():
+            if prev.get(p) != m:
+                changed.append(p)
+        for p in prev:
+            if p not in cur:
+                changed.append(p)  # 删除
+        if changed:
+            _emit_changes(changed)
+        prev = cur
+
+
+def op_watch(a, rid):
+    global _watch_thread, _watch_stop
+    root = a["root"]
+    # 已在监听 → 先停旧的
+    if _watch_stop is not None:
+        _watch_stop.set()
+    _watch_stop = threading.Event()
+    stop = _watch_stop
+    target = _watch_inotify if _has_inotifywait() else _watch_poll
+    _watch_thread = threading.Thread(target=target, args=(root, stop), daemon=True)
+    _watch_thread.start()
+    _send({"id": rid, "ok": True, "result": {"watching": root,
+           "mode": "inotify" if _has_inotifywait() else "poll"}})
+
+
+def op_unwatch(a, rid):
+    global _watch_stop
+    if _watch_stop is not None:
+        _watch_stop.set()
+        _watch_stop = None
+    _send({"id": rid, "ok": True, "result": {}})
+
+
 OPS = {
     "ping": op_ping, "stat": op_stat, "readdir": op_readdir,
     "read_file": op_read_file, "read_bytes": op_read_bytes,
@@ -238,12 +348,20 @@ def _handle(req):
     _last_activity = time.time()
     rid = req.get("id")
     op = req.get("op")
+    args = req.get("args") or {}
+    # watch/unwatch 需要 rid 且自管线程,单独处理
+    if op == "watch":
+        op_watch(args, rid)
+        return
+    if op == "unwatch":
+        op_unwatch(args, rid)
+        return
     fn = OPS.get(op)
     if fn is None:
         _send({"id": rid, "ok": False, "error": "unknown op: %s" % op})
         return
     try:
-        result = fn(req.get("args") or {})
+        result = fn(args)
         _send({"id": rid, "ok": True, "result": result})
     except Exception as e:
         _send({"id": rid, "ok": False, "error": str(e)})

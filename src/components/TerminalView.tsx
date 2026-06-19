@@ -2,10 +2,12 @@ import {
   forwardRef,
   useEffect,
   useImperativeHandle,
-  useRef
+  useRef,
+  useState
 } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { RotateCw } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import {
   onTermExit,
@@ -87,6 +89,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const hostRef = useRef<HTMLDivElement>(null)
     const termRef = useRef<Terminal | null>(null)
     const fitRef = useRef<FitAddon | null>(null)
+    // 断线后显示「重连」覆盖层
+    const [exited, setExited] = useState(false)
+    // 重连用:持有重启 PTY 会话的函数(由 effect 内赋值)
+    const restartRef = useRef<(() => void) | null>(null)
     // cwd / env / initialCommand 只在启动时读取一次,用 ref 持有,
     // 避免 prop 身份变化触发终端重挂载(切换全局目录不应重启已开的终端)。
     const cwdRef = useRef(cwd)
@@ -144,22 +150,35 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 用户在终端里键入 → 写回 PTY
       const dataSub = term.onData((d) => termWrite(id, d))
 
-      // 启动 PTY 会话 + 订阅输出
-      ;(async () => {
-        unlistenOut = await onTermOutput(id, (bytes) => {
-          if (!disposed) term.write(bytes)
-        })
-        unlistenExit = await onTermExit(id, () => {
-          if (!disposed) term.write('\r\n\x1b[90m[进程已退出]\x1b[0m\r\n')
-        })
-        await termStart(id, term.cols, term.rows, {
+      // 启动(或重启)PTY 会话:重连时复用同一函数。
+      const start = (): void => {
+        setExited(false)
+        void termStart(id, term.cols, term.rows, {
           cwd: cwdRef.current,
           env: envRef.current,
           initialCommand: initCmdRef.current,
           host: hostRef2.current,
           identity: identityRef.current
+        }).then(() => term.focus())
+      }
+      restartRef.current = () => {
+        if (disposed) return
+        term.write('\r\n\x1b[90m[重连中…]\x1b[0m\r\n')
+        start()
+      }
+
+      // 订阅输出 + 退出(断线/进程结束 → 显示「重连」覆盖层)
+      ;(async () => {
+        unlistenOut = await onTermOutput(id, (bytes) => {
+          if (!disposed) term.write(bytes)
         })
-        term.focus()
+        unlistenExit = await onTermExit(id, () => {
+          if (!disposed) {
+            term.write('\r\n\x1b[90m[连接已断开]\x1b[0m\r\n')
+            setExited(true)
+          }
+        })
+        start()
       })()
 
       // 尺寸自适应:容器变化时 fit + 同步 PTY
@@ -197,7 +216,22 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id])
 
-    return <div ref={hostRef} className="h-full w-full px-3 pt-2" />
+    return (
+      <div className="relative h-full w-full">
+        <div ref={hostRef} className="h-full w-full px-3 pt-2" />
+        {exited && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+            <button
+              onClick={() => restartRef.current?.()}
+              className="pointer-events-auto flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[12.5px] text-canvas shadow-card hover:opacity-90"
+            >
+              <RotateCw size={13} />
+              重连
+            </button>
+          </div>
+        )}
+      </div>
+    )
   }
 )
 

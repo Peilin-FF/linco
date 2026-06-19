@@ -38,13 +38,17 @@ pub fn ssh_opts() -> Vec<String> {
         "-o".into(),
         format!("ControlPath={}", cp.to_string_lossy()),
         "-o".into(),
-        "ControlPersist=600".into(),
+        // master 空闲后多保留(从 10 分钟拉长到 1 小时),减少"放一会就要重连"
+        "ControlPersist=3600".into(),
         "-o".into(),
-        "ServerAliveInterval=30".into(),
+        // 每 15s 发保活探测;连续 8 次(=2 分钟)无响应才判定断开。
+        // 比原来(30s×3=90s)更能扛网络抖动/路由器空闲掐连接。
+        "ServerAliveInterval=15".into(),
         "-o".into(),
-        "ServerAliveCountMax=3".into(),
+        "ServerAliveCountMax=8".into(),
         "-o".into(),
-        "TCPKeepAlive=no".into(),
+        // 开 TCP keepalive:让 OS 也发保活包,帮助探测/维持死连接
+        "TCPKeepAlive=yes".into(),
         "-o".into(),
         "ConnectTimeout=15".into(),
     ]
@@ -1043,8 +1047,9 @@ mod tests {
     fn ssh_opts_has_control_and_keepalive() {
         let o = ssh_opts().join(" ");
         assert!(o.contains("ControlMaster=auto"));
-        assert!(o.contains("ControlPersist=600"));
-        assert!(o.contains("ServerAliveInterval=30"));
+        assert!(o.contains("ControlPersist=3600"));
+        assert!(o.contains("ServerAliveInterval=15"));
+        assert!(o.contains("ServerAliveCountMax=8"));
         assert!(o.contains("ConnectTimeout=15"));
     }
 

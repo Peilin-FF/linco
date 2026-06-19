@@ -3,6 +3,13 @@ import { Save, FileText } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { githubLight } from '@uiw/codemirror-theme-github'
 import type { Extension } from '@codemirror/state'
+import { keymap } from '@codemirror/view'
+import {
+  defaultKeymap,
+  historyKeymap,
+  indentWithTab
+} from '@codemirror/commands'
+import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { python } from '@codemirror/lang-python'
 import { json } from '@codemirror/lang-json'
 import { javascript } from '@codemirror/lang-javascript'
@@ -12,6 +19,18 @@ import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
 import { yaml } from '@codemirror/lang-yaml'
 import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
+
+// VS Code 式编辑能力(显式接入,不依赖 basicSetup 默认):
+//   ⌘F 查找 / ⌘⌥F 替换(search panel)、⌘G 下一个、⇧⌘G 上一个
+//   ⌘/ 切换行注释、⇧⌥A 块注释(defaultKeymap 内含 toggleComment 绑到 mod-/)
+//   移动行 ⌥↑↓、复制行 ⇧⌥↓、缩进 ⌘]/⌘[、多光标 ⌘D、跳行 ⌃G —— 均在 defaultKeymap
+//   Tab 缩进(indentWithTab)、撤销重做(historyKeymap)
+//   选中词高亮其它出现处(highlightSelectionMatches)
+const EDIT_EXTENSIONS: Extension[] = [
+  search({ top: true }),
+  highlightSelectionMatches(),
+  keymap.of([...searchKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab])
+]
 
 interface FileEditorProps {
   path: string
@@ -67,7 +86,10 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
   const [saving, setSaving] = useState(false)
   const savedRef = useRef('')
 
-  const extensions = useMemo(() => langFor(baseName(path)), [path])
+  const extensions = useMemo(
+    () => [...EDIT_EXTENSIONS, ...langFor(baseName(path))],
+    [path]
+  )
 
   useEffect(() => {
     let alive = true
@@ -160,7 +182,11 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
               lineNumbers: true,
               highlightActiveLine: true,
               foldGutter: true,
-              tabSize: 2
+              tabSize: 2,
+              // 自带 keymap 关掉,改用上面显式接入的(避免重复绑定/冲突)
+              defaultKeymap: false,
+              searchKeymap: false,
+              historyKeymap: false
             }}
             style={{ fontSize: 13, height: '100%' }}
           />
