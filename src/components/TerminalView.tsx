@@ -82,10 +82,17 @@ interface TerminalViewProps {
   /** 远程主机(user@ip 或 ssh config 别名);空=本地 */
   host?: string
   identity?: string
+  /** 每次该会话有 PTY 输出时回调(供会话总览侧栏判忙/空闲) */
+  onActivity?: (id: string) => void
+  /** 会话退出(PTY 结束)时回调 */
+  onExit?: (id: string) => void
 }
 
 const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
-  function TerminalView({ id, cwd, env, initialCommand, host, identity }, ref) {
+  function TerminalView(
+    { id, cwd, env, initialCommand, host, identity, onActivity, onExit },
+    ref
+  ) {
     const hostRef = useRef<HTMLDivElement>(null)
     const termRef = useRef<Terminal | null>(null)
     const fitRef = useRef<FitAddon | null>(null)
@@ -100,11 +107,16 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const initCmdRef = useRef(initialCommand)
     const hostRef2 = useRef(host)
     const identityRef = useRef(identity)
+    // 回调用 ref 持有,避免父组件每次重渲染传新函数触发终端重挂载。
+    const onActivityRef = useRef(onActivity)
+    const onExitRef = useRef(onExit)
     hostRef2.current = host
     identityRef.current = identity
     cwdRef.current = cwd
     envRef.current = env
     initCmdRef.current = initialCommand
+    onActivityRef.current = onActivity
+    onExitRef.current = onExit
 
     useImperativeHandle(ref, () => ({
       send: (text: string) => {
@@ -174,12 +186,16 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 订阅输出 + 退出(断线/进程结束 → 显示「重连」覆盖层)
       ;(async () => {
         unlistenOut = await onTermOutput(id, (bytes) => {
-          if (!disposed) term.write(bytes)
+          if (!disposed) {
+            term.write(bytes)
+            onActivityRef.current?.(id) // 上报活动 → 侧栏判忙/空闲
+          }
         })
         unlistenExit = await onTermExit(id, () => {
           if (!disposed) {
             term.write('\r\n\x1b[90m[连接已断开]\x1b[0m\r\n')
             setExited(true)
+            onExitRef.current?.(id)
           }
         })
         start()

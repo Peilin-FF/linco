@@ -109,10 +109,15 @@ pub fn preview_start(app: AppHandle) -> Result<u16, String> {
                 .with_header(
                     tiny_http::Header::from_bytes(
                         &b"Cache-Control"[..],
-                        // 渲染引擎资源(notebook.js/css、2MB mathjax)不变 → 让 WebView
-                        // 永久缓存,避免每次刷新/保存都重传重解析(白屏主因)。
-                        // HTML 文档本身可变 → no-cache,保证热刷新拿到新内容。
-                        if path.starts_with("/__assets/") {
+                        // 缓存策略分两类:
+                        // - 会迭代的引擎(notebook.css/js)→ no-cache:每次回服务器校验,
+                        //   改了组件样式立即生效,不被 WebView 永久缓存钉死(旧样式不更新的根因)。
+                        // - 真正不变的大资源(mathjax/katex/字体)→ immutable 永久缓存,
+                        //   避免 2MB 每次重传重解析(白屏主因)。
+                        // - HTML 文档本身可变 → no-cache,保证热刷新拿到新内容。
+                        if path.starts_with("/__assets/")
+                            && !path.starts_with("/__assets/notebook.")
+                        {
                             &b"public, max-age=31536000, immutable"[..]
                         } else {
                             &b"no-cache"[..]
@@ -529,6 +534,7 @@ fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
         Some(p) => p,
         None => return err("path escapes root"),
     };
+    eprintln!("[__save] root={root:?} rel={rel:?} abs={abs:?} host={host:?}");
 
     // 算出要写入的内容
     let out: String = if let Some(seed) = payload.get("seed") {

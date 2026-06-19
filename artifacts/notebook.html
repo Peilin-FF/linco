@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">组件渲染自检 · COMPONENT SHOWCASE</div><h1>全组件渲染检查</h1><p class=\"lede\">下面每个区块用一种组件;逐个核对样式是否正确。配色应为 ivory 底 / clay 焦点 / olive 正面。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>1. 基础排版</h2><p>普通段落,行内 <code>code</code>、<strong>加粗</strong>、<a href=\"#\">链接</a>。下面是引用与代码块:</p><blockquote>这是 blockquote 引用。</blockquote><pre><code>def hello():\n    return 1  # pre 代码块</code></pre>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>2. eyebrow / lede / tag</h2><div class=\"eyebrow\">EYEBROW 眉标</div><p class=\"lede\">lede 大号导语段落。</p><span class=\"tag\">TAG 标签</span>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>3. badge / chip(配色)</h2><p><span class=\"badge\">默认</span> <span class=\"badge new\">NEW</span> <span class=\"badge add\">ADD</span> <span class=\"badge del\">DEL</span> <span class=\"badge warn\">WARN</span> <span class=\"badge info\">INFO</span></p><p><span class=\"chip ok\">chip ok</span> <span class=\"chip bad\">chip bad</span> <span class=\"chip warn\">chip warn</span> <span class=\"chip info\">chip info</span></p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>4. card / callout</h2><div class=\"card\">这是 <b>card</b> 卡片:白底、灰边、圆角。</div><div class=\"callout\">这是 <b>callout</b>:左侧 clay 竖条。</div><div class=\"callout olive\">callout olive:左条变 olive。</div><div class=\"callout rec\"><div class=\"callout-h\">推荐结论(callout rec)</div>clay 强调底,用于给建议。</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>5. stat-grid 指标卡</h2><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">128</div><div class=\"stat-label\">PASSED</div><div class=\"stat-delta up\">+12</div></div><div class=\"stat-card\"><div class=\"stat-num\">7</div><div class=\"stat-label\">FAILED</div><div class=\"stat-delta down\">-3</div></div><div class=\"stat-card\"><div class=\"stat-num\">94%</div><div class=\"stat-label\">COVERAGE</div></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>6. pro / con 双栏</h2><div class=\"procon\"><div class=\"pros\"><b>优点</b><ul><li>实现简单</li><li>无新依赖</li></ul></div><div class=\"cons\"><b>缺点</b><ul><li>耦合稍高</li><li>需补测试</li></ul></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>7. grid 网格(col-3)</h2><div class=\"grid col-3\"><div class=\"card\">A</div><div class=\"card\">B</div><div class=\"card\">C</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>8. flex 并排(旧)</h2><div class=\"flex\"><div class=\"card\">左</div><div class=\"card\">右</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>9. toc 锚点药丸</h2><div class=\"toc\"><a href=\"#a\">概述</a><a href=\"#b\">设计</a><a href=\"#c\">实现</a><a href=\"#d\">验证</a></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>10. details 折叠</h2><details><summary>点我展开</summary><p>折叠内容:clay 三角,展开后显示。</p></details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>11. file-diff(PR 文件 diff 卡)</h2><div class=\"file-diff\"><div class=\"fd-head\"><span class=\"fd-path\">src/auth.ts</span><span class=\"fd-stat\"><span class=\"a\">+12</span> <span class=\"d\">-3</span></span></div><pre class=\"diff\"><span class=\"dl hunk\">@@ -10,7 +10,9 @@ function login()</span><span class=\"dl ctx\">const u = getUser()</span><span class=\"dl del\">return u.token</span><span class=\"dl add\">if (!u) throw new Error()</span><span class=\"dl add\">return u.token</span></pre></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>12. review 批注气泡</h2><div class=\"review\"><div class=\"avatar\">A</div><div class=\"bubble\"><div class=\"who\">Alice</div>这里建议加一个空值检查。</div></div><div class=\"review blocking\"><div class=\"avatar\">B</div><div class=\"bubble\"><div class=\"who\">Bob · blocking</div>合并前必须补单测(左条变 clay)。</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>13. summary-band 概要带</h2><div class=\"summary-band\"><div><span class=\"k\">状态</span>进行中</div><div><span class=\"k\">负责人</span>张三</div><div><span class=\"k\">截止</span>6/30</div><div><span class=\"k\">风险</span><span class=\"risk-dot med\"></span>中</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>14. risk-dot 风险点</h2><p><span class=\"risk-dot high\"></span>高风险 &nbsp; <span class=\"risk-dot med\"></span>中风险 &nbsp; <span class=\"risk-dot low\"></span>低风险</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>15. timeline 时间线</h2><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">10:00</div><div class=\"tl-body\">收到告警,开始排查。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">10:18</div><div class=\"tl-body\">定位到数据库连接池耗尽。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">10:32</div><div class=\"tl-body\">扩容连接池,服务恢复。</div></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>16. legend / win / bad</h2><div class=\"legend\"><span><span class=\"sw\" style=\"background:var(--olive)\"></span>通过</span><span><span class=\"sw\" style=\"background:var(--clay)\"></span>失败</span></div><p>结论:<span class=\"win\">推荐方案 A</span>,<span class=\"bad\">不建议方案 B</span>。</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>17. 数学公式(KaTeX)</h2><p>行内 $E=mc^2$,块级:</p><p>$$\\mathcal{L}=-\\sum_i \\log p(y_i)$$</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "组件",
+      "用途",
+      "状态"
+    ],
+    "rows": [
+      [
+        "file-diff",
+        "PR 文件改动",
+        "✓"
+      ],
+      [
+        "timeline",
+        "时间线",
+        "✓"
+      ],
+      [
+        "stat-card",
+        "指标",
+        "✓"
+      ]
+    ]
+  },
+  {
+    "type": "md",
+    "text": "## 我的需求\n\n帮我对比一下 REST 和 GraphQL,该选哪个?"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"answer\"><p>看你的场景,简述如下,结论见底部。</p><div class=\"procon\"><div class=\"pros\"><b>GraphQL</b><ul><li>按需取字段</li><li>单端点</li></ul></div><div class=\"cons\"><b>REST</b><ul><li>缓存简单</li><li>生态成熟</li></ul></div></div><div class=\"callout rec\"><div class=\"callout-h\">建议</div>多端、字段多变选 GraphQL;简单 CRUD 选 REST。</div></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

@@ -16,6 +16,7 @@ import ChatInput from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'
 import AgentTaskOutput from './components/AgentTaskOutput'
+import SessionRail, { type RailSession, type SessionStatus } from './components/SessionRail'
 import Settings from './components/Settings'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
@@ -133,6 +134,11 @@ export default function App(): JSX.Element {
   // 底部对话框转发到当前活动会话。
   const chatRefs = useRef<Map<string, TerminalHandle>>(new Map())
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
+  // 会话忙/空闲:id → 最近一次 PTY 输出的时间戳;退出的 id 收进 exitedSet。
+  // 供右侧「会话总览侧栏」判忙(近 3s 有输出)/空闲/已结束。
+  const sessionActivityRef = useRef<Map<string, number>>(new Map())
+  const [exitedSessions, setExitedSessions] = useState<Set<string>>(new Set())
+  const [activityTick, setActivityTick] = useState(0) // ~1s 心跳,驱动忙/空闲重算
 
   // 独立终端列表(可多开)
   const [shells, setShells] = useState<Shell[]>([])
@@ -304,6 +310,51 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId])
 
+  // 会话忙/空闲心跳:每 1s tick 一次,驱动侧栏重算(近 3s 有输出=忙)。
+  useEffect(() => {
+    const t = window.setInterval(() => setActivityTick((n) => n + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [])
+
+  // 某会话有 PTY 输出 → 记时间戳(忙);若它之前被标记已退出,重新有输出则清除退出态。
+  const markActivity = (sid: string): void => {
+    sessionActivityRef.current.set(sid, Date.now())
+    setExitedSessions((prev) => {
+      if (!prev.has(sid)) return prev
+      const next = new Set(prev)
+      next.delete(sid)
+      return next
+    })
+  }
+  const markExited = (sid: string): void => {
+    setExitedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)))
+  }
+
+  // 连接显示名:'local' → 本地;否则取连接的 name/host。
+  const connName = (cid: string): string => {
+    if (cid === 'local') return '本地'
+    const c = config?.connections.find((x) => x.id === cid)
+    return c?.name || c?.host || cid
+  }
+
+  // 派生侧栏会话列表(忙/空闲/已结束)。依赖 activityTick 周期性重算。
+  const railSessions: RailSession[] = useMemo(() => {
+    void activityTick // 触发重算
+    const now = Date.now()
+    return chatSessions.map((s) => {
+      let status: SessionStatus
+      if (exitedSessions.has(s.id)) {
+        status = 'exited'
+      } else {
+        const last = sessionActivityRef.current.get(s.id) ?? 0
+        status = now - last < 3000 ? 'busy' : 'idle'
+      }
+      const proj = s.cwd ? s.cwd.replace(/\/+$/, '').split('/').pop() || s.cwd : '—'
+      return { id: s.id, connId: s.connId, connName: connName(s.connId), project: proj, status }
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatSessions, exitedSessions, activityTick, config])
+
   const handleConfigChange = (next: AppConfig): void => {
     setConfig(next)
     saveConfig(next).catch((e) => console.error('保存配置失败', e))
@@ -351,6 +402,33 @@ export default function App(): JSX.Element {
     console.log('[switch] → connection', id, 'at', performance.now().toFixed(0))
     setConnState('connecting')
     handleConfigChange({ ...config, activeConnection: id })
+  }
+
+  // 从侧栏点某会话卡片 → 直接切回该会话(连接 + 项目 cwd 都还原),并切到对话视图。
+  // activeChatId = chat:connId:agentId:cwd,所以要同时把 activeConnection 和该连接的
+  // cwd 设回会话当时的值,组合才会命中这个常驻会话。
+  const jumpToSession = (sid: string): void => {
+    if (!config) return
+    const sess = chatSessions.find((s) => s.id === sid)
+    if (!sess) return
+    setView('chat')
+    if (sess.connId === 'local') {
+      setConnState('idle')
+      handleConfigChange({
+        ...config,
+        activeConnection: '',
+        cwd: sess.cwd ?? config.cwd
+      })
+    } else {
+      setConnState('connecting')
+      handleConfigChange({
+        ...config,
+        activeConnection: sess.connId,
+        connections: config.connections.map((c) =>
+          c.id === sess.connId ? { ...c, cwd: sess.cwd ?? c.cwd } : c
+        )
+      })
+    }
   }
 
   // 从 ~/.ssh/config 主机一键连接:创建一个连接并激活
@@ -570,6 +648,8 @@ export default function App(): JSX.Element {
                 initialCommand={s.command}
                 host={s.host}
                 identity={s.identity}
+                onActivity={markActivity}
+                onExit={markExited}
               />
             </div>
           ))}
@@ -754,8 +834,10 @@ export default function App(): JSX.Element {
       </div>
 
       {/* 底部对话框:常驻所有视图,始终与「对话」会话通信。
-          输入/提交不切换当前视图(想看对话自己点「对话」)。 */}
-      <div className="shrink-0 px-1.5 pb-1.5">
+          输入/提交不切换当前视图(想看对话自己点「对话」)。
+          对话框居中(max-w-820);右侧空白区浮一个「会话总览侧栏」,
+          列出所有机器×项目的 agent 会话(忙/空闲),点击直达——不挤压对话框宽度。 */}
+      <div className="relative shrink-0 px-1.5 pb-1.5">
         <div className="mx-auto w-full max-w-[820px]">
           <ChatInput
             onSend={handleSend}
@@ -777,6 +859,20 @@ export default function App(): JSX.Element {
             }}
           />
         </div>
+        {/* 会话总览侧栏:在对话框右边缘到屏幕右边之间的「空白区」水平居中。
+            左边界 = 居中对话框(max-w-820)的右边缘(中线+410px);该容器铺满到屏幕右边,
+            内部 flex 居中放侧栏。与对话框等高(inset-y);窄屏 xl 以下隐藏。一屏约 3 个,超出滚动。 */}
+        {railSessions.length > 0 && (
+          <div className="pointer-events-none absolute bottom-1.5 right-0 top-0 hidden left-[calc(50%_+_410px)] items-stretch justify-center xl:flex">
+            <div className="pointer-events-auto w-[176px] overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+              <SessionRail
+                sessions={railSessions}
+                activeId={activeChatId}
+                onJump={jumpToSession}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 底部停靠终端(VS Code 式):放在对话框下方。干净的普通终端——

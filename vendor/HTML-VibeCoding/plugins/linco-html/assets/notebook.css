@@ -64,6 +64,107 @@
   .rendered .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;margin:6px 0} .rendered .legend span{display:inline-flex;align-items:center;gap:5px}
   .rendered .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
   .rendered .win{color:var(--olive);font-weight:700} .rendered .bad{color:var(--clay);font-weight:700}
+
+  /* ========================================================================
+     内容组件库(html cell 直接写 <div class="..."> 即用,样式全在此,无需内联 style)
+     全部在 .rendered 作用域;沿用设计 token。出处:html-effectiveness 画廊。
+     ======================================================================== */
+
+  /* —— 眉标/标题区 —— */
+  .rendered .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--g500);margin-bottom:4px}
+  .rendered .lede{font-size:16.5px;color:var(--g700);line-height:1.6;margin:6px 0 14px}
+
+  /* —— badge / chip:小标签。颜色修饰:new/add=olive, del/bad=clay, info=slate, warn=oat —— */
+  .rendered .badge,.rendered .chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.02em;padding:2px 9px;border-radius:999px;border:1.5px solid var(--g300);background:var(--paper);color:var(--g700);line-height:1.5}
+  .rendered .badge.new,.rendered .badge.add,.rendered .chip.ok{border-color:var(--olive);color:var(--olive);background:#F3F6EE}
+  .rendered .badge.del,.rendered .badge.bad,.rendered .chip.bad{border-color:var(--clay);color:var(--clay-d);background:#FBEEE9}
+  .rendered .badge.warn,.rendered .chip.warn{border-color:#C99A5B;color:#9A6B28;background:#FAF3E6}
+  .rendered .badge.info,.rendered .chip.info{border-color:var(--slate);color:var(--slate);background:var(--g100)}
+
+  /* —— stat-card 指标卡(网格用 .stat-grid 包裹)—— */
+  .rendered .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:12px 0}
+  .rendered .stat-card{background:var(--paper);border:1.5px solid var(--g300);border-radius:12px;padding:14px 16px}
+  .rendered .stat-num{font-family:var(--serif);font-size:30px;font-weight:500;color:var(--slate);line-height:1.1}
+  .rendered .stat-label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--g500);margin-top:4px}
+  .rendered .stat-delta{font-size:12.5px;font-weight:600;margin-top:6px}
+  .rendered .stat-delta.up{color:var(--olive)} .rendered .stat-delta.down{color:var(--clay-d)}
+
+  /* —— 推荐 callout(强调结论):.callout.rec 用 clay 实心左条 + 浅底 —— */
+  .rendered .callout.rec{border-left-width:4px;border-left-color:var(--clay);background:#FBF3EE}
+  .rendered .callout.olive{border-left-color:var(--olive);background:#F3F6EE}
+  .rendered .callout .callout-h{font-weight:700;color:var(--slate);margin-bottom:4px}
+
+  /* —— answer 回应块:agent 对「用户需求 md cell」的就地答复,放在该需求 cell 紧下方。
+     olive 左条 + 顶部「⤷ 回应」小标,与用户需求(普通 md)视觉区分。答复正文用其它组件填充。 —— */
+  .rendered .answer{border:1.5px solid var(--g300);border-left:4px solid var(--olive);border-radius:0 13px 13px 0;background:#FCFCFA;padding:12px 18px;margin:10px 0}
+  .rendered .answer::before{content:"\2937 回应";display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--olive);font-weight:700;margin-bottom:8px}
+  .rendered .answer>:first-of-type{margin-top:0} .rendered .answer>:last-child{margin-bottom:0}
+
+  /* —— pro/con 双栏 —— */
+  .rendered .procon{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+  @media(max-width:680px){.rendered .procon{grid-template-columns:1fr}}
+  .rendered .pros,.rendered .cons{border:1.5px solid var(--g300);border-radius:12px;padding:12px 16px;background:var(--paper)}
+  .rendered .pros{border-top:3px solid var(--olive)} .rendered .cons{border-top:3px solid var(--clay)}
+  .rendered .pros li,.rendered .cons li{list-style:none;margin:6px 0;padding-left:20px;position:relative;font-size:14px}
+  .rendered .pros li::before{content:"+";position:absolute;left:2px;color:var(--olive);font-weight:700}
+  .rendered .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--clay);font-weight:700}
+  .rendered .pros ul,.rendered .cons ul{margin:0;padding:0}
+
+  /* —— grid 通用网格(比 .flex 精细;col-2/col-3 控制列数)—— */
+  .rendered .grid{display:grid;gap:14px;margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .rendered .grid.col-2{grid-template-columns:repeat(2,1fr)} .rendered .grid.col-3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:680px){.rendered .grid.col-2,.rendered .grid.col-3{grid-template-columns:1fr}}
+
+  /* —— toc 锚点药丸(长页导航)—— */
+  .rendered .toc{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .rendered .toc a{font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--g700);border:1.5px solid var(--g300);border-radius:999px;padding:3px 12px;background:var(--paper)}
+  .rendered .toc a:hover{border-color:var(--clay);color:var(--clay)}
+
+  /* —— details 折叠增强 —— */
+  .rendered details{border:1.5px solid var(--g300);border-radius:10px;padding:8px 14px;margin:10px 0;background:var(--paper)}
+  .rendered details>summary{cursor:pointer;font-weight:600;color:var(--slate);list-style:none}
+  .rendered details>summary::-webkit-details-marker{display:none}
+  .rendered details>summary::before{content:"\25B8 ";color:var(--clay)}
+  .rendered details[open]>summary::before{content:"\25BE "}
+
+  /* ========== PR / diff 组件 ========== */
+  /* file-diff 卡:文件头(路径 + 增删统计)+ diff 体 */
+  .rendered .file-diff{border:1.5px solid var(--g300);border-radius:12px;overflow:hidden;margin:12px 0}
+  .rendered .file-diff .fd-head{display:flex;align-items:center;gap:10px;background:var(--g100);border-bottom:1.5px solid var(--g300);padding:8px 14px;font-family:var(--mono);font-size:12.5px}
+  .rendered .file-diff .fd-path{color:var(--slate);font-weight:600}
+  .rendered .file-diff .fd-stat{margin-left:auto;font-size:11.5px}
+  .rendered .file-diff .fd-stat .a{color:var(--olive);font-weight:700} .rendered .file-diff .fd-stat .d{color:var(--clay);font-weight:700}
+  /* diff 体:用 <pre class="diff"> 内每行 <span class="dl add/del/ctx/hunk"> */
+  .rendered pre.diff{background:var(--codebg);color:var(--codefg);margin:0;padding:10px 0;border-radius:0;font-size:12.5px;line-height:1.6}
+  .rendered pre.diff .dl{display:block;padding:0 14px;white-space:pre-wrap;word-break:break-word}
+  .rendered pre.diff .dl.add{background:rgba(120,140,93,.18);color:#cfe3b4}
+  .rendered pre.diff .dl.add::before{content:"+ ";color:#9fd17a}
+  .rendered pre.diff .dl.del{background:rgba(217,119,87,.18);color:#f0b59e}
+  .rendered pre.diff .dl.del::before{content:"- ";color:#e5896f}
+  .rendered pre.diff .dl.ctx::before{content:"  "}
+  .rendered pre.diff .dl.hunk{color:#8ab4d6;background:rgba(138,180,214,.12)}
+  /* review 批注气泡 */
+  .rendered .review{display:flex;gap:10px;margin:10px 0;align-items:flex-start}
+  .rendered .review .avatar{flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:var(--clay);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700}
+  .rendered .review .bubble{flex:1;border:1.5px solid var(--g300);border-radius:10px;padding:9px 13px;background:var(--paper);font-size:14px}
+  .rendered .review .bubble .who{font-weight:700;color:var(--slate);font-size:13px;margin-bottom:3px}
+  .rendered .review.blocking .bubble{border-left:3px solid var(--clay)}
+
+  /* ========== 时间线 / 状态报告组件 ========== */
+  /* summary-band 概要带:页首关键信息横条 */
+  .rendered .summary-band{display:flex;flex-wrap:wrap;gap:18px;align-items:center;background:var(--g100);border:1.5px solid var(--g300);border-radius:12px;padding:12px 18px;margin:12px 0}
+  .rendered .summary-band>div{font-size:13.5px} .rendered .summary-band .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--g500);display:block}
+  /* risk/severity 彩点:<span class="risk-dot high/med/low"> */
+  .rendered .risk-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+  .rendered .risk-dot.high{background:var(--clay)} .rendered .risk-dot.med{background:#C99A5B} .rendered .risk-dot.low{background:var(--olive)}
+  /* timeline 时间线:<div class="timeline"> 内 <div class="tl-entry"><div class="tl-time">..</div><div class="tl-body">..</div></div> */
+  .rendered .timeline{position:relative;margin:12px 0;padding-left:22px}
+  .rendered .timeline::before{content:"";position:absolute;left:6px;top:4px;bottom:4px;width:2px;background:var(--g300)}
+  .rendered .tl-entry{position:relative;margin:0 0 14px}
+  .rendered .tl-entry::before{content:"";position:absolute;left:-19px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--clay);box-shadow:0 0 0 3px var(--ivory)}
+  .rendered .tl-time{font-family:var(--mono);font-size:11px;color:var(--g500)}
+  .rendered .tl-body{font-size:14px;color:var(--g700);margin-top:2px}
+
   .rendered table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13.5px}
   .rendered th,.rendered td{border:1px solid var(--g300);padding:6px 9px;text-align:center}
   .rendered th{background:var(--g100);font-weight:600;color:var(--slate)}
