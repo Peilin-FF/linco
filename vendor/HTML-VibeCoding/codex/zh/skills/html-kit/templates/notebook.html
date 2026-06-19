@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"md","text":"# 标题\n\n正文 markdown。"},
+  {"type":"html","html":"<div class=\"callout\"><b>HTML 块</b>：卡片 / callout / 并排 / 彩表 / 代码面板。</div>"},
+  {"type":"table","head":["列A","列B"],"rows":[["1","2"]]}
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

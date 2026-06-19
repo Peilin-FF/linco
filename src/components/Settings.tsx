@@ -2,13 +2,7 @@ import { useState } from 'react'
 import {
   ArrowLeft,
   SlidersHorizontal,
-  Code2,
   Server,
-  Wand2,
-  Network,
-  Puzzle,
-  TerminalSquare,
-  ShieldCheck,
   BarChart3,
   Rocket,
   Cloud
@@ -19,26 +13,14 @@ import Connections from './settings/Connections'
 
 type SectionId =
   | 'general'
-  | 'preview'
   | 'model'
   | 'connections'
-  | 'skills'
-  | 'mcp'
-  | 'plugins'
-  | 'commands'
-  | 'index'
   | 'usage'
 
 const NAV: { id: SectionId; label: string; icon: typeof SlidersHorizontal }[] = [
   { id: 'general', label: '常规', icon: SlidersHorizontal },
-  { id: 'preview', label: '代码预览', icon: Code2 },
   { id: 'model', label: '模型设置', icon: Server },
   { id: 'connections', label: '连接', icon: Cloud },
-  { id: 'skills', label: '技能', icon: Wand2 },
-  { id: 'mcp', label: 'MCP 服务器', icon: Network },
-  { id: 'plugins', label: '插件管理', icon: Puzzle },
-  { id: 'commands', label: '命令', icon: TerminalSquare },
-  { id: 'index', label: '索引库', icon: ShieldCheck },
   { id: 'usage', label: '使用统计', icon: BarChart3 }
 ]
 

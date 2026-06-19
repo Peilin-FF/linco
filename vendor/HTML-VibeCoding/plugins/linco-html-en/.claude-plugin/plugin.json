@@ -1,0 +1,8 @@
+{
+  "name": "linco-html-en",
+  "version": "1.0.0",
+  "description": "Interact via self-contained HTML by default. Each session auto-starts the artifacts preview server (with hot reload) and injects the workflow rule 'substantive deliverables default to a single self-contained HTML file', plus a unified design kit. Linco's preview engine (notebook.js/katex) assets also live under this plugin.",
+  "author": {
+    "name": "fengpeilin"
+  }
+}

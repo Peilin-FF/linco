@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"md","text":"# Title\n\nBody markdown."},
+  {"type":"html","html":"<div class=\"callout\"><b>HTML block</b>: cards / callouts / side-by-side / colored tables / code panels.</div>"},
+  {"type":"table","head":["Col A","Col B"],"rows":[["1","2"]]}
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

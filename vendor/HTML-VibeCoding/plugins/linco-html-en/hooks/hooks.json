@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/html-session-start.sh\"",
+            "timeout": 15,
+            "statusMessage": "Starting HTML preview workflow…"
+          }
+        ]
+      }
+    ]
+  }
+}

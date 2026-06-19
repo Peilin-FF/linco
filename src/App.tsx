@@ -8,7 +8,11 @@ import {
   Settings as SettingsIcon,
   Plus,
   Activity,
-  X
+  PanelLeft,
+  PanelLeftClose,
+  X,
+  Download,
+  Loader2
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
@@ -20,6 +24,7 @@ import SessionRail, { type RailSession, type SessionStatus } from './components/
 import Settings from './components/Settings'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
+import LanguagePicker from './components/LanguagePicker'
 import CodeMirrorWarmup from './components/CodeMirrorWarmup'
 import ResizeHandle from './components/ResizeHandle'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -29,7 +34,10 @@ import {
   agentLaunchCommand,
   loadConfig,
   saveConfig,
-  type AppConfig
+  setLanguage,
+  installRemotePlugins,
+  type AppConfig,
+  type AgentConfig
 } from '@/lib/config'
 import {
   sshConfigHosts,
@@ -42,6 +50,8 @@ import {
 import { watchStart, watchStop } from '@/lib/watch'
 import { shadowBeginTurn } from '@/lib/shadow'
 import { agentTasks, type AgentTask } from '@/lib/procs'
+import { check, type Update } from '@tauri-apps/plugin-updater'
+import { relaunch } from '@tauri-apps/plugin-process'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
 
@@ -97,6 +107,10 @@ export default function App(): JSX.Element {
   const [view, setView] = useState<ViewId>('chat')
   const [showSettings, setShowSettings] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [updateError, setUpdateError] = useState<string | null>(null)
   // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
   const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat']))
   // 后台预热:app 就绪后空闲时悄悄把 文件/Git/预览 三视图挂载好(含各自首次
@@ -124,6 +138,11 @@ export default function App(): JSX.Element {
   const [dockHeight, setDockHeight] = useState(110) // 可拖拽调整(默认矮)
   const [chatBoxHeight, setChatBoxHeight] = useState(0) // 对话框输入区额外高度(0=默认)
 
+  // 终端/预览视图的左侧对话分栏:默认打开,可拖宽、可关闭。
+  // 复用同一个对话会话(移动定位,不重挂),边看输出边对话。
+  const [chatSplitOpen, setChatSplitOpen] = useState(true)
+  const [chatWidth, setChatWidth] = useState(380)
+
   // 连接状态
   const [connState, setConnState] = useState<ConnState>('idle')
   const [sshHosts, setSshHosts] = useState<string[]>([])
@@ -133,6 +152,8 @@ export default function App(): JSX.Element {
   // 对话会话:每连接一个,常驻挂载。chatRefs 按 id 持有句柄,
   // 底部对话框转发到当前活动会话。
   const chatRefs = useRef<Map<string, TerminalHandle>>(new Map())
+  // 已给哪些远程 host 装过插件(每 host 一次,避免重复 rsync)
+  const remotePluginsDoneRef = useRef<Set<string>>(new Set())
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([])
   // 会话忙/空闲:id → 最近一次 PTY 输出的时间戳;退出的 id 收进 exitedSet。
   // 供右侧「会话总览侧栏」判忙(近 3s 有输出)/空闲/已结束。
@@ -162,6 +183,36 @@ export default function App(): JSX.Element {
         })
       )
     sshConfigHosts().then(setSshHosts).catch(() => {})
+  }, [])
+
+  // 启动时检查 GitHub release updater；只在发现新版本时显示右上角提示。
+  useEffect(() => {
+    let cancelled = false
+    const runCheck = async (): Promise<void> => {
+      setCheckingUpdate(true)
+      try {
+        const update = await check({ timeout: 8000 })
+        if (!cancelled) {
+          setAvailableUpdate(update)
+          setUpdateError(null)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setUpdateError(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
+        if (!cancelled) setCheckingUpdate(false)
+      }
+    }
+
+    runCheck().catch(() => {})
+    const timer = window.setInterval(() => {
+      runCheck().catch(() => {})
+    }, 6 * 60 * 60 * 1000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [])
 
   // 当前激活的连接(空 = 本地)
@@ -287,6 +338,12 @@ export default function App(): JSX.Element {
   const agentId = defaultAgent?.id || 'agent'
   const activeChatId = `chat:${connId}:${agentId}:${cwd ?? ''}`
 
+  // 左侧对话分栏是否当前生效:开关开 + 存在活动会话 + 在终端/预览视图。
+  // 无活动会话时不留左栏空位。
+  const hasActiveChat = chatSessions.some((s) => s.id === activeChatId)
+  const chatSplitActive =
+    chatSplitOpen && hasActiveChat && (view === 'terminal' || view === 'preview')
+
   // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
   // 每个 连接+agent+工作目录 各一个会话:切到新项目/切 Codex=新会话(agent 在后台
   // 起,不冻 UI);切回访问过的组合=原会话还在(agent 在对话、终端、渲染态全保留),
@@ -360,6 +417,18 @@ export default function App(): JSX.Element {
     saveConfig(next).catch((e) => console.error('保存配置失败', e))
   }
 
+  // 聊天框改默认 agent 的字段(模型/权限/effort)→ 写配置文件。
+  // 这些是启动参数,只写配置;**下次该会话启动**才生效(不重启正在跑的会话)。
+  const patchDefaultAgent = (patch: Partial<AgentConfig>): void => {
+    if (!config || !defaultAgent) return
+    handleConfigChange({
+      ...config,
+      agents: config.agents.map((a) =>
+        a.id === defaultAgent.id ? { ...a, ...patch } : a
+      )
+    })
+  }
+
   // 激活某连接后:尝试静默 connect(key/已有 master)。
   // 成功 → connected;失败(需密码/2FA)→ 切到终端视图交互连接。
   const tryConnect = async (h: string, identity?: string): Promise<void> => {
@@ -369,6 +438,11 @@ export default function App(): JSX.Element {
       await sshConnect(h, identity)
       console.log('[switch] sshConnect OK', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
       setConnState('connected')
+      // 连上后把当前语言的插件装到远端 ~/.claude/plugins(每 host 一次,后台、失败静默)。
+      if (!remotePluginsDoneRef.current.has(h)) {
+        remotePluginsDoneRef.current.add(h)
+        installRemotePlugins(h).catch(() => remotePluginsDoneRef.current.delete(h))
+      }
     } catch {
       console.log('[switch] sshConnect FAIL', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
       // 需交互认证:跳到终端,让用户输密码;master 建立后各视图随即可用
@@ -567,6 +641,19 @@ export default function App(): JSX.Element {
     chatRefs.current.get(activeChatId)?.write(data)
   }
 
+  const handleInstallUpdate = async (): Promise<void> => {
+    if (!availableUpdate || installingUpdate) return
+    setInstallingUpdate(true)
+    setUpdateError(null)
+    try {
+      await availableUpdate.downloadAndInstall()
+      await relaunch()
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err))
+      setInstallingUpdate(false)
+    }
+  }
+
   // 配置未加载完成前不渲染
   if (!config) {
     return (
@@ -579,8 +666,12 @@ export default function App(): JSX.Element {
   return (
     <div className="relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">
       <CodeMirrorWarmup />
-      {/* 顶部:视图切换(为 macOS 红绿灯留出左侧空间) */}
-      <div className="drag flex h-11 shrink-0 items-center gap-1 pl-20 pr-3">
+      {/* 顶部:视图切换(为 macOS 红绿灯留出左侧空间)。
+          data-tauri-drag-region + .drag 双保险:Overlay 标题栏下拖动更可靠。 */}
+      <div
+        data-tauri-drag-region
+        className="drag flex h-11 shrink-0 items-center gap-1 pl-20 pr-3"
+      >
         {VIEWS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -602,6 +693,29 @@ export default function App(): JSX.Element {
           </button>
         ))}
         <div className="flex-1" />
+        {availableUpdate && (
+          <button
+            onClick={() => {
+              handleInstallUpdate().catch(() => {})
+            }}
+            disabled={installingUpdate}
+            className="no-drag flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-100 px-2.5 py-1.5 text-[12px] font-medium text-sky-700 shadow-sm ring-1 ring-sky-200 transition-colors hover:bg-sky-200 disabled:cursor-default disabled:opacity-75"
+            title={
+              updateError
+                ? `更新失败: ${updateError}`
+                : checkingUpdate
+                  ? '正在检查更新'
+                  : `安装 Linco ${availableUpdate.version}`
+            }
+          >
+            {installingUpdate ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <Download size={14} />
+            )}
+            <span>{installingUpdate ? '正在更新…' : `新版本 ${availableUpdate.version}`}</span>
+          </button>
+        )}
         <ConnectionPicker
           connections={config.connections}
           activeId={config.activeConnection}
@@ -626,33 +740,77 @@ export default function App(): JSX.Element {
       <div className="min-h-0 flex-1 px-1.5">
         <div className="relative h-full w-full">
           {/* 对话会话(claude agent):每连接一个,常驻挂载、自动启动。
-              切连接=切到另一个常驻会话(不卸载、不重启),切回来还在现场。
-              仅当前活动会话在「对话」视图下可见,其余 opacity-0 隐藏挂载。 */}
-          {chatSessions.map((s) => (
+              定位随视图变(只改 CSS,绝不重挂,PTY 不丢):
+              - 「对话」视图的活动会话 → 铺满中间(inset-0)。
+              - 终端/预览视图且左分栏开 → 缩到左栏(left:0,宽 chatWidth)。
+              - 其余(非活动 / 分栏关 / 文件·Git)→ opacity-0 隐藏挂载。 */}
+          {chatSessions.map((s) => {
+            const isActive = s.id === activeChatId
+            const centered = view === 'chat' && isActive
+            const leftPane = chatSplitActive && isActive
+            const visible = centered || leftPane
+            return (
+              <div
+                key={s.id}
+                style={leftPane ? { width: chatWidth } : undefined}
+                className={`overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
+                  leftPane
+                    ? 'absolute left-0 top-0 bottom-0 z-10 opacity-100'
+                    : 'absolute inset-0 ' +
+                      (visible ? 'z-10 opacity-100' : 'pointer-events-none opacity-0')
+                }`}
+              >
+                <TerminalView
+                  ref={(el) => {
+                    if (el) chatRefs.current.set(s.id, el)
+                    else chatRefs.current.delete(s.id)
+                  }}
+                  id={s.id}
+                  cwd={s.cwd}
+                  env={s.env}
+                  initialCommand={s.command}
+                  host={s.host}
+                  identity={s.identity}
+                  onActivity={markActivity}
+                  onExit={markExited}
+                />
+              </div>
+            )
+          })}
+
+          {/* 左分栏竖向拖拽条:仅分栏生效时显示,左右拖改 chatWidth */}
+          {chatSplitActive && (
             <div
-              key={s.id}
-              className={`absolute inset-0 overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
-                view === 'chat' && s.id === activeChatId
-                  ? 'z-10 opacity-100'
-                  : 'pointer-events-none opacity-0'
-              }`}
+              className="absolute top-0 bottom-0 z-20"
+              style={{ left: chatWidth - 4 }}
             >
-              <TerminalView
-                ref={(el) => {
-                  if (el) chatRefs.current.set(s.id, el)
-                  else chatRefs.current.delete(s.id)
-                }}
-                id={s.id}
-                cwd={s.cwd}
-                env={s.env}
-                initialCommand={s.command}
-                host={s.host}
-                identity={s.identity}
-                onActivity={markActivity}
-                onExit={markExited}
+              <ResizeHandle
+                orientation="vertical"
+                onResize={(dx) =>
+                  setChatWidth((w) =>
+                    Math.max(260, Math.min(window.innerWidth - 360, w + dx))
+                  )
+                }
               />
             </div>
-          ))}
+          )}
+
+          {/* 左分栏开关:终端/预览视图显示(有活动会话时),浮在右侧内容左上角。
+              开时图标=收起左栏,关时=展开左栏。 */}
+          {(view === 'terminal' || view === 'preview') && hasActiveChat && (
+            <button
+              onClick={() => setChatSplitOpen((o) => !o)}
+              title={chatSplitOpen ? '收起对话栏' : '展开对话栏'}
+              className="absolute top-1.5 z-30 rounded-lg bg-canvas/90 p-1.5 text-ink-muted shadow-sm ring-1 ring-black/5 hover:text-ink"
+              style={{ left: (chatSplitActive ? chatWidth : 0) + 8 }}
+            >
+              {chatSplitOpen ? (
+                <PanelLeftClose size={15} />
+              ) : (
+                <PanelLeft size={15} />
+              )}
+            </button>
+          )}
 
           {!remoteDataReady && host && view !== 'chat' && view !== 'terminal' && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-canvas text-[13px] text-ink-faint shadow-card ring-1 ring-black/5">
@@ -662,10 +820,14 @@ export default function App(): JSX.Element {
 
           {/* 终端视图:agent 后台任务(自动 tab)+ 用户独立 shell(可多开) */}
           {view === 'terminal' && (
-            <div className="absolute inset-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+            <div
+              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              className="absolute right-0 top-0 bottom-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5"
+            >
               {/* 终端标签条:用户的 shell + 「新建终端」按钮放最前(固定好找),
-                  agent 自动起的后台任务 tab 放在它们之后,避免把用户的入口挤跑。 */}
-              <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-black/8 px-2 py-1.5">
+                  agent 自动起的后台任务 tab 放在它们之后,避免把用户的入口挤跑。
+                  左侧留出空间给浮动的「对话栏开关」按钮,不被它压住。 */}
+              <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-black/8 pl-11 pr-2 py-1.5">
                 {shells.map((s) => (
                   <div
                     key={s.id}
@@ -779,7 +941,8 @@ export default function App(): JSX.Element {
           {/* 预览:预热后或访问过即常驻挂载(iframe 状态保留),切回瞬时显示 */}
           {remoteDataReady && (prewarmed || visited.has('preview')) && (
             <div
-              className={`absolute inset-0 ${
+              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              className={`absolute right-0 top-0 bottom-0 ${
                 view === 'preview'
                   ? 'z-10 opacity-100'
                   : 'pointer-events-none opacity-0'
@@ -850,9 +1013,9 @@ export default function App(): JSX.Element {
             compact={dockTerminalOpen}
             terminalOpen={dockTerminalOpen}
             extraHeight={chatBoxHeight}
-            commandBase={agentCommandBase}
             agentLabel={agentLabel}
-            host={host}
+            agent={defaultAgent}
+            onPatchAgent={patchDefaultAgent}
             onToggleTerminal={() => {
               setDockOpened(true)
               setDockTerminalOpen((o) => !o)
@@ -926,6 +1089,16 @@ export default function App(): JSX.Element {
             handlePickDir(dir)
           }}
           onClose={() => setRemoteBrowse(null)}
+        />
+      )}
+
+      {/* 首启语言选择:config 已载入但未选语言时弹出,选定即装对应语言插件。 */}
+      {config && !config.language && (
+        <LanguagePicker
+          onPick={async (agent, lang) => {
+            await setLanguage(agent, lang)
+            setConfig((c) => (c ? { ...c, language: lang } : c))
+          }}
         />
       )}
 

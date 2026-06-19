@@ -7,11 +7,11 @@
 
 mod agent_rpc;
 mod blocking;
-mod completion;
 mod config;
 mod fs;
 mod git;
 mod preview;
+mod plugins;
 mod procs;
 mod remote;
 mod search;
@@ -29,6 +29,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
@@ -42,7 +44,9 @@ pub fn run() {
             terminal::term_kill,
             config::load_config,
             config::save_config,
-            completion::agent_completions,
+            config::sync_config_to_remote,
+            plugins::set_language,
+            plugins::install_remote_plugins,
             preview::preview_start,
             preview::preview_set_target,
             preview::preview_default_target,

@@ -3,5 +3,11 @@
   "identifier": "default",
   "description": "Linco 默认权限集",
   "windows": ["main"],
-  "permissions": ["core:default", "shell:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "shell:default",
+    "dialog:default",
+    "updater:default",
+    "process:default"
+  ]
 }

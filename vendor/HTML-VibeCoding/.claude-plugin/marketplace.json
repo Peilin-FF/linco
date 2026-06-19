@@ -7,18 +7,32 @@
     {
       "name": "linco-html",
       "source": "./plugins/linco-html",
-      "description": "默认用自包含 HTML 文件交互：每次会话自动启动 artifacts 预览服务器（热刷新），并注入'产物默认产出 HTML'的指令，附带统一设计套件。Linco 预览引擎资源也在本插件下。"
+      "description": "默认用自包含 HTML 文件交互：每次会话自动启动 artifacts 预览服务器（热刷新），并注入'产物默认产出 HTML'的指令，附带统一设计套件。Linco 预览引擎资源也在本插件下。【中文版】"
     },
     {
       "name": "linco-task-monitor",
       "source": "./plugins/linco-task-monitor",
-      "description": "把后台长任务输出可视化到 Linco 终端监控面板：注入'用 -u + 重定向到项目内 .log + 后台 &'启动后台任务的工作流指令。"
+      "description": "把后台长任务输出可视化到 Linco 终端监控面板：注入'用 -u + 重定向到项目内 .log + 后台 &'启动后台任务的工作流指令。【中文版】"
     },
     {
       "name": "linco-shadow-diff",
       "source": "./plugins/linco-shadow-diff",
-      "description": "「本轮 agent 改动」可视化:独立影子 git 追踪每轮对话改了哪些文件(A/M/D + 红绿 diff)。注入说明并提供 shadow.sh CLI 供 agent 主动调用。"
+      "description": "「本轮 agent 改动」可视化:独立影子 git 追踪每轮对话改了哪些文件(A/M/D + 红绿 diff)。注入说明并提供 shadow.sh CLI 供 agent 主动调用。【中文版】"
+    },
+    {
+      "name": "linco-html-en",
+      "source": "./plugins/linco-html-en",
+      "description": "[English] Interact via self-contained HTML by default: each session auto-starts the artifacts preview server (hot reload) and injects the 'deliverables default to HTML' instruction with a unified design kit. Linco's preview engine assets live here too."
+    },
+    {
+      "name": "linco-task-monitor-en",
+      "source": "./plugins/linco-task-monitor-en",
+      "description": "[English] Surfaces background-task output in Linco's terminal monitor panel: injects the workflow rule 'run background tasks with -u + redirect to an in-project .log + &'."
+    },
+    {
+      "name": "linco-shadow-diff-en",
+      "source": "./plugins/linco-shadow-diff-en",
+      "description": "[English] Visualizes 'what the agent changed this turn': an independent shadow git tracks per-turn file changes (A/M/D + red/green diff). Injects guidance and ships a shadow.sh CLI."
     }
   ]
 }
-

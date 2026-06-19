@@ -21,27 +21,6 @@ export async function listDir(path: string, host?: string): Promise<DirEntry[]> 
   return raw.map((e) => ({ name: e.name, path: e.path, isDir: e.is_dir }))
 }
 
-// —— 目录列举缓存(给 @ 补全用)——
-// 同一目录在逐字过滤时只列一次:输入 @READ 不该把同一目录列 4 遍。
-// 目录内容短时间内不变,故缓存安全;TTL 短(几秒)足够覆盖一次补全会话。
-const dirCache = new Map<string, { at: number; p: Promise<DirEntry[]> }>()
-const DIR_TTL = 4000
-
-export function listDirCached(path: string, host?: string): Promise<DirEntry[]> {
-  const key = `${host || ''}|${path}`
-  const now = Date.now()
-  const hit = dirCache.get(key)
-  if (hit && now - hit.at < DIR_TTL) return hit.p
-  const p = listDir(path, host)
-  dirCache.set(key, { at: now, p })
-  p.catch(() => dirCache.delete(key)) // 失败不留缓存
-  if (dirCache.size > 40) {
-    const first = dirCache.keys().next().value
-    if (first) dirCache.delete(first)
-  }
-  return p
-}
-
 export function readFile(path: string, host?: string): Promise<string> {
   return invoke('fs_read_file', { path, host: h(host) })
 }

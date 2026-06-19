@@ -1,0 +1,8 @@
+{
+  "name": "linco-shadow-diff-en",
+  "version": "1.0.0",
+  "description": "Visualizes 'what the agent changed this turn': an independent shadow git repo tracks which files each conversation turn modified (A/M/D + red/green diff). Injects an explanation and ships a shadow.sh CLI the agent can call directly.",
+  "author": {
+    "name": "fengpeilin"
+  }
+}

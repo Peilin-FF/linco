@@ -240,12 +240,13 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       <div className="relative h-full w-full">
         <div ref={hostRef} className="h-full w-full px-3 pt-2" />
         {exited && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+          <div className="pointer-events-none absolute right-2.5 top-2 flex justify-end">
             <button
               onClick={() => restartRef.current?.()}
-              className="pointer-events-auto flex items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[12.5px] text-canvas shadow-card hover:opacity-90"
+              title="重新连接"
+              className="pointer-events-auto flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-[11px] text-ink-muted ring-1 ring-black/10 hover:bg-black/10 hover:text-ink"
             >
-              <RotateCw size={13} />
+              <RotateCw size={12} />
               重连
             </button>
           </div>

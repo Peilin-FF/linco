@@ -34,6 +34,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "../vendor/HTML-VibeCoding/plugins": "plugins",
+      "../vendor/HTML-VibeCoding/codex": "codex"
+    },
+    "macOS": {
+      "hardenedRuntime": true
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -41,5 +49,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlDNzE5QTg3NDYyNjA2QTkKUldTcEJpWkdoNXB4bk1SYnY3WktCYVl4NjByMDhjeTNmZFo3dlpFRlNVVDlHdHh2MzY3S2JTTnkK",
+      "endpoints": [
+        "https://github.com/Peilin-FF/linco/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

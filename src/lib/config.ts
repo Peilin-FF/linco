@@ -10,6 +10,14 @@ export interface AgentConfig {
   apiKey: string
   baseUrl: string
   model: string
+  /** 可选模型列表(同一供应商多个模型,聊天框切换);空则只用 model */
+  models: string[]
+  /** 权限模式(随 provider 取值) */
+  permission: string
+  /** 思考力/推理预算 */
+  effort: string
+  /** 登录方式:''/'api'=注入 API Key;'subscription'=用 CLI 订阅登录(不注入 key) */
+  authMode: string
 }
 
 export interface AppConfig {
@@ -24,6 +32,8 @@ export interface AppConfig {
   connections: Connection[]
   /** 当前激活的连接 id(空 = 本地) */
   activeConnection: string
+  /** 开发语言偏好:''=未选(首启询问)/ 'zh' / 'en' */
+  language?: string
 }
 
 // Rust 端用 snake_case 序列化,Tauri 默认 camelCase 转换;
@@ -36,6 +46,10 @@ interface RawAgent {
   api_key: string
   base_url: string
   model: string
+  models?: string[]
+  permission?: string
+  effort?: string
+  auth_mode?: string
 }
 interface RawConfig {
   agents: RawAgent[]
@@ -45,6 +59,7 @@ interface RawConfig {
   recent_dirs: string[]
   connections: Connection[]
   active_connection: string
+  language: string
 }
 
 function fromRaw(raw: RawConfig): AppConfig {
@@ -56,14 +71,19 @@ function fromRaw(raw: RawConfig): AppConfig {
       command: a.command,
       apiKey: a.api_key ?? '',
       baseUrl: a.base_url ?? '',
-      model: a.model ?? ''
+      model: a.model ?? '',
+      models: a.models ?? [],
+      permission: a.permission ?? '',
+      effort: a.effort ?? '',
+      authMode: a.auth_mode ?? ''
     })),
     defaultAgent: raw.default_agent ?? '',
     autoStart: raw.auto_start ?? true,
     cwd: raw.cwd ?? '',
     recentDirs: raw.recent_dirs ?? [],
     connections: raw.connections ?? [],
-    activeConnection: raw.active_connection ?? ''
+    activeConnection: raw.active_connection ?? '',
+    language: raw.language ?? ''
   }
 }
 
@@ -76,14 +96,19 @@ function toRaw(cfg: AppConfig): RawConfig {
       command: a.command,
       api_key: a.apiKey,
       base_url: a.baseUrl,
-      model: a.model
+      model: a.model,
+      models: a.models ?? [],
+      permission: a.permission ?? '',
+      effort: a.effort ?? '',
+      auth_mode: a.authMode ?? ''
     })),
     default_agent: cfg.defaultAgent,
     auto_start: cfg.autoStart,
     cwd: cfg.cwd,
     recent_dirs: cfg.recentDirs,
     connections: cfg.connections,
-    active_connection: cfg.activeConnection
+    active_connection: cfg.activeConnection,
+    language: cfg.language ?? ''
   }
 }
 
@@ -94,6 +119,22 @@ export async function loadConfig(): Promise<AppConfig> {
 
 export async function saveConfig(cfg: AppConfig): Promise<void> {
   await invoke('save_config', { config: toRaw(cfg) })
+}
+
+/** 首启选定 agent + 开发语言:写回 config + 装对应那套(claude→~/.claude/plugins,codex→~/.codex)。 */
+export async function setLanguage(agent: 'claude' | 'codex', lang: 'zh' | 'en'): Promise<void> {
+  await invoke('set_language', { agent, lang })
+}
+
+/** 给某远程主机安装当前语言的插件(连接成功后调,失败可忽略)。 */
+export async function installRemotePlugins(host: string): Promise<void> {
+  await invoke('install_remote_plugins', { host })
+}
+
+/** 把本地配置(含明文 API Key)整份上传到远程 ~/.linco/config.json。
+ *  仅在用户明确信任该服务器时调用。 */
+export async function syncConfigToRemote(host: string): Promise<void> {
+  await invoke('sync_config_to_remote', { host })
 }
 
 function shellQuote(s: string): string {
@@ -137,6 +178,66 @@ export function agentExecutable(agent: AgentConfig): string {
   return commandHead(agent.command) || defaultCommandForProvider(agent.provider)
 }
 
+// —— provider 能力表:权限/思考力的可选项随 provider 不同 ——
+export interface CapOption {
+  value: string
+  label: string
+}
+export interface ProviderCaps {
+  permissions: CapOption[]
+  efforts: CapOption[]
+  /** 是否支持订阅登录(CLI 自身 OAuth) */
+  hasSubscription: boolean
+  /** 订阅登录命令(在终端里跑) */
+  loginCmd: string
+}
+
+function isCodexProvider(provider: string, command?: string): boolean {
+  const head = (command ? commandHead(command).split('/').pop() : '') ?? ''
+  return provider === 'openai' || head === 'codex'
+}
+
+/** 取某 agent 的能力:权限模式 / 思考力 选项 + 订阅登录信息。
+ *  label 原样用 CLI 取值(不翻译),空值显示为 default。 */
+export function providerCaps(agent: AgentConfig): ProviderCaps {
+  if (isCodexProvider(agent.provider, agent.command)) {
+    return {
+      permissions: [
+        { value: '', label: 'default' },
+        { value: 'full-auto', label: 'full-auto' },
+        { value: 'bypass', label: 'bypass' }
+      ],
+      efforts: [
+        { value: '', label: 'default' },
+        { value: 'low', label: 'low' },
+        { value: 'medium', label: 'medium' },
+        { value: 'high', label: 'high' }
+      ],
+      hasSubscription: true,
+      loginCmd: 'codex login'
+    }
+  }
+  // claude / anthropic / 其它默认按 claude
+  return {
+    permissions: [
+      { value: '', label: 'default' },
+      { value: 'acceptEdits', label: 'acceptEdits' },
+      { value: 'plan', label: 'plan' },
+      { value: 'bypassPermissions', label: 'bypassPermissions' }
+    ],
+    efforts: [
+      { value: '', label: 'default' },
+      { value: 'low', label: 'low' },
+      { value: 'medium', label: 'medium' },
+      { value: 'high', label: 'high' },
+      { value: 'xhigh', label: 'xhigh' },
+      { value: 'max', label: 'max' }
+    ],
+    hasSubscription: true,
+    loginCmd: 'claude auth login'
+  }
+}
+
 /** 生成真正写入 PTY 的 TUI 启动命令。 */
 export function agentLaunchCommand(agent: AgentConfig): string {
   let cmd = agent.command.trim()
@@ -160,6 +261,38 @@ export function agentLaunchCommand(agent: AgentConfig): string {
       if (!hasFlag(cmd, '--model', '--model')) cmd += ` --model ${shellQuote(model)}`
     }
   }
+
+  // 权限模式:控制是否反复询问。codex 与 claude 取值/flag 不同。
+  const perm = agent.permission.trim()
+  if (perm) {
+    if (isCodex) {
+      if (perm === 'full-auto' && !hasFlag(cmd, '--full-auto', '--full-auto')) {
+        cmd += ' --full-auto'
+      } else if (
+        perm === 'bypass' &&
+        !cmd.includes('--dangerously-bypass-approvals-and-sandbox')
+      ) {
+        cmd += ' --dangerously-bypass-approvals-and-sandbox'
+      }
+    } else if (
+      perm !== 'default' &&
+      !hasFlag(cmd, '--permission-mode', '--permission-mode')
+    ) {
+      cmd += ` --permission-mode ${shellQuote(perm)}`
+    }
+  }
+
+  // 思考力/推理预算。claude: --effort;codex: -c model_reasoning_effort="..."
+  const effort = agent.effort.trim()
+  if (effort) {
+    if (isCodex) {
+      if (!cmd.includes('model_reasoning_effort')) {
+        cmd += codexConfigArg('model_reasoning_effort', effort)
+      }
+    } else if (!hasFlag(cmd, '--effort', '--effort')) {
+      cmd += ` --effort ${shellQuote(effort)}`
+    }
+  }
   return cmd
 }
 
@@ -167,7 +300,9 @@ export function agentLaunchCommand(agent: AgentConfig): string {
 export function agentEnv(agent: AgentConfig): Record<string, string> {
   const env: Record<string, string> = {}
   const p = agent.provider
-  if (agent.apiKey) {
+  // 订阅登录:不注入 API Key,让 CLI 走自己的订阅凭据(~/.claude、~/.codex)。
+  // ANTHROPIC_API_KEY/OPENAI_API_KEY 一旦设置会盖过订阅,所以这里整段跳过。
+  if (agent.authMode !== 'subscription' && agent.apiKey) {
     if (p === 'anthropic') env.ANTHROPIC_API_KEY = agent.apiKey
     else if (p === 'openai') {
       env.OPENAI_API_KEY = agent.apiKey
@@ -205,7 +340,11 @@ export const AGENT_PRESETS: Omit<AgentConfig, 'apiKey'>[] = [
     provider: 'anthropic',
     command: 'claude',
     baseUrl: '',
-    model: ''
+    model: '',
+    models: [],
+    permission: '',
+    effort: '',
+    authMode: ''
   },
   {
     id: 'codex',
@@ -213,6 +352,10 @@ export const AGENT_PRESETS: Omit<AgentConfig, 'apiKey'>[] = [
     provider: 'openai',
     command: 'codex',
     baseUrl: '',
-    model: ''
+    model: '',
+    models: [],
+    permission: '',
+    effort: '',
+    authMode: ''
   }
 ]

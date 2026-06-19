@@ -657,7 +657,8 @@ fn find_assets_local() -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     // 已知安装位置(按优先级):新插件名 > 旧名(回退) > 开发副本 > 插件缓存搜索
     let mut cands = vec![
-        format!("{home}/.claude/plugins/linco-html/assets"), // 新插件名(主)
+        format!("{home}/.claude/plugins/linco-html/assets"), // 中文版插件(主)
+        format!("{home}/.claude/plugins/linco-html-en/assets"), // 英文版插件
         format!("{home}/.claude/plugins/html-vibe/assets"),  // 旧插件名(兼容已部署)
         format!("{home}/HTML-VibeCoding/plugins/linco-html/assets"), // 开发副本(新名)
         format!("{home}/HTML-VibeCoding/plugins/html-vibe/assets"),  // 开发副本(旧名)
@@ -702,6 +703,7 @@ fn walk_find_assets(base: &str, max_depth: u32) -> Option<String> {
 fn find_assets_remote(host: &str) -> Option<String> {
     // 优先新插件名,再回退旧名/开发副本,最后在插件目录里 find(任意含 notebook.js 的 assets)。
     let cmd = "for d in \"$HOME/.claude/plugins/linco-html/assets\" \
+\"$HOME/.claude/plugins/linco-html-en/assets\" \
 \"$HOME/.claude/plugins/html-vibe/assets\" \
 \"$HOME/HTML-VibeCoding/plugins/linco-html/assets\" \
 \"$HOME/HTML-VibeCoding/plugins/html-vibe/assets\" \

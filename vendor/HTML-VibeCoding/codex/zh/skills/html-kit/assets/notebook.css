@@ -1,0 +1,217 @@
+:root{
+    --ivory:#FAF9F5; --paper:#FFFFFF; --slate:#141413;
+    --clay:#D97757;  --clay-d:#B85C3E; --oat:#E3DACC; --olive:#788C5D; --red:#C0392B;
+    --g100:#F0EEE6; --g200:#E6E3DA; --g300:#D1CFC5; --g500:#87867F; --g700:#3D3D3A;
+    --codebg:#141413; --codefg:#E8E6DE;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:var(--ivory);color:var(--g700);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;padding:34px 24px 120px}
+  .page{max-width:1000px;margin:0 auto}
+
+  .toolbar{position:sticky;top:0;z-index:40;display:flex;gap:10px;align-items:center;background:var(--ivory);border-bottom:1.5px solid var(--g300);padding:12px 0;margin-bottom:14px}
+  .btn{font-family:var(--sans);font-size:13px;font-weight:600;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;transition:background .12s,transform .08s}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{background:var(--clay);color:#fff} .btn.primary:hover{background:var(--clay-d)} .btn.primary.done{background:var(--olive)}
+  .btn.ghost{background:var(--paper);color:var(--g700);border:1.5px solid var(--g300)} .btn.ghost:hover{border-color:var(--g500)}
+  .btn.sm{font-size:12px;padding:6px 10px}
+  .hint{font-family:var(--mono);font-size:11px;color:var(--g500);margin-left:auto}
+
+  /* ---------- cell chrome ---------- */
+  .cell{position:relative;margin:0;border:1.5px solid transparent;border-radius:12px;transition:border-color .12s,background .12s}
+  .cell:hover{border-color:var(--g200);background:#FCFBF8}
+  .cell.editing{border-color:var(--clay);background:#fff}
+  .gutter{position:absolute;left:-30px;top:8px;display:none;flex-direction:column;align-items:center;gap:4px;cursor:grab;user-select:none}
+  .cell:hover .gutter,.cell.editing .gutter{display:flex}
+  .gutter .gp{color:var(--g300);font-size:13px} .gutter:hover .gp{color:var(--clay)}
+  .gutter .ty{font-family:var(--mono);font-size:8px;color:var(--g500);letter-spacing:.05em}
+  .cellbar{position:absolute;top:6px;right:8px;z-index:6;display:none;gap:4px}
+  .cell:hover .cellbar,.cell.editing .cellbar{display:flex}
+  .ib{width:24px;height:24px;border:1.5px solid var(--g300);border-radius:6px;background:var(--paper);color:var(--g700);font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}
+  .ib:hover{border-color:var(--g500)} .ib.del:hover{background:var(--red);color:#fff;border-color:var(--red)} .ib.ok:hover{background:var(--olive);color:#fff;border-color:var(--olive)}
+
+  .rendered{padding:4px 18px}
+  .rendered:empty::before{content:"（空 cell，双击编辑）";color:var(--g500);font-style:italic;font-size:13px}
+  textarea.src{display:none;width:100%;font-family:var(--mono);font-size:13px;line-height:1.65;color:var(--slate);background:#fff;border:none;border-radius:0 0 11px 11px;padding:14px 18px;resize:vertical;min-height:120px;outline:none}
+  /* md cell 编辑态：藏渲染、显文本框 */
+  .cell[data-type="md"].editing .rendered{display:none}
+  .cell[data-type="md"].editing textarea.src{display:block}
+  /* html 块编辑态：就地改可见文字，渲染区可编辑并高亮 */
+  .cell[data-type="html"].editing .rendered{outline:2px dashed var(--clay);outline-offset:4px;border-radius:6px}
+  .cell[data-type="html"].editing .rendered:focus{outline-style:solid}
+
+  /* ---------- rendered content styles ---------- */
+  .rendered h1{font-family:var(--serif);font-weight:500;font-size:29px;line-height:1.2;color:var(--slate);margin:10px 0 8px}
+  .rendered h2{font-family:var(--serif);font-weight:500;font-size:22px;color:var(--slate);margin:22px 0 8px}
+  .rendered h3{font-family:var(--serif);font-weight:500;font-size:17px;color:var(--slate);margin:16px 0 6px}
+  .rendered p{margin:8px 0;font-size:15px}
+  .rendered ul,.rendered ol{margin:8px 0 8px 22px} .rendered li{margin:4px 0;font-size:15px}
+  .rendered blockquote{border-left:4px solid var(--clay);background:var(--paper);border-radius:0 10px 10px 0;padding:10px 16px;margin:12px 0;color:var(--g700)}
+  .rendered code{font-family:var(--mono);font-size:.88em;background:var(--g100);padding:1px 6px;border-radius:4px;color:var(--slate)}
+  .rendered pre{background:var(--codebg);color:var(--codefg);border-radius:10px;padding:13px 15px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;margin:12px 0}
+  .rendered pre code{background:none;padding:0;color:inherit;font-size:inherit}
+  .rendered pre .add{color:#9fd17a} .rendered pre .rm{color:#e5896f} .rendered pre .cm{color:#8a897e} .rendered pre .kw{color:var(--clay)} .rendered pre .str{color:#9fd17a}
+  .rendered a{color:var(--clay)}
+  .rendered .card{background:#fff;border:1.5px solid var(--g300);border-radius:13px;padding:16px 18px;margin:12px 0}
+  .rendered .callout{background:#fff;border:1.5px solid var(--g300);border-left:4px solid var(--clay);border-radius:0 13px 13px 0;padding:14px 18px;margin:12px 0}
+  .rendered .callout.olive{border-left-color:var(--olive)}
+  .rendered .flex{display:flex;gap:16px;flex-wrap:wrap} .rendered .flex>div{flex:1;min-width:240px}
+  .rendered .tag{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--clay);text-transform:uppercase}
+  .rendered .why{font-size:14px;color:#55554f}
+  .rendered .note{font-size:12.5px;color:var(--g500);margin-top:6px}
+  .rendered .legend{display:flex;flex-wrap:wrap;gap:14px;font-size:13px;margin:6px 0} .rendered .legend span{display:inline-flex;align-items:center;gap:5px}
+  .rendered .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .rendered .win{color:var(--olive);font-weight:700} .rendered .bad{color:var(--clay);font-weight:700}
+
+  /* ========================================================================
+     内容组件库(html cell 直接写 <div class="..."> 即用,样式全在此,无需内联 style)
+     全部在 .rendered 作用域;沿用设计 token。出处:html-effectiveness 画廊。
+     ======================================================================== */
+
+  /* —— 眉标/标题区 —— */
+  .rendered .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--g500);margin-bottom:4px}
+  .rendered .lede{font-size:16.5px;color:var(--g700);line-height:1.6;margin:6px 0 14px}
+
+  /* —— badge / chip:小标签。颜色修饰:new/add=olive, del/bad=clay, info=slate, warn=oat —— */
+  .rendered .badge,.rendered .chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.02em;padding:2px 9px;border-radius:999px;border:1.5px solid var(--g300);background:var(--paper);color:var(--g700);line-height:1.5}
+  .rendered .badge.new,.rendered .badge.add,.rendered .chip.ok{border-color:var(--olive);color:var(--olive);background:#F3F6EE}
+  .rendered .badge.del,.rendered .badge.bad,.rendered .chip.bad{border-color:var(--clay);color:var(--clay-d);background:#FBEEE9}
+  .rendered .badge.warn,.rendered .chip.warn{border-color:#C99A5B;color:#9A6B28;background:#FAF3E6}
+  .rendered .badge.info,.rendered .chip.info{border-color:var(--slate);color:var(--slate);background:var(--g100)}
+
+  /* —— stat-card 指标卡(网格用 .stat-grid 包裹)—— */
+  .rendered .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:12px 0}
+  .rendered .stat-card{background:var(--paper);border:1.5px solid var(--g300);border-radius:12px;padding:14px 16px}
+  .rendered .stat-num{font-family:var(--serif);font-size:30px;font-weight:500;color:var(--slate);line-height:1.1}
+  .rendered .stat-label{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--g500);margin-top:4px}
+  .rendered .stat-delta{font-size:12.5px;font-weight:600;margin-top:6px}
+  .rendered .stat-delta.up{color:var(--olive)} .rendered .stat-delta.down{color:var(--clay-d)}
+
+  /* —— 推荐 callout(强调结论):.callout.rec 用 clay 实心左条 + 浅底 —— */
+  .rendered .callout.rec{border-left-width:4px;border-left-color:var(--clay);background:#FBF3EE}
+  .rendered .callout.olive{border-left-color:var(--olive);background:#F3F6EE}
+  .rendered .callout .callout-h{font-weight:700;color:var(--slate);margin-bottom:4px}
+
+  /* —— answer 回应块:agent 对「用户需求 md cell」的就地答复,放在该需求 cell 紧下方。
+     olive 左条 + 顶部「⤷ 回应」小标,与用户需求(普通 md)视觉区分。答复正文用其它组件填充。 —— */
+  .rendered .answer{border:1.5px solid var(--g300);border-left:4px solid var(--olive);border-radius:0 13px 13px 0;background:#FCFCFA;padding:12px 18px;margin:10px 0}
+  .rendered .answer::before{content:"\2937 回应";display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--olive);font-weight:700;margin-bottom:8px}
+  .rendered .answer>:first-of-type{margin-top:0} .rendered .answer>:last-child{margin-bottom:0}
+
+  /* —— pro/con 双栏 —— */
+  .rendered .procon{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+  @media(max-width:680px){.rendered .procon{grid-template-columns:1fr}}
+  .rendered .pros,.rendered .cons{border:1.5px solid var(--g300);border-radius:12px;padding:12px 16px;background:var(--paper)}
+  .rendered .pros{border-top:3px solid var(--olive)} .rendered .cons{border-top:3px solid var(--clay)}
+  .rendered .pros li,.rendered .cons li{list-style:none;margin:6px 0;padding-left:20px;position:relative;font-size:14px}
+  .rendered .pros li::before{content:"+";position:absolute;left:2px;color:var(--olive);font-weight:700}
+  .rendered .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--clay);font-weight:700}
+  .rendered .pros ul,.rendered .cons ul{margin:0;padding:0}
+
+  /* —— grid 通用网格(比 .flex 精细;col-2/col-3 控制列数)—— */
+  .rendered .grid{display:grid;gap:14px;margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+  .rendered .grid.col-2{grid-template-columns:repeat(2,1fr)} .rendered .grid.col-3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:680px){.rendered .grid.col-2,.rendered .grid.col-3{grid-template-columns:1fr}}
+
+  /* —— toc 锚点药丸(长页导航)—— */
+  .rendered .toc{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .rendered .toc a{font-family:var(--mono);font-size:12px;text-decoration:none;color:var(--g700);border:1.5px solid var(--g300);border-radius:999px;padding:3px 12px;background:var(--paper)}
+  .rendered .toc a:hover{border-color:var(--clay);color:var(--clay)}
+
+  /* —— details 折叠增强 —— */
+  .rendered details{border:1.5px solid var(--g300);border-radius:10px;padding:8px 14px;margin:10px 0;background:var(--paper)}
+  .rendered details>summary{cursor:pointer;font-weight:600;color:var(--slate);list-style:none}
+  .rendered details>summary::-webkit-details-marker{display:none}
+  .rendered details>summary::before{content:"\25B8 ";color:var(--clay)}
+  .rendered details[open]>summary::before{content:"\25BE "}
+
+  /* ========== PR / diff 组件 ========== */
+  /* file-diff 卡:文件头(路径 + 增删统计)+ diff 体 */
+  .rendered .file-diff{border:1.5px solid var(--g300);border-radius:12px;overflow:hidden;margin:12px 0}
+  .rendered .file-diff .fd-head{display:flex;align-items:center;gap:10px;background:var(--g100);border-bottom:1.5px solid var(--g300);padding:8px 14px;font-family:var(--mono);font-size:12.5px}
+  .rendered .file-diff .fd-path{color:var(--slate);font-weight:600}
+  .rendered .file-diff .fd-stat{margin-left:auto;font-size:11.5px}
+  .rendered .file-diff .fd-stat .a{color:var(--olive);font-weight:700} .rendered .file-diff .fd-stat .d{color:var(--clay);font-weight:700}
+  /* diff 体:用 <pre class="diff"> 内每行 <span class="dl add/del/ctx/hunk"> */
+  .rendered pre.diff{background:var(--codebg);color:var(--codefg);margin:0;padding:10px 0;border-radius:0;font-size:12.5px;line-height:1.6}
+  .rendered pre.diff .dl{display:block;padding:0 14px;white-space:pre-wrap;word-break:break-word}
+  .rendered pre.diff .dl.add{background:rgba(120,140,93,.18);color:#cfe3b4}
+  .rendered pre.diff .dl.add::before{content:"+ ";color:#9fd17a}
+  .rendered pre.diff .dl.del{background:rgba(217,119,87,.18);color:#f0b59e}
+  .rendered pre.diff .dl.del::before{content:"- ";color:#e5896f}
+  .rendered pre.diff .dl.ctx::before{content:"  "}
+  .rendered pre.diff .dl.hunk{color:#8ab4d6;background:rgba(138,180,214,.12)}
+  /* review 批注气泡 */
+  .rendered .review{display:flex;gap:10px;margin:10px 0;align-items:flex-start}
+  .rendered .review .avatar{flex:0 0 28px;width:28px;height:28px;border-radius:50%;background:var(--clay);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700}
+  .rendered .review .bubble{flex:1;border:1.5px solid var(--g300);border-radius:10px;padding:9px 13px;background:var(--paper);font-size:14px}
+  .rendered .review .bubble .who{font-weight:700;color:var(--slate);font-size:13px;margin-bottom:3px}
+  .rendered .review.blocking .bubble{border-left:3px solid var(--clay)}
+
+  /* ========== 时间线 / 状态报告组件 ========== */
+  /* summary-band 概要带:页首关键信息横条 */
+  .rendered .summary-band{display:flex;flex-wrap:wrap;gap:18px;align-items:center;background:var(--g100);border:1.5px solid var(--g300);border-radius:12px;padding:12px 18px;margin:12px 0}
+  .rendered .summary-band>div{font-size:13.5px} .rendered .summary-band .k{font-family:var(--mono);font-size:10.5px;text-transform:uppercase;color:var(--g500);display:block}
+  /* risk/severity 彩点:<span class="risk-dot high/med/low"> */
+  .rendered .risk-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:baseline}
+  .rendered .risk-dot.high{background:var(--clay)} .rendered .risk-dot.med{background:#C99A5B} .rendered .risk-dot.low{background:var(--olive)}
+  /* timeline 时间线:<div class="timeline"> 内 <div class="tl-entry"><div class="tl-time">..</div><div class="tl-body">..</div></div> */
+  .rendered .timeline{position:relative;margin:12px 0;padding-left:22px}
+  .rendered .timeline::before{content:"";position:absolute;left:6px;top:4px;bottom:4px;width:2px;background:var(--g300)}
+  .rendered .tl-entry{position:relative;margin:0 0 14px}
+  .rendered .tl-entry::before{content:"";position:absolute;left:-19px;top:4px;width:9px;height:9px;border-radius:50%;background:var(--clay);box-shadow:0 0 0 3px var(--ivory)}
+  .rendered .tl-time{font-family:var(--mono);font-size:11px;color:var(--g500)}
+  .rendered .tl-body{font-size:14px;color:var(--g700);margin-top:2px}
+
+  .rendered table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13.5px}
+  .rendered th,.rendered td{border:1px solid var(--g300);padding:6px 9px;text-align:center}
+  .rendered th{background:var(--g100);font-weight:600;color:var(--slate)}
+  .rendered td.m{text-align:left}
+
+  /* ---------- editable TABLE cell ---------- */
+  .tblwrap{padding:10px 16px 4px;overflow-x:auto}
+  table.edit{border-collapse:collapse;width:100%;font-size:13px}
+  table.edit th,table.edit td{border:1.5px solid var(--g200);padding:0;position:relative}
+  table.edit th{background:var(--g100);font-family:var(--mono);font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--g500);font-weight:600;vertical-align:bottom}
+  table.edit .c{padding:7px 10px;min-height:32px;outline:none}
+  table.edit .c:focus{background:#FBF3EE;box-shadow:inset 0 0 0 2px var(--clay)}
+  table.edit .corner{width:22px;background:var(--g200)}
+  .colbar{display:flex;align-items:center;justify-content:center;gap:3px;height:16px;border-bottom:1px dashed var(--g200)}
+  .colgrip{color:var(--g300);font-size:10px;cursor:grab} .colgrip:hover{color:var(--clay)}
+  .coldel{display:none;width:14px;height:14px;border:1.5px solid var(--g300);border-radius:3px;background:#fff;color:var(--red);font-size:9px;line-height:1;cursor:pointer;padding:0}
+  table.edit th:hover .coldel{display:block} .coldel:hover{background:var(--red);color:#fff}
+  td.rowgrip{width:22px;background:var(--g100)} .rowgrip-in{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .rg{color:var(--g300);font-size:11px;cursor:grab} .rg:hover{color:var(--clay)}
+  .rowdel{display:none;width:14px;height:14px;border:1.5px solid var(--g300);border-radius:3px;background:#fff;color:var(--red);font-size:9px;line-height:1;cursor:pointer;padding:0}
+  td.rowgrip:hover .rowdel{display:block}
+  tr.drag-row{opacity:.35} th.drag-col{opacity:.35}
+  .drop-col{box-shadow:inset 3px 0 0 var(--clay)} .drop-row td{box-shadow:inset 0 3px 0 var(--clay)}
+  .tinybar{display:flex;gap:6px;padding:0 16px 12px;align-items:center;flex-wrap:wrap}
+  .seg{display:inline-flex;border:1.5px solid var(--g300);border-radius:8px;overflow:hidden}
+  .seg button{font-family:var(--mono);font-size:11px;border:none;background:#fff;color:var(--g500);padding:5px 10px;cursor:pointer} .seg button.on{background:var(--clay);color:#fff}
+
+  /* adder(cell 间「双击加 cell」区)平时折叠到 4px 几乎不可见,cell 之间贴紧;
+     hover 才展开到 14px 并露出可点的横线提示。这样删 cell 后不再留下明显的横线占位。 */
+  .adder{height:4px;position:relative;cursor:pointer;transition:height .12s}
+  .adder:hover{height:14px}
+  .add-hint{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);height:1.5px;background:transparent;transition:background .12s}
+  .adder:hover .add-hint{background:var(--g200)}
+  .adder:hover .add-hint::after{content:"双击插入 cell";position:absolute;left:50%;top:-7px;transform:translateX(-50%);font-family:var(--mono);font-size:9px;color:var(--g500);background:var(--ivory);padding:0 6px;white-space:nowrap}
+  .add-actions{display:none;justify-content:center;gap:8px;padding:5px 0}
+  .adder.open{height:auto}
+  .adder.open .add-actions{display:flex}
+  .adder.open .add-hint{display:none}
+  .add-actions button{font-family:var(--sans);font-size:12px;border:1.5px dashed var(--g300);background:var(--ivory);color:var(--g500);border-radius:8px;padding:5px 12px;cursor:pointer}
+  .add-actions button:hover{border-color:var(--clay);color:var(--clay)}
+  .add-actions .add-cancel{border-style:solid;padding:5px 9px;color:var(--g500)}
+  .add-actions .add-cancel:hover{border-color:var(--g500);color:var(--g700);background:var(--g100)}
+  /* LaTeX 公式(兼容 KaTeX HTML 输出与 MathJax SVG 输出) */
+  .rendered .mathr[data-display="1"]{display:block;text-align:center;margin:12px 0;overflow-x:auto}
+  .rendered .mathr[data-display="0"]{display:inline-block;vertical-align:middle}
+  .rendered .mathr svg{max-width:100%}
+  /* KaTeX:块级居中、行内基线对齐;块级公式横向可滚动不溢出 */
+  .rendered .mathr .katex-display{margin:0}
+  .rendered .mathr[data-display="0"] .katex{font-size:1.05em}
+  footer{margin-top:40px;border-top:1.5px solid var(--g300);padding-top:18px;font-size:13px;color:var(--g500);font-family:var(--serif);font-style:italic}

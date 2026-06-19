@@ -1,0 +1,8 @@
+{
+  "name": "linco-task-monitor-en",
+  "version": "1.0.0",
+  "description": "Surfaces output of long-running background tasks (training / eval / data processing) in Linco's terminal task-monitor panel. Each session injects the workflow rule 'run background tasks with -u + redirect to an in-project .log file + &' so the user can watch in real time what the agent is doing in the background.",
+  "author": {
+    "name": "fengpeilin"
+  }
+}
