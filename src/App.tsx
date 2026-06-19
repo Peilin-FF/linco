@@ -118,34 +118,9 @@ export default function App(): JSX.Element {
 
   // 启动时加载本地配置 + 读取 ssh config 主机
   useEffect(() => {
-    console.log('[startup] mount, calling loadConfig at', performance.now().toFixed(0))
-    let settled = false
-    // 兜底:3 秒还没拿到 config 就用默认配置进入(诊断:若 app 恰好 3 秒后出现,说明 loadConfig 卡住)
-    const fallback = window.setTimeout(() => {
-      if (!settled) {
-        console.warn('[startup] loadConfig TIMEOUT 3s — entering with default config')
-        setConfig({
-          agents: [],
-          defaultAgent: '',
-          autoStart: true,
-          cwd: '',
-          recentDirs: [],
-          connections: [],
-          activeConnection: ''
-        })
-      }
-    }, 3000)
     loadConfig()
-      .then((c) => {
-        settled = true
-        window.clearTimeout(fallback)
-        console.log('[startup] loadConfig resolved at', performance.now().toFixed(0))
-        setConfig(c)
-      })
-      .catch((e) => {
-        settled = true
-        window.clearTimeout(fallback)
-        console.log('[startup] loadConfig REJECTED at', performance.now().toFixed(0), e)
+      .then(setConfig)
+      .catch(() =>
         setConfig({
           agents: [],
           defaultAgent: '',
@@ -155,13 +130,8 @@ export default function App(): JSX.Element {
           connections: [],
           activeConnection: ''
         })
-      })
-    sshConfigHosts()
-      .then((h) => {
-        console.log('[startup] sshConfigHosts resolved at', performance.now().toFixed(0))
-        setSshHosts(h)
-      })
-      .catch(() => {})
+      )
+    sshConfigHosts().then(setSshHosts).catch(() => {})
   }, [])
 
   // 当前激活的连接(空 = 本地)
@@ -256,10 +226,13 @@ export default function App(): JSX.Element {
   // 成功 → connected;失败(需密码/2FA)→ 切到终端视图交互连接。
   const tryConnect = async (h: string, identity?: string): Promise<void> => {
     setConnState('connecting')
+    const _t = performance.now()
     try {
       await sshConnect(h, identity)
+      console.log('[switch] sshConnect OK', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
       setConnState('connected')
     } catch {
+      console.log('[switch] sshConnect FAIL', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
       // 需交互认证:跳到终端,让用户输密码;master 建立后各视图随即可用
       setConnState('error')
       setView('chat')
@@ -269,6 +242,7 @@ export default function App(): JSX.Element {
   // 切到本地
   const selectLocal = (): void => {
     if (!config) return
+    console.log('[switch] → local at', performance.now().toFixed(0))
     setConnState('idle')
     handleConfigChange({ ...config, activeConnection: '' })
   }
@@ -276,6 +250,7 @@ export default function App(): JSX.Element {
   // 切到已保存连接
   const selectConnection = (id: string): void => {
     if (!config) return
+    console.log('[switch] → connection', id, 'at', performance.now().toFixed(0))
     handleConfigChange({ ...config, activeConnection: id })
     const conn = config.connections.find((c) => c.id === id)
     if (conn?.host) void tryConnect(conn.host, conn.identity || undefined)
@@ -419,7 +394,6 @@ export default function App(): JSX.Element {
       </div>
     )
   }
-  console.log('[startup] rendering MAIN tree at', performance.now().toFixed(0), '| chatSessions:', chatSessions.length, '| prewarmed:', prewarmed)
 
   return (
     <div className="relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">

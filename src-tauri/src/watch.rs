@@ -26,58 +26,73 @@ fn remote_host() -> &'static Mutex<Option<String>> {
     REMOTE_HOST.get_or_init(|| Mutex::new(None))
 }
 
-const SKIP: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".venv", "dist"];
+const SKIP: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "dist",
+];
 
 /// 启动监听某工作目录。host 空=本地。重复调用会切换监听目标。
 #[tauri::command]
-pub fn watch_start(app: AppHandle, host: Option<String>, root: String) -> Result<(), String> {
-    let host = host.filter(|s| !s.is_empty());
-    // 先停掉之前的远程监听(若 host 变了)
-    {
-        let mut cur = remote_host().lock().map_err(|e| e.to_string())?;
-        if let Some(old) = cur.clone() {
-            if Some(&old) != host.as_ref() {
-                let _ = crate::agent_rpc::unwatch(&old);
+pub async fn watch_start(app: AppHandle, host: Option<String>, root: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        let host = host.filter(|s| !s.is_empty());
+        // 先停掉之前的远程监听(若 host 变了)
+        {
+            let mut cur = remote_host().lock().map_err(|e| e.to_string())?;
+            if let Some(old) = cur.clone() {
+                if Some(&old) != host.as_ref() {
+                    let _ = crate::agent_rpc::unwatch(&old);
+                }
             }
+            *cur = host.clone();
         }
-        *cur = host.clone();
-    }
-    // 本地监听换代(让旧线程退出)
-    LOCAL_GEN.fetch_add(1, Ordering::Relaxed);
+        // 本地监听换代(让旧线程退出)
+        LOCAL_GEN.fetch_add(1, Ordering::Relaxed);
 
-    if let Some(h) = host {
-        // 远程:agent 监听。首次连远程要 spawn agent(ssh 部署+起 python+握手),
-        // 耗时数秒——**放到后台线程**,绝不阻塞这个 Tauri 命令线程(否则启动时
-        // 它和 prewarm 的数据调用一起把命令线程池占满,窗口画面卡住不刷新)。
-        std::thread::spawn(move || {
-            let _ = crate::agent_rpc::watch(&h, &root);
-        });
-        Ok(())
-    } else {
-        // 本地:起 mtime 扫描线程
-        let gen = LOCAL_GEN.load(Ordering::Relaxed);
-        std::thread::spawn(move || local_poll(app, root, gen));
-        Ok(())
-    }
+        if let Some(h) = host {
+            // 远程:agent 监听。首次连远程要 spawn agent(ssh 部署+起 python+握手),
+            // 耗时数秒——**放到后台线程**,绝不阻塞这个 Tauri 命令线程(否则启动时
+            // 它和 prewarm 的数据调用一起把命令线程池占满,窗口画面卡住不刷新)。
+            std::thread::spawn(move || {
+                let _ = crate::agent_rpc::watch(&h, &root);
+            });
+            Ok(())
+        } else {
+            // 本地:起 mtime 扫描线程
+            let gen = LOCAL_GEN.load(Ordering::Relaxed);
+            std::thread::spawn(move || local_poll(app, root, gen));
+            Ok(())
+        }
+    })
+    .await
 }
 
 /// 停止监听(切到无工作目录 / 断开)。
 #[tauri::command]
-pub fn watch_stop() -> Result<(), String> {
-    LOCAL_GEN.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut cur) = remote_host().lock() {
-        if let Some(old) = cur.take() {
-            let _ = crate::agent_rpc::unwatch(&old);
+pub async fn watch_stop() -> Result<(), String> {
+    crate::blocking::run(move || {
+        LOCAL_GEN.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut cur) = remote_host().lock() {
+            if let Some(old) = cur.take() {
+                let _ = crate::agent_rpc::unwatch(&old);
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 fn scan_mtimes(root: &str) -> HashMap<String, i64> {
     let mut out = HashMap::new();
     let mut stack = vec![Path::new(root).to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             let ft = match e.file_type() {

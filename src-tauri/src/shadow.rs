@@ -50,79 +50,88 @@ fn make_baseline(host: &Option<String>, repo: &str) -> Option<String> {
 
 /// 开始新一轮(用户发消息时调):记基线,覆盖上一轮。非 git 仓库则清掉基线(关闭功能)。
 #[tauri::command]
-pub fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(), String> {
-    let host = host.filter(|s| !s.is_empty());
-    let k = key(&host, &repo);
-    if !is_repo(&host, &repo) {
-        if let Ok(mut m) = baselines().lock() {
-            m.remove(&k);
-        }
-        return Ok(());
-    }
-    let base = make_baseline(&host, &repo);
-    if let Ok(mut m) = baselines().lock() {
-        match base {
-            Some(b) => {
-                m.insert(k, b);
-            }
-            None => {
+pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        let host = host.filter(|s| !s.is_empty());
+        let k = key(&host, &repo);
+        if !is_repo(&host, &repo) {
+            if let Ok(mut m) = baselines().lock() {
                 m.remove(&k);
             }
+            return Ok(());
         }
-    }
-    Ok(())
+        let base = make_baseline(&host, &repo);
+        if let Ok(mut m) = baselines().lock() {
+            match base {
+                Some(b) => {
+                    m.insert(k, b);
+                }
+                None => {
+                    m.remove(&k);
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
 }
 
 /// 某文件本轮的 diff(unified)。无基线/无改动 → 返回空串(前端则显完整文件)。
 #[tauri::command]
-pub fn shadow_diff(host: Option<String>, repo: String, path: String) -> Result<String, String> {
-    let host = host.filter(|s| !s.is_empty());
-    let base = {
-        let m = baselines().lock().map_err(|e| e.to_string())?;
-        match m.get(&key(&host, &repo)) {
-            Some(b) => b.clone(),
-            None => return Ok(String::new()),
-        }
-    };
-    // path 可能是绝对路径;git 需要相对 repo 的路径
-    let rel = path
-        .strip_prefix(&format!("{}/", repo.trim_end_matches('/')))
-        .unwrap_or(&path)
-        .to_string();
-    git_raw(
-        &host,
-        &repo,
-        &["diff", "--no-color", &base, "--", &rel],
-    )
+pub async fn shadow_diff(
+    host: Option<String>,
+    repo: String,
+    path: String,
+) -> Result<String, String> {
+    crate::blocking::run(move || {
+        let host = host.filter(|s| !s.is_empty());
+        let base = {
+            let m = baselines().lock().map_err(|e| e.to_string())?;
+            match m.get(&key(&host, &repo)) {
+                Some(b) => b.clone(),
+                None => return Ok(String::new()),
+            }
+        };
+        // path 可能是绝对路径;git 需要相对 repo 的路径
+        let rel = path
+            .strip_prefix(&format!("{}/", repo.trim_end_matches('/')))
+            .unwrap_or(&path)
+            .to_string();
+        git_raw(&host, &repo, &["diff", "--no-color", &base, "--", &rel])
+    })
+    .await
 }
 
 /// 本轮改过哪些文件:相对 repo 的路径 → 状态字符(M/A/D)。供文件树"本轮高亮"。
 #[tauri::command]
-pub fn shadow_changed(
+pub async fn shadow_changed(
     host: Option<String>,
     repo: String,
 ) -> Result<HashMap<String, String>, String> {
-    let host = host.filter(|s| !s.is_empty());
-    let base = {
-        let m = baselines().lock().map_err(|e| e.to_string())?;
-        match m.get(&key(&host, &repo)) {
-            Some(b) => b.clone(),
-            None => return Ok(HashMap::new()),
+    crate::blocking::run(move || {
+        let host = host.filter(|s| !s.is_empty());
+        let base = {
+            let m = baselines().lock().map_err(|e| e.to_string())?;
+            match m.get(&key(&host, &repo)) {
+                Some(b) => b.clone(),
+                None => return Ok(HashMap::new()),
+            }
+        };
+        let out = git_raw(&host, &repo, &["diff", "--name-status", &base])?;
+        let base_dir = repo.trim_end_matches('/');
+        let mut map = HashMap::new();
+        for line in out.lines() {
+            let mut it = line.split('\t');
+            let st = it.next().unwrap_or("").trim();
+            let p = it.next().unwrap_or("").trim();
+            if st.is_empty() || p.is_empty() {
+                continue;
+            }
+            // 状态首字母:A/M/D(R 改名等取首字母)
+            let ch = st.chars().next().unwrap_or('M').to_string();
+            map.insert(format!("{base_dir}/{p}"), ch);
         }
-    };
-    let out = git_raw(&host, &repo, &["diff", "--name-status", &base])?;
-    let base_dir = repo.trim_end_matches('/');
-    let mut map = HashMap::new();
-    for line in out.lines() {
-        let mut it = line.split('\t');
-        let st = it.next().unwrap_or("").trim();
-        let p = it.next().unwrap_or("").trim();
-        if st.is_empty() || p.is_empty() {
-            continue;
-        }
-        // 状态首字母:A/M/D(R 改名等取首字母)
-        let ch = st.chars().next().unwrap_or('M').to_string();
-        map.insert(format!("{base_dir}/{p}"), ch);
-    }
-    Ok(map)
+        Ok(map)
+    })
+    .await
 }

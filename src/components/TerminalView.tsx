@@ -121,8 +121,6 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     useEffect(() => {
       const host = hostRef.current
       if (!host) return
-      const _t0 = performance.now()
-      console.log('[term] mount start', id, 'at', _t0.toFixed(0))
 
       const term = new Terminal({
         fontFamily:
@@ -144,7 +142,6 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       fit.fit()
       termRef.current = term
       fitRef.current = fit
-      console.log('[term] open+fit done', id, 'cost', (performance.now() - _t0).toFixed(0), 'ms')
 
       let unlistenOut: UnlistenFn | undefined
       let unlistenExit: UnlistenFn | undefined

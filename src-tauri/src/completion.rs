@@ -37,7 +37,15 @@ fn cache() -> &'static Mutex<HashMap<String, Cached>> {
 
 /// 取某 agent 的补全数据(命令/技能/子 agent)。带缓存。
 #[tauri::command]
-pub fn agent_completions(
+pub async fn agent_completions(
+    command_base: String,
+    cwd: Option<String>,
+    host: Option<String>,
+) -> Result<CompletionData, String> {
+    crate::blocking::run(move || agent_completions_blocking(command_base, cwd, host)).await
+}
+
+fn agent_completions_blocking(
     command_base: String,
     cwd: Option<String>,
     host: Option<String>,
@@ -186,13 +194,62 @@ fn parse_init(raw: &str) -> Option<CompletionData> {
 /// 与 init 的 slash_commands 合并去重,补齐 /resume /rewind /config 等。
 /// 内置命令跨版本稳定;插件/技能仍由 init 实时提供(自动跟版本)。
 const BUILTIN_COMMANDS: &[&str] = &[
-    "add-dir", "agents", "background", "branch", "btw", "clear", "color", "compact", "config",
-    "context", "copy", "diff", "doctor", "effort", "exit", "export", "fast", "feedback", "focus",
-    "help", "hooks", "ide", "init", "keybindings", "login", "logout", "loop", "mcp", "memory",
-    "model", "permissions", "plan", "plugin", "powerup", "recap", "release-notes", "reload-plugins",
-    "reload-skills", "rename", "resume", "review", "rewind", "run", "sandbox", "security-review",
-    "skills", "status", "statusline", "stickers", "tasks", "terminal-setup", "theme", "tui",
-    "usage", "verify", "workflows",
+    "add-dir",
+    "agents",
+    "background",
+    "branch",
+    "btw",
+    "clear",
+    "color",
+    "compact",
+    "config",
+    "context",
+    "copy",
+    "diff",
+    "doctor",
+    "effort",
+    "exit",
+    "export",
+    "fast",
+    "feedback",
+    "focus",
+    "help",
+    "hooks",
+    "ide",
+    "init",
+    "keybindings",
+    "login",
+    "logout",
+    "loop",
+    "mcp",
+    "memory",
+    "model",
+    "permissions",
+    "plan",
+    "plugin",
+    "powerup",
+    "recap",
+    "release-notes",
+    "reload-plugins",
+    "reload-skills",
+    "rename",
+    "resume",
+    "review",
+    "rewind",
+    "run",
+    "sandbox",
+    "security-review",
+    "skills",
+    "status",
+    "statusline",
+    "stickers",
+    "tasks",
+    "terminal-setup",
+    "theme",
+    "tui",
+    "usage",
+    "verify",
+    "workflows",
 ];
 
 /// 把内置命令合并进 init 返回的命令列表(去重,init 优先保留其顺序,内置追加缺失的)。
@@ -209,7 +266,9 @@ fn merge_builtin_commands(mut cmds: Vec<String>) -> Vec<String> {
 
 fn read_local_skills() -> Option<Vec<String>> {
     let home = std::env::var("HOME").ok()?;
-    let dir = std::path::PathBuf::from(home).join(".claude").join("skills");
+    let dir = std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("skills");
     let mut out: Vec<String> = std::fs::read_dir(dir)
         .ok()?
         .flatten()

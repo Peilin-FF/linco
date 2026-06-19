@@ -150,10 +150,8 @@ fn spawn_session(host: &str) -> Result<ShellSession, String> {
          export PATH=\"$HOME/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; \
          rm -f \"${TMPDIR:-/tmp}\"/.linco.*.out \"${TMPDIR:-/tmp}\"/.linco.*.err 2>/dev/null; \
          command -v base64 >/dev/null && echo __LINCO_HS_OK__";
-    let (out, _err, _rc) =
-        exec_on(&mut sess, prelude, None, Duration::from_secs(15)).map_err(|e| {
-            format!("会话握手失败: {e:?}")
-        })?;
+    let (out, _err, _rc) = exec_on(&mut sess, prelude, None, Duration::from_secs(15))
+        .map_err(|e| format!("会话握手失败: {e:?}"))?;
     if !String::from_utf8_lossy(&out).contains("__LINCO_HS_OK__") {
         return Err("远端缺少 base64,无法启用持久会话".into());
     }
@@ -186,9 +184,7 @@ fn exec_on(
     let mut script = String::new();
     match stdin_data {
         None => {
-            script.push_str(&format!(
-                "( {sh_cmd} ) </dev/null >{outf} 2>{errf}\n"
-            ));
+            script.push_str(&format!("( {sh_cmd} ) </dev/null >{outf} 2>{errf}\n"));
         }
         Some(data) => {
             let b64 = B64.encode(data);
@@ -203,7 +199,9 @@ fn exec_on(
     script.push_str(&format!("base64 <{outf} | tr -d '\\n'\n"));
     script.push_str(&format!("printf '\\n__LINCO_{nonce}__ERR '\n"));
     script.push_str(&format!("base64 <{errf} | tr -d '\\n'\n"));
-    script.push_str(&format!("printf '\\n__LINCO_{nonce}__END %s\\n' \"$__rc\"\n"));
+    script.push_str(&format!(
+        "printf '\\n__LINCO_{nonce}__END %s\\n' \"$__rc\"\n"
+    ));
     script.push_str(&format!("rm -f {outf} {errf}\n"));
 
     // 看门狗:超时杀子进程以打断阻塞 read_line
@@ -425,10 +423,7 @@ pub fn ssh_config_hosts() -> Vec<String> {
     let mut hosts: Vec<String> = Vec::new();
     for line in text.lines() {
         let t = line.trim();
-        if let Some(rest) = t
-            .strip_prefix("Host ")
-            .or_else(|| t.strip_prefix("host "))
-        {
+        if let Some(rest) = t.strip_prefix("Host ").or_else(|| t.strip_prefix("host ")) {
             for h in rest.split_whitespace() {
                 // 过滤通配符与否定项
                 if h.contains('*') || h.contains('?') || h.starts_with('!') {
@@ -443,52 +438,60 @@ pub fn ssh_config_hosts() -> Vec<String> {
     hosts
 }
 
-/// 尝试用 key/已有 master 静默连接(BatchMode)。成功 = master 可用。
+/// 尝试用 key/已有 master 静默连接(BatchMode)。成功 = master 与 RPC agent 都可用。
 /// 失败(需密码/2FA/首次 host key)返回 Err,前端据此引导去终端交互连接。
 #[tauri::command]
-pub fn ssh_connect(host: String, identity: Option<String>) -> Result<(), String> {
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_opts());
-    cmd.arg("-o").arg("BatchMode=yes");
-    if let Some(id) = identity.as_ref().filter(|s| !s.is_empty()) {
-        cmd.arg("-i").arg(id);
-    }
-    cmd.arg(&host).arg("--").arg("echo").arg("__linco_ok__");
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let out = cmd.output().map_err(|e| format!("ssh 启动失败: {e}"))?;
-    if out.status.success()
-        && String::from_utf8_lossy(&out.stdout).contains("__linco_ok__")
-    {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-    }
+pub async fn ssh_connect(host: String, identity: Option<String>) -> Result<(), String> {
+    crate::blocking::run(move || {
+        let mut cmd = Command::new("ssh");
+        cmd.args(ssh_opts());
+        cmd.arg("-o").arg("BatchMode=yes");
+        if let Some(id) = identity.as_ref().filter(|s| !s.is_empty()) {
+            cmd.arg("-i").arg(id);
+        }
+        cmd.arg(&host).arg("--").arg("echo").arg("__linco_ok__");
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        let out = cmd.output().map_err(|e| format!("ssh 启动失败: {e}"))?;
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("__linco_ok__") {
+            crate::agent_rpc::warmup(&host)
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
+    })
+    .await
 }
 
 /// 探测 master 是否存活。
 #[tauri::command]
-pub fn ssh_check(host: String) -> bool {
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_opts());
-    cmd.arg("-O").arg("check").arg(&host);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
-    cmd.status().map(|s| s.success()).unwrap_or(false)
+pub async fn ssh_check(host: String) -> bool {
+    crate::blocking::run(move || {
+        let mut cmd = Command::new("ssh");
+        cmd.args(ssh_opts());
+        cmd.arg("-O").arg("check").arg(&host);
+        cmd.stdin(Stdio::null());
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+        Ok(cmd.status().map(|s| s.success()).unwrap_or(false))
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// 关闭 master 连接。
 #[tauri::command]
-pub fn ssh_disconnect(host: String) -> Result<(), String> {
-    drop_session(&host); // 先关持久 shell 会话(否则会持有死管道)
-    crate::agent_rpc::drop_session(&host); // 关 agent 会话(杀远端常驻进程的本地管道)
-    let mut cmd = Command::new("ssh");
-    cmd.args(ssh_opts());
-    cmd.arg("-O").arg("exit").arg(&host);
-    let _ = cmd.output();
-    Ok(())
+pub async fn ssh_disconnect(host: String) -> Result<(), String> {
+    crate::blocking::run(move || {
+        drop_session(&host); // 先关持久 shell 会话(否则会持有死管道)
+        crate::agent_rpc::drop_session(&host); // 关 agent 会话(杀远端常驻进程的本地管道)
+        let mut cmd = Command::new("ssh");
+        cmd.args(ssh_opts());
+        cmd.arg("-O").arg("exit").arg(&host);
+        let _ = cmd.output();
+        Ok(())
+    })
+    .await
 }
 
 // ============ 远程文件操作(供 fs.rs 在 host 非空时调用)============
@@ -556,7 +559,11 @@ fn list_dir_shell(host: &str, dir: &str) -> Result<Vec<RemoteEntry>, String> {
 const MAX_READ: u64 = 5 * 1024 * 1024;
 
 pub fn read_file(host: &str, path: &str) -> Result<String, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "read_file", serde_json::json!({ "path": path, "max": MAX_READ })) {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "read_file",
+        serde_json::json!({ "path": path, "max": MAX_READ }),
+    ) {
         if let Some(t) = v.get("text").and_then(|x| x.as_str()) {
             return Ok(t.to_string());
         }
@@ -580,16 +587,33 @@ fn read_file_shell(host: &str, path: &str) -> Result<String, String> {
 }
 
 pub fn write_file(host: &str, path: &str, content: &str) -> Result<(), String> {
-    if crate::agent_rpc::call(host, "write_file", serde_json::json!({ "path": path, "content": content })).is_ok() {
+    if crate::agent_rpc::call(
+        host,
+        "write_file",
+        serde_json::json!({ "path": path, "content": content }),
+    )
+    .is_ok()
+    {
         return Ok(());
     }
-    run_remote_stdin(host, &format!("cat > {}", shq(path)), Some(content.as_bytes())).map(|_| ())
+    run_remote_stdin(
+        host,
+        &format!("cat > {}", shq(path)),
+        Some(content.as_bytes()),
+    )
+    .map(|_| ())
 }
 
 /// 写远端二进制文件:原始字节经 stdin(base64 heredoc,二进制安全)写入。
 pub fn write_bytes(host: &str, path: &str, bytes: &[u8]) -> Result<(), String> {
     let b64 = B64.encode(bytes);
-    if crate::agent_rpc::call(host, "write_bytes", serde_json::json!({ "path": path, "b64": b64 })).is_ok() {
+    if crate::agent_rpc::call(
+        host,
+        "write_bytes",
+        serde_json::json!({ "path": path, "b64": b64 }),
+    )
+    .is_ok()
+    {
         return Ok(());
     }
     run_remote_stdin(host, &format!("cat > {}", shq(path)), Some(bytes)).map(|_| ())
@@ -598,7 +622,11 @@ pub fn write_bytes(host: &str, path: &str, bytes: &[u8]) -> Result<(), String> {
 /// 读远端文件为 base64(供图片/视频/PDF 等二进制预览)。
 /// 远端用 `base64`(GNU coreutils / busybox 通用),失败回退 openssl。
 pub fn read_bytes_b64(host: &str, path: &str, max: u64) -> Result<String, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "read_bytes", serde_json::json!({ "path": path, "max": max })) {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "read_bytes",
+        serde_json::json!({ "path": path, "max": max }),
+    ) {
         if let Some(b) = v.get("b64").and_then(|x| x.as_str()) {
             return Ok(b.to_string());
         }
@@ -628,7 +656,11 @@ fn read_bytes_b64_shell(host: &str, path: &str, max: u64) -> Result<String, Stri
 }
 
 pub fn create_file(host: &str, parent: &str, name: &str) -> Result<String, String> {
-    match crate::agent_rpc::call(host, "create_file", serde_json::json!({ "parent": parent, "name": name })) {
+    match crate::agent_rpc::call(
+        host,
+        "create_file",
+        serde_json::json!({ "parent": parent, "name": name }),
+    ) {
         Ok(v) => {
             if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
                 return Ok(p.to_string());
@@ -645,7 +677,11 @@ pub fn create_file(host: &str, parent: &str, name: &str) -> Result<String, Strin
 }
 
 pub fn create_dir(host: &str, parent: &str, name: &str) -> Result<String, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "mkdir", serde_json::json!({ "parent": parent, "name": name })) {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "mkdir",
+        serde_json::json!({ "parent": parent, "name": name }),
+    ) {
         if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
             return Ok(p.to_string());
         }
@@ -656,7 +692,11 @@ pub fn create_dir(host: &str, parent: &str, name: &str) -> Result<String, String
 }
 
 pub fn rename(host: &str, path: &str, new_name: &str) -> Result<String, String> {
-    match crate::agent_rpc::call(host, "rename", serde_json::json!({ "path": path, "new_name": new_name })) {
+    match crate::agent_rpc::call(
+        host,
+        "rename",
+        serde_json::json!({ "path": path, "new_name": new_name }),
+    ) {
         Ok(v) => {
             if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
                 return Ok(p.to_string());
@@ -667,8 +707,15 @@ pub fn rename(host: &str, path: &str, new_name: &str) -> Result<String, String> 
     }
     let parent = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
     let target = join_remote(parent, new_name);
-    run_remote(host, &format!("test ! -e {t} && mv -- {s} {t}", t = shq(&target), s = shq(path)))
-        .map_err(|_| "目标已存在或重命名失败".to_string())?;
+    run_remote(
+        host,
+        &format!(
+            "test ! -e {t} && mv -- {s} {t}",
+            t = shq(&target),
+            s = shq(path)
+        ),
+    )
+    .map_err(|_| "目标已存在或重命名失败".to_string())?;
     Ok(target)
 }
 
@@ -680,7 +727,11 @@ pub fn delete(host: &str, path: &str) -> Result<(), String> {
 }
 
 pub fn copy(host: &str, src: &str, dest_dir: &str) -> Result<String, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "copy", serde_json::json!({ "src": src, "dest_dir": dest_dir })) {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "copy",
+        serde_json::json!({ "src": src, "dest_dir": dest_dir }),
+    ) {
         if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
             return Ok(p.to_string());
         }
@@ -692,7 +743,11 @@ pub fn copy(host: &str, src: &str, dest_dir: &str) -> Result<String, String> {
 }
 
 pub fn move_to(host: &str, src: &str, dest_dir: &str) -> Result<String, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "move", serde_json::json!({ "src": src, "dest_dir": dest_dir })) {
+    if let Ok(v) = crate::agent_rpc::call(
+        host,
+        "move",
+        serde_json::json!({ "src": src, "dest_dir": dest_dir }),
+    ) {
         if let Some(p) = v.get("path").and_then(|x| x.as_str()) {
             return Ok(p.to_string());
         }
@@ -705,7 +760,11 @@ pub fn move_to(host: &str, src: &str, dest_dir: &str) -> Result<String, String> 
 
 /// 文件名搜索(优先 agent,回退远程 find)。
 pub fn search_files(host: &str, root: &str, query: &str) -> Result<Vec<RemoteEntry>, String> {
-    if let Ok(v) = crate::agent_rpc::call(host, "search_files", serde_json::json!({ "root": root, "query": query })) {
+    if let Ok(v) = crate::agent_rpc::call_background(
+        host,
+        "search_files",
+        serde_json::json!({ "root": root, "query": query }),
+    ) {
         if let Some(arr) = v.get("entries").and_then(|x| x.as_array()) {
             return Ok(arr
                 .iter()
@@ -755,7 +814,7 @@ pub fn grep_content(
     case_sensitive: bool,
     is_regex: bool,
 ) -> Result<Vec<(String, usize, String)>, String> {
-    if let Ok(v) = crate::agent_rpc::call(
+    if let Ok(v) = crate::agent_rpc::call_background(
         host,
         "grep",
         serde_json::json!({ "root": root, "pattern": pattern, "case_sensitive": case_sensitive, "is_regex": is_regex }),
@@ -881,7 +940,10 @@ pub fn parse_ssh_command(cmd: String) -> Result<SshTarget, String> {
     }
 
     // 第一个位置参数是 [user@]host
-    let target = extra.first().cloned().ok_or("缺少主机,如 ssh root@1.2.3.4")?;
+    let target = extra
+        .first()
+        .cloned()
+        .ok_or("缺少主机,如 ssh root@1.2.3.4")?;
     let hostname = if let Some((u, h)) = target.split_once('@') {
         if user.is_empty() {
             user = u.to_string();
@@ -962,12 +1024,14 @@ pub fn ssh_config_add(
 
 /// 远端 HOME 目录(作为目录浏览器初始路径)。
 #[tauri::command]
-pub fn remote_home(host: String) -> Result<String, String> {
-    let out = run_remote_str(&host, "echo $HOME")?;
-    let h = out.trim().to_string();
-    Ok(if h.is_empty() { "/".into() } else { h })
+pub async fn remote_home(host: String) -> Result<String, String> {
+    crate::blocking::run(move || {
+        let out = run_remote_str(&host, "echo $HOME")?;
+        let h = out.trim().to_string();
+        Ok(if h.is_empty() { "/".into() } else { h })
+    })
+    .await
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -984,7 +1048,11 @@ mod tests {
             .expect("spawn sh");
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
-        ShellSession { child, stdin, stdout }
+        ShellSession {
+            child,
+            stdin,
+            stdout,
+        }
     }
 
     #[test]
@@ -1006,9 +1074,13 @@ mod tests {
     fn frame_binary_roundtrip() {
         let mut s = local_session();
         // 输出含 NUL 与高位字节,验证 base64 分帧二进制安全
-        let (out, _err, rc) =
-            exec_on(&mut s, "printf '\\000\\377\\001ABC'", None, Duration::from_secs(5))
-                .expect("exec");
+        let (out, _err, rc) = exec_on(
+            &mut s,
+            "printf '\\000\\377\\001ABC'",
+            None,
+            Duration::from_secs(5),
+        )
+        .expect("exec");
         assert_eq!(out, vec![0u8, 0xff, 0x01, b'A', b'B', b'C']);
         assert_eq!(rc, 0);
     }
@@ -1030,7 +1102,13 @@ mod tests {
         let mut s = local_session();
         let (o1, _, _) = exec_on(&mut s, "echo a", None, Duration::from_secs(5)).unwrap();
         let (o2, _, _) = exec_on(&mut s, "echo b", None, Duration::from_secs(5)).unwrap();
-        let (o3, _, _) = exec_on(&mut s, "pwd >/dev/null; echo c", None, Duration::from_secs(5)).unwrap();
+        let (o3, _, _) = exec_on(
+            &mut s,
+            "pwd >/dev/null; echo c",
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(String::from_utf8_lossy(&o1).trim(), "a");
         assert_eq!(String::from_utf8_lossy(&o2).trim(), "b");
         assert_eq!(String::from_utf8_lossy(&o3).trim(), "c");

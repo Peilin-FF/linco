@@ -12,14 +12,17 @@
 # 兼容 Python 3.6+(集群常见)。任何 op 抛错 → 返回 ok:false,不崩进程。
 # 空闲自退:超过 IDLE_TIMEOUT 无请求即退出,不在集群留垃圾进程。
 
-import sys, os, json, base64, shutil, subprocess, time, threading
+import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "3"
+AGENT_VERSION = "4"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
+MAX_WORKERS = 8
+MAX_QUEUED_REQUESTS = 128
 
 _last_activity = time.time()
 _out_lock = threading.Lock()
+_request_queue = queue.Queue(MAX_QUEUED_REQUESTS)
 
 
 def _send(obj):
@@ -227,6 +230,7 @@ def op_git(a):
 
 _watch_thread = None
 _watch_stop = None  # threading.Event
+_watch_lock = threading.Lock()
 WATCH_SKIP = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
 
 
@@ -311,23 +315,30 @@ def _watch_poll(root, stop):
 def op_watch(a, rid):
     global _watch_thread, _watch_stop
     root = a["root"]
-    # 已在监听 → 先停旧的
-    if _watch_stop is not None:
-        _watch_stop.set()
-    _watch_stop = threading.Event()
-    stop = _watch_stop
-    target = _watch_inotify if _has_inotifywait() else _watch_poll
-    _watch_thread = threading.Thread(target=target, args=(root, stop), daemon=True)
-    _watch_thread.start()
-    _send({"id": rid, "ok": True, "result": {"watching": root,
-           "mode": "inotify" if _has_inotifywait() else "poll"}})
+    mode = "none"
+    with _watch_lock:
+        # 已在监听 → 先停旧的
+        if _watch_stop is not None:
+            _watch_stop.set()
+        _watch_stop = None
+        _watch_thread = None
+        # 没有 inotifywait 时不要做全项目轮询。大仓库/远端盘会把首次展开目录拖到
+        # 数秒甚至十几秒;交互优先,自动刷新可以降级为手动/操作后局部刷新。
+        if _has_inotifywait():
+            _watch_stop = threading.Event()
+            stop = _watch_stop
+            _watch_thread = threading.Thread(target=_watch_inotify, args=(root, stop), daemon=True)
+            _watch_thread.start()
+            mode = "inotify"
+    _send({"id": rid, "ok": True, "result": {"watching": root, "mode": mode}})
 
 
 def op_unwatch(a, rid):
     global _watch_stop
-    if _watch_stop is not None:
-        _watch_stop.set()
-        _watch_stop = None
+    with _watch_lock:
+        if _watch_stop is not None:
+            _watch_stop.set()
+            _watch_stop = None
     _send({"id": rid, "ok": True, "result": {}})
 
 
@@ -375,9 +386,28 @@ def _idle_watch():
             os._exit(0)
 
 
+def _worker_loop():
+    while True:
+        req = _request_queue.get()
+        if req is None:
+            _request_queue.task_done()
+            return
+        try:
+            _handle(req)
+        finally:
+            _request_queue.task_done()
+
+
+def _start_workers():
+    for i in range(MAX_WORKERS):
+        t = threading.Thread(target=_worker_loop, name="linco-rpc-%d" % i, daemon=True)
+        t.start()
+
+
 def main():
     t = threading.Thread(target=_idle_watch, daemon=True)
     t.start()
+    _start_workers()
     # 逐行读请求
     for raw in sys.stdin:
         raw = raw.strip()
@@ -388,7 +418,7 @@ def main():
         except Exception:
             _send({"id": None, "ok": False, "error": "bad json"})
             continue
-        _handle(req)
+        _request_queue.put(req)
     # stdin EOF → 退出
     return 0
 

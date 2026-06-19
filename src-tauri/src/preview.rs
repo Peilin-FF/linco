@@ -24,10 +24,10 @@ const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(2);
 
 struct PreviewInner {
-    port: u16,                 // 0 = 未启动
-    host: Option<String>,      // None = 本地
-    root: String,              // 服务器根 = 工作目录绝对路径
-    target_rel: String,        // 当前预览文件(相对 root),热刷新监听对象
+    port: u16,            // 0 = 未启动
+    host: Option<String>, // None = 本地
+    root: String,         // 服务器根 = 工作目录绝对路径
+    target_rel: String,   // 当前预览文件(相对 root),热刷新监听对象
     last_mtime: Option<i64>,
     // 远端字节缓存:key = 绝对路径,value = (取得时刻, 字节)
     cache: HashMap<String, (Instant, Vec<u8>)>,
@@ -73,8 +73,8 @@ pub fn preview_start(app: AppHandle) -> Result<u16, String> {
         }
     }
 
-    let server = tiny_http::Server::http("127.0.0.1:0")
-        .map_err(|e| format!("启动预览服务器失败: {e}"))?;
+    let server =
+        tiny_http::Server::http("127.0.0.1:0").map_err(|e| format!("启动预览服务器失败: {e}"))?;
     let port = match server.server_addr() {
         tiny_http::ListenAddr::IP(a) => a.port(),
         _ => return Err("无法获取预览端口".into()),
@@ -104,8 +104,7 @@ pub fn preview_start(app: AppHandle) -> Result<u16, String> {
             let resp = tiny_http::Response::from_data(bytes)
                 .with_status_code(code)
                 .with_header(
-                    tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
-                        .unwrap(),
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).unwrap(),
                 )
                 .with_header(
                     tiny_http::Header::from_bytes(
@@ -156,7 +155,12 @@ pub fn preview_set_target(
 pub fn preview_prefetch_assets(host: Option<String>) {
     let host = host.filter(|s| !s.is_empty());
     std::thread::spawn(move || {
-        for asset in ["notebook.css", "notebook.js", "katex.min.css", "katex.min.js"] {
+        for asset in [
+            "notebook.css",
+            "notebook.js",
+            "katex.min.css",
+            "katex.min.js",
+        ] {
             let _ = serve_asset(&host, asset); // 命中即写入 assets_cache
         }
     });
@@ -165,15 +169,22 @@ pub fn preview_prefetch_assets(host: Option<String>) {
 /// 解析默认预览目标:index.html → artifacts/index.html → 最新 *.html。
 /// 返回相对 root 的路径;找不到返 Err。
 #[tauri::command]
-pub fn preview_default_target(host: Option<String>, root: String) -> Result<String, String> {
+pub async fn preview_default_target(host: Option<String>, root: String) -> Result<String, String> {
+    crate::blocking::run(move || preview_default_target_blocking(host, root)).await
+}
+
+fn preview_default_target_blocking(host: Option<String>, root: String) -> Result<String, String> {
     let host = host.filter(|s| !s.is_empty());
     let candidates = ["index.html", "artifacts/index.html"];
     if let Some(h) = host.as_deref() {
         for c in candidates {
             let abs = join_rel(&root, c);
-            let out = crate::remote::run_remote(h, &format!("test -f {} && echo Y", crate::remote::shq(&abs)))
-                .map(|b| String::from_utf8_lossy(&b).trim().to_string())
-                .unwrap_or_default();
+            let out = crate::remote::run_remote(
+                h,
+                &format!("test -f {} && echo Y", crate::remote::shq(&abs)),
+            )
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .unwrap_or_default();
             if out == "Y" {
                 return Ok(c.to_string());
             }
@@ -240,7 +251,11 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
 
     // 产物首页:显式 /__index__ 或目录请求(空/以 / 结尾)→ 列出所有 HTML 可点链接。
     if rel == "__index__" || rel.is_empty() || rel.ends_with('/') {
-        let dir_rel = if rel == "__index__" { "" } else { rel.trim_end_matches('/') };
+        let dir_rel = if rel == "__index__" {
+            ""
+        } else {
+            rel.trim_end_matches('/')
+        };
         return serve_index(&host, &root, dir_rel);
     }
 
@@ -295,7 +310,11 @@ fn serve_index(host: &Option<String>, root: &str, dir_rel: &str) -> (Vec<u8>, St
         }
         items.push_str("</ul>");
     }
-    let title = if dir_rel.is_empty() { "产物" } else { dir_rel };
+    let title = if dir_rel.is_empty() {
+        "产物"
+    } else {
+        dir_rel
+    };
     let page = format!(
         "<!doctype html><html lang=zh><head><meta charset=utf-8>\
 <meta name=viewport content=\"width=device-width,initial-scale=1\">\
@@ -349,12 +368,21 @@ fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
     } else {
         let root_path = std::path::Path::new(root);
         let mut stack = vec![(std::path::PathBuf::from(base), 0u32)];
-        const SKIP: &[&str] = &["node_modules", ".git", "target", "__pycache__", "dist", ".venv"];
+        const SKIP: &[&str] = &[
+            "node_modules",
+            ".git",
+            "target",
+            "__pycache__",
+            "dist",
+            ".venv",
+        ];
         while let Some((dir, depth)) = stack.pop() {
             if depth > 4 || out.len() >= 500 {
                 continue;
             }
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for e in rd.flatten() {
                 let p = e.path();
                 if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -363,7 +391,11 @@ fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
                         stack.push((p, depth + 1));
                     }
                 } else {
-                    let lower = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                    let lower = p
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
                     if lower == "html" || lower == "htm" {
                         if let Ok(rel) = p.strip_prefix(root_path) {
                             out.push(rel.to_string_lossy().replace('\\', "/"));
@@ -603,8 +635,7 @@ fn assets_dir(host: &Option<String>) -> Option<String> {
         find_assets_local()
     };
     if let Ok(mut g) = global().lock() {
-        g.assets_dir
-            .insert(hkey, found.clone().unwrap_or_default());
+        g.assets_dir.insert(hkey, found.clone().unwrap_or_default());
     }
     found
 }
@@ -640,13 +671,13 @@ fn walk_find_assets(base: &str, max_depth: u32) -> Option<String> {
         if depth > max_depth {
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                if e.file_name().to_string_lossy() == "assets"
-                    && p.join("notebook.js").is_file()
-                {
+                if e.file_name().to_string_lossy() == "assets" && p.join("notebook.js").is_file() {
                     return Some(p.to_string_lossy().to_string());
                 }
                 stack.push((p, depth + 1));
@@ -740,7 +771,9 @@ fn newest_local_html(root: &str) -> Option<String> {
         if depth > 3 {
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             let ft = match e.file_type() {
@@ -767,7 +800,11 @@ fn newest_local_html(root: &str) -> Option<String> {
 }
 
 fn join_rel(root: &str, rel: &str) -> String {
-    format!("{}/{}", root.trim_end_matches('/'), rel.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        root.trim_end_matches('/'),
+        rel.trim_start_matches('/')
+    )
 }
 
 /// 安全拼接:归一化 rel,拒绝 `..` 逃逸;结果绝对路径必须在 root 内。
@@ -877,7 +914,8 @@ mod save_tests {
     use super::*;
     #[test]
     fn replace_seed_script_body() {
-        let src = "<html><script id=\"seed\" type=\"application/json\">OLD</script><body></body></html>";
+        let src =
+            "<html><script id=\"seed\" type=\"application/json\">OLD</script><body></body></html>";
         let out = replace_seed(src, "{\"a\":1}").unwrap();
         assert!(out.contains("{\"a\":1}"), "new seed in: {out}");
         assert!(!out.contains("OLD"), "old seed gone");

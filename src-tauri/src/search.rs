@@ -12,8 +12,8 @@ use serde::Serialize;
 
 #[derive(Serialize)]
 pub struct MatchLine {
-    pub line: usize,        // 1-based 行号
-    pub text: String,       // 该行内容
+    pub line: usize,             // 1-based 行号
+    pub text: String,            // 该行内容
     pub ranges: Vec<[usize; 2]>, // 匹配在行内的 [起, 止) 字符区间(按 char)
 }
 
@@ -115,8 +115,7 @@ fn glob_to_regex(glob: &str) -> String {
                 }
             }
             '?' => re.push_str("[^/]"),
-            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']'
-            | '\\' => {
+            '.' | '+' | '(' | ')' | '|' | '^' | '$' | '{' | '}' | '[' | ']' | '\\' => {
                 re.push('\\');
                 re.push(c);
             }
@@ -129,7 +128,33 @@ fn glob_to_regex(glob: &str) -> String {
 
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub fn search_content(
+pub async fn search_content(
+    root: String,
+    query: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    is_regex: bool,
+    include: String,
+    exclude: String,
+    host: Option<String>,
+) -> Result<Vec<FileMatches>, String> {
+    crate::blocking::run(move || {
+        search_content_blocking(
+            root,
+            query,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            include,
+            exclude,
+            host,
+        )
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_content_blocking(
     root: String,
     query: String,
     case_sensitive: bool,
@@ -147,13 +172,8 @@ pub fn search_content(
     // 远程:用 grep 拿到 path:line:text,再用同一正则算行内匹配区间。
     // (include/exclude 暂只在本地生效;远程靠 grep --exclude-dir 跳过重目录)
     if let Some(h) = host.as_deref().filter(|s| !s.is_empty()) {
-        let rows = crate::remote::grep_content(
-            h,
-            &root,
-            &query,
-            case_sensitive,
-            is_regex || whole_word,
-        )?;
+        let rows =
+            crate::remote::grep_content(h, &root, &query, case_sensitive, is_regex || whole_word)?;
         let mut files: Vec<FileMatches> = Vec::new();
         for (path, line_no, text) in rows {
             let mut ranges: Vec<[usize; 2]> = Vec::new();
@@ -286,7 +306,30 @@ pub fn search_content(
 
 /// 在单个文件中替换所有匹配,返回替换次数。
 #[tauri::command]
-pub fn replace_in_file(
+pub async fn replace_in_file(
+    path: String,
+    query: String,
+    replacement: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    is_regex: bool,
+    host: Option<String>,
+) -> Result<usize, String> {
+    crate::blocking::run(move || {
+        replace_in_file_blocking(
+            path,
+            query,
+            replacement,
+            case_sensitive,
+            whole_word,
+            is_regex,
+            host,
+        )
+    })
+    .await
+}
+
+fn replace_in_file_blocking(
     path: String,
     query: String,
     replacement: String,

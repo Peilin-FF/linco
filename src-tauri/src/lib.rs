@@ -7,6 +7,7 @@
 
 mod agent;
 mod agent_rpc;
+mod blocking;
 mod completion;
 mod config;
 mod fs;
