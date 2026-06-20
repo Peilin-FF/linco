@@ -56,16 +56,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 更新包签名(必填,仓库已配 secrets)
+          # 更新包签名(仓库已配 secrets)。
+          # 不配 Apple 证书:走 ad-hoc 签名,mac 包用户首次打开需右键→打开
+          # 或 `xattr -cr`。配了空的 APPLE_* 反而会让 tauri-action 尝试
+          # 导入空证书而失败,故这里完全不传。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple 公证(可选;没配这些 secrets 时自动跳过,mac 包需手动绕过「已损坏」)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}

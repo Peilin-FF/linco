@@ -219,9 +219,7 @@ fn exec_on(
         }
         if !done_wd.load(Ordering::Relaxed) {
             // 超时:杀掉 ssh 进程(用 pid)
-            unsafe {
-                libc_kill(pid);
-            }
+            kill_pid(pid);
         }
     });
 
@@ -291,12 +289,24 @@ fn read_framed(
     }
 }
 
-// 用 libc kill 杀进程(打断看门狗超时下的阻塞读)
-unsafe fn libc_kill(pid: u32) {
-    extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
+// 跨平台强杀进程(打断看门狗超时下的阻塞读)。
+// Unix:POSIX kill(SIGKILL);Windows:taskkill /F。
+#[cfg(unix)]
+fn kill_pid(pid: u32) {
+    unsafe {
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        kill(pid as i32, 9); // SIGKILL
     }
-    kill(pid as i32, 9); // SIGKILL
+}
+
+#[cfg(windows)]
+fn kill_pid(pid: u32) {
+    use std::process::Command;
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output();
 }
 
 /// 持久会话执行:锁定 host 会话,懒建,断线重试一次。
