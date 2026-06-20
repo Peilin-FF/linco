@@ -445,9 +445,20 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
         return false;
     }
     let norm = |s: &str| {
-        std::fs::canonicalize(s)
+        // 展开 ~(canonicalize 不展开),再归一化解 symlink;失败则退化为去尾斜杠。
+        let expanded = if s == "~" {
+            std::env::var("HOME").unwrap_or_else(|_| s.to_string())
+        } else if let Some(rest) = s.strip_prefix("~/") {
+            match std::env::var("HOME") {
+                Ok(h) => format!("{}/{}", h.trim_end_matches('/'), rest),
+                Err(_) => s.to_string(),
+            }
+        } else {
+            s.to_string()
+        };
+        std::fs::canonicalize(&expanded)
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|_| expanded.trim_end_matches('/').to_string())
     };
     let a = norm(pc);
     let b = norm(project_cwd);

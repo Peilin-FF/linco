@@ -588,7 +588,8 @@ def _agent_descendants(cmd_base, cwd):
     for p in procs:
         if base and base in p["args"]:
             c = _cwd_of(p["pid"])
-            if not cwd or c is None or c == cwd:
+            # cwd 收窄:归一化后比对(容忍尾斜杠/~/symlink),空 cwd 或取不到则不收窄。
+            if not cwd or c is None or _norm_path(c) == _norm_path(cwd):
                 roots.append(p["pid"])
 
     seen = set(roots)
@@ -637,16 +638,25 @@ def op_ps(a):
     return {"procs": _agent_descendants(a.get("command_base") or "", a.get("cwd") or "")}
 
 
+def _norm_path(p):
+    # 路径归一化:展开 ~、相对转绝对、解 symlink(如 macOS /tmp→/private/tmp)。
+    # 关键:前端传入的 project cwd 可能是 ~/proj 或相对形式,而 realpath 不展开 ~,
+    # 直接比对会漏匹配 → 这里先 expanduser 再 abspath/realpath,容忍各种表示。
+    if not p:
+        return p
+    try:
+        return os.path.realpath(os.path.expanduser(p))
+    except OSError:
+        return os.path.expanduser(p).rstrip("/")
+
+
 def _cwd_matches(proc_cwd, project_cwd):
-    # 进程 cwd 是否落在项目目录下(含子目录)。realpath 归一化(解 symlink,如
-    # macOS /tmp→/private/tmp)+ 前缀匹配,容忍尾斜杠与软链差异。
+    # 进程 cwd 是否落在项目目录下(含子目录)。归一化(展开 ~ + 解 symlink)+ 前缀
+    # 匹配,容忍尾斜杠、软链、~ 与相对路径差异。
     if not proc_cwd or not project_cwd:
         return False
-    try:
-        a = os.path.realpath(proc_cwd)
-        b = os.path.realpath(project_cwd)
-    except OSError:
-        a, b = proc_cwd, project_cwd
+    a = _norm_path(proc_cwd)
+    b = _norm_path(project_cwd)
     return a == b or a.startswith(b.rstrip("/") + "/")
 
 

@@ -1,0 +1,15 @@
+{
+  "extraKnownMarketplaces": {
+    "linco-plugins-marketplace": {
+      "source": {
+        "source": "directory",
+        "path": "./vendor/HTML-VibeCoding"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "linco-shadow-diff-en@linco-plugins-marketplace": true,
+    "linco-html-en@linco-plugins-marketplace": true,
+    "linco-task-monitor-en@linco-plugins-marketplace": true
+  }
+}
