@@ -234,11 +234,7 @@ pub fn term_start(
 /// 把数据写入终端 stdin(等价于在终端里键入)。
 /// 这是“对话框 → 终端重定向”的核心:对话框发送的文本通过它进入 PTY。
 #[tauri::command]
-pub fn term_write(
-    state: State<'_, TerminalState>,
-    id: String,
-    data: String,
-) -> Result<(), String> {
+pub fn term_write(state: State<'_, TerminalState>, id: String, data: String) -> Result<(), String> {
     let map = state.0.lock().map_err(|e| e.to_string())?;
     let session = map.get(&id).ok_or("终端会话不存在")?;
     let mut w = session.writer.lock().map_err(|e| e.to_string())?;
@@ -280,7 +276,9 @@ pub fn term_kill(state: State<'_, TerminalState>, id: String) -> Result<(), Stri
 }
 
 fn dirs_home() -> Option<String> {
-    std::env::var("HOME").ok()
+    crate::config::home_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -315,9 +313,7 @@ mod tests {
         let mut writer = pair.master.take_writer().expect("writer");
 
         // 写入一条会回显独特字符串的命令(模拟对话框发送)
-        writer
-            .write_all(b"echo LINCO_PTY_OK\r")
-            .expect("write");
+        writer.write_all(b"echo LINCO_PTY_OK\r").expect("write");
         writer.flush().expect("flush");
 
         // 在限定时间内读取,直到看到回显

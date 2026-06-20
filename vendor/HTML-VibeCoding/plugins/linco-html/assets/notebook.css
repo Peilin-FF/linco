@@ -23,10 +23,13 @@
   .cell{position:relative;margin:0;border:1.5px solid transparent;border-radius:12px;transition:border-color .12s,background .12s}
   .cell:hover{border-color:var(--g200);background:#FCFBF8}
   .cell.editing{border-color:var(--clay);background:#fff}
-  .gutter{position:absolute;left:-30px;top:8px;display:none;flex-direction:column;align-items:center;gap:4px;cursor:grab;user-select:none}
+  .gutter{position:absolute;left:-30px;top:26px;display:none;flex-direction:column;align-items:center;gap:4px;cursor:grab;user-select:none}
   .cell:hover .gutter,.cell.editing .gutter{display:flex}
   .gutter .gp{color:var(--g300);font-size:13px} .gutter:hover .gp{color:var(--clay)}
   .gutter .ty{font-family:var(--mono);font-size:8px;color:var(--g500);letter-spacing:.05em}
+  /* cell 序号:始终可见(在 gutter 之外,不随 hover 隐藏),方便对照 agent 说的"第 N 个 cell" */
+  .cellno{position:absolute;left:-30px;top:6px;width:20px;text-align:center;font-family:var(--mono);font-size:11px;font-weight:600;color:var(--g500);user-select:none;pointer-events:none}
+  .cell:hover .cellno,.cell.editing .cellno{color:var(--clay)}
   .cellbar{position:absolute;top:6px;right:8px;z-index:6;display:none;gap:4px}
   .cell:hover .cellbar,.cell.editing .cellbar{display:flex}
   .ib{width:24px;height:24px;border:1.5px solid var(--g300);border-radius:6px;background:var(--paper);color:var(--g700);font-size:12px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center}

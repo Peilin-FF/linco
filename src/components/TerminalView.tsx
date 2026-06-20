@@ -75,6 +75,8 @@ export interface TerminalHandle {
   send: (text: string) => void
   /** 写入原始字节到 PTY(实时转发用,不自动加回车)。 */
   write: (data: string) => void
+  /** 杀掉当前 PTY 并用新命令重启会话(用于「恢复历史会话」)。 */
+  restartWith: (command: string) => void
   focus: () => void
 }
 
@@ -110,7 +112,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     // 断线后显示「重连」覆盖层
     const [exited, setExited] = useState(false)
     // 重连用:持有重启 PTY 会话的函数(由 effect 内赋值)
-    const restartRef = useRef<(() => void) | null>(null)
+    const restartRef = useRef<((silent?: boolean) => void) | null>(null)
     // cwd / env / initialCommand 只在启动时读取一次,用 ref 持有,
     // 避免 prop 身份变化触发终端重挂载(切换全局目录不应重启已开的终端)。
     const cwdRef = useRef(cwd)
@@ -142,6 +144,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       write: (data: string) => {
         // 原始转发(逐字符同步)
         termWrite(id, data)
+      },
+      restartWith: (command: string) => {
+        // 用新命令重启:更新初始命令 ref,再走 effect 内的重启逻辑
+        // (start() 读取 initCmdRef.current,termStart 会先杀掉同 id 旧 PTY)。
+        initCmdRef.current = command
+        termRef.current?.write(
+          `\r\n\x1b[90m[${tRef.current('history.resuming')}]\x1b[0m\r\n`
+        )
+        restartRef.current?.(true)
       },
       focus: () => termRef.current?.focus()
     }))
@@ -202,9 +213,11 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           term.focus()
         })
       }
-      restartRef.current = () => {
+      restartRef.current = (silent?: boolean) => {
         if (disposed) return
-        term.write(`\r\n\x1b[90m[${tRef.current('term.reconnecting')}]\x1b[0m\r\n`)
+        if (!silent) {
+          term.write(`\r\n\x1b[90m[${tRef.current('term.reconnecting')}]\x1b[0m\r\n`)
+        }
         start()
       }
 

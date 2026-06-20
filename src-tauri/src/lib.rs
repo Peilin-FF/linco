@@ -10,11 +10,13 @@ mod blocking;
 mod config;
 mod fs;
 mod git;
+mod model_test;
 mod plugins;
 mod preview;
 mod procs;
 mod remote;
 mod search;
+mod sessions;
 mod shadow;
 mod terminal;
 mod usage;
@@ -50,6 +52,7 @@ pub fn run() {
             config::load_config,
             config::save_config,
             config::sync_config_to_remote,
+            model_test::test_model_connection,
             plugins::set_language,
             plugins::install_remote_plugins,
             preview::preview_start,
@@ -109,6 +112,8 @@ pub fn run() {
             procs::agent_tasks,
             procs::proc_output_file,
             procs::tail_file,
+            sessions::agent_sessions,
+            sessions::agent_session_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linco");

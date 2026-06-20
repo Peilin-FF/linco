@@ -4,12 +4,14 @@ import { Languages, Bot } from 'lucide-react'
 interface LanguagePickerProps {
   /** 选定 agent + 语言后回调(已写回 config + 装好本地那套) */
   onPick: (agent: 'claude' | 'codex', lang: 'zh' | 'en') => Promise<void>
+  /** 「稍后配置」:关掉引导,不安装任何插件,之后可在设置里再配 */
+  onSkip?: () => void
 }
 
 // 首启选择:用哪个 agent(Claude / Codex)+ 开发语言(中 / 英)。
 // 据此安装对应那套指令(claude→~/.claude/plugins;codex→~/.codex 的 AGENTS.md+skill),
 // 中英分明,避免 HTML 设计规范混淆。中英文案并列,未选语言也能看懂。
-export default function LanguagePicker({ onPick }: LanguagePickerProps): JSX.Element {
+export default function LanguagePicker({ onPick, onSkip }: LanguagePickerProps): JSX.Element {
   const [agent, setAgent] = useState<'claude' | 'codex'>('claude')
   const [lang, setLang] = useState<'zh' | 'en'>('zh')
   const [busy, setBusy] = useState(false)
@@ -88,6 +90,16 @@ export default function LanguagePicker({ onPick }: LanguagePickerProps): JSX.Ele
         >
           {busy ? '安装中… · installing…' : '开始 · Get started'}
         </button>
+
+        {onSkip && (
+          <button
+            onClick={onSkip}
+            disabled={busy}
+            className="mt-2 w-full rounded-xl px-4 py-2 text-[13px] text-ink-muted hover:bg-black/5 disabled:opacity-50"
+          >
+            稍后配置 · Set up later
+          </button>
+        )}
 
         {err && (
           <p className="mt-3 text-[12px] text-red-600">

@@ -125,6 +125,27 @@ fn default_true() -> bool {
     true
 }
 
+/// 跨平台用户主目录。Unix/macOS 读 `HOME`;Windows 上 `HOME` 通常不存在,
+/// 回退 `USERPROFILE`(标准),再退 `HOMEDRIVE`+`HOMEPATH`。供所有本地路径复用。
+pub fn home_dir() -> Result<PathBuf, String> {
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return Ok(PathBuf::from(h));
+        }
+    }
+    if let Ok(up) = std::env::var("USERPROFILE") {
+        if !up.is_empty() {
+            return Ok(PathBuf::from(up));
+        }
+    }
+    if let (Ok(d), Ok(p)) = (std::env::var("HOMEDRIVE"), std::env::var("HOMEPATH")) {
+        if !d.is_empty() && !p.is_empty() {
+            return Ok(PathBuf::from(format!("{d}{p}")));
+        }
+    }
+    Err("无法定位用户主目录(HOME / USERPROFILE 均未设置)".to_string())
+}
+
 /// Linco 本地数据根目录。**发布版与 dev 版隔离**:
 /// - debug build(`tauri dev`)→ `~/.linco`(开发者日常用,保留)
 /// - release build(`tauri build` 出来的发布版)→ `~/.linco-app`(独立、默认空,
@@ -132,13 +153,13 @@ fn default_true() -> bool {
 /// config / shadows / ssh socket / usage 全部挂在这个根下,一并隔离。
 /// 注意:SSH **主机别名**读的是系统 `~/.ssh/config`(ssh 命令标准位置),不受此影响。
 pub fn linco_home() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "无法定位 HOME 目录".to_string())?;
+    let home = home_dir()?;
     let dir = if cfg!(debug_assertions) {
         ".linco"
     } else {
         ".linco-app"
     };
-    Ok(PathBuf::from(home).join(dir))
+    Ok(home.join(dir))
 }
 
 fn config_dir() -> Result<PathBuf, String> {
@@ -227,8 +248,7 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
 pub async fn sync_config_to_remote(host: String) -> Result<(), String> {
     crate::blocking::run(move || {
         let path = config_path()?;
-        let text = fs::read_to_string(&path)
-            .map_err(|e| format!("读取本地配置失败: {e}"))?;
+        let text = fs::read_to_string(&path).map_err(|e| format!("读取本地配置失败: {e}"))?;
         // 远端 HOME
         let home = crate::remote::run_remote(&host, "echo $HOME")
             .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;

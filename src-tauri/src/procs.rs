@@ -178,9 +178,17 @@ pub async fn agent_tasks(
 fn task_from_json(v: &serde_json::Value) -> Option<AgentTask> {
     Some(AgentTask {
         pid: v.get("pid")?.as_i64()?,
-        args: v.get("args").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        args: v
+            .get("args")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         file: v.get("file")?.as_str()?.to_string(),
-        etime: v.get("etime").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        etime: v
+            .get("etime")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -293,14 +301,20 @@ pub async fn tail_file(
                     start: v.get("start").and_then(|x| x.as_i64()).unwrap_or(offset),
                 });
             }
-            let szout = crate::remote::run_remote(&h, &format!("wc -c < {}", crate::remote::shq(&path)))
-                .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
+            let szout =
+                crate::remote::run_remote(&h, &format!("wc -c < {}", crate::remote::shq(&path)))
+                    .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
             let size: i64 = szout.parse().unwrap_or(0);
             let mut start = if offset > size { 0 } else { offset };
             if start == 0 && size > MAX {
                 start = size - MAX;
             }
-            let cmd = format!("tail -c +{} {} | head -c {}", start + 1, crate::remote::shq(&path), MAX);
+            let cmd = format!(
+                "tail -c +{} {} | head -c {}",
+                start + 1,
+                crate::remote::shq(&path),
+                MAX
+            );
             let data = crate::remote::run_remote(&h, &cmd)
                 .map(|b| String::from_utf8_lossy(&b).to_string())?;
             return Ok(TailChunk { data, size, start });
@@ -325,7 +339,15 @@ fn local_proc_output(pid: i64) -> ProcOutput {
         }
         // 其它(macOS):lsof
         let out = Command::new("lsof")
-            .args(["-p", &pid.to_string(), "-a", "-d", &fd.to_string(), "-F", "n"])
+            .args([
+                "-p",
+                &pid.to_string(),
+                "-a",
+                "-d",
+                &fd.to_string(),
+                "-F",
+                "n",
+            ])
             .output()
             .ok()?;
         for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -338,7 +360,10 @@ fn local_proc_output(pid: i64) -> ProcOutput {
         }
         None
     };
-    ProcOutput { fd1: resolve(1), fd2: resolve(2) }
+    ProcOutput {
+        fd1: resolve(1),
+        fd2: resolve(2),
+    }
 }
 
 /// 一次性拿到所有进程的 cwd(pid→cwd)。性能关键:对每个进程单独 lsof 在 macOS 上
@@ -362,7 +387,10 @@ fn all_cwds() -> HashMap<i64, String> {
             return out;
         }
     }
-    if let Ok(o) = Command::new("lsof").args(["-d", "cwd", "-F", "pn"]).output() {
+    if let Ok(o) = Command::new("lsof")
+        .args(["-d", "cwd", "-F", "pn"])
+        .output()
+    {
         let mut cur: Option<i64> = None;
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             if let Some(rest) = line.strip_prefix('p') {
@@ -406,7 +434,10 @@ fn all_fd_files() -> HashMap<i64, String> {
             return out;
         }
     }
-    if let Ok(o) = Command::new("lsof").args(["-d", "1,2", "-F", "ptn"]).output() {
+    if let Ok(o) = Command::new("lsof")
+        .args(["-d", "1,2", "-F", "ptn"])
+        .output()
+    {
         let mut cur: Option<i64> = None;
         let mut is_reg = false;
         for line in String::from_utf8_lossy(&o.stdout).lines() {
@@ -446,12 +477,17 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
     }
     let norm = |s: &str| {
         // 展开 ~(canonicalize 不展开),再归一化解 symlink;失败则退化为去尾斜杠。
+        let home_str = || {
+            crate::config::home_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .ok()
+        };
         let expanded = if s == "~" {
-            std::env::var("HOME").unwrap_or_else(|_| s.to_string())
+            home_str().unwrap_or_else(|| s.to_string())
         } else if let Some(rest) = s.strip_prefix("~/") {
-            match std::env::var("HOME") {
-                Ok(h) => format!("{}/{}", h.trim_end_matches('/'), rest),
-                Err(_) => s.to_string(),
+            match home_str() {
+                Some(h) => format!("{}/{}", h.trim_end_matches('/'), rest),
+                None => s.to_string(),
             }
         } else {
             s.to_string()
@@ -467,11 +503,11 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
 
 // 一闪而过的短命工具 / 纯 shell 外壳:不是用户想看的训练任务,剔除。
 const NOISE_CMDS: &[&str] = &[
-    "sh", "bash", "zsh", "dash", "fish", "ksh", "head", "tail", "cat", "grep", "egrep",
-    "fgrep", "ugrep", "rg", "ag", "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq",
-    "cut", "tr", "which", "env", "echo", "printf", "true", "false", "test", "expr", "date",
-    "basename", "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync",
-    "tee", "xargs", "cp", "mv", "rm", "mkdir", "sleep",
+    "sh", "bash", "zsh", "dash", "fish", "ksh", "head", "tail", "cat", "grep", "egrep", "fgrep",
+    "ugrep", "rg", "ag", "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq", "cut", "tr",
+    "which", "env", "echo", "printf", "true", "false", "test", "expr", "date", "basename",
+    "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync", "tee", "xargs",
+    "cp", "mv", "rm", "mkdir", "sleep",
 ];
 
 /// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
@@ -479,8 +515,7 @@ fn exe_name(args: &str) -> String {
     let toks: Vec<&str> = args.split_whitespace().collect();
     let mut i = 0;
     while i < toks.len()
-        && (toks[i].contains('=')
-            || matches!(toks[i], "env" | "nohup" | "setsid" | "stdbuf"))
+        && (toks[i].contains('=') || matches!(toks[i], "env" | "nohup" | "setsid" | "stdbuf"))
     {
         i += 1;
     }
@@ -529,13 +564,16 @@ fn etime_secs(etime: &str) -> i64 {
 /// 本地从 offset 增量读文件。
 fn local_tail(path: &str, offset: i64, max: i64) -> Result<TailChunk, String> {
     use std::io::{Read, Seek, SeekFrom};
-    let size = std::fs::metadata(path).map_err(|e| format!("无法读取输出文件: {e}"))?.len() as i64;
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("无法读取输出文件: {e}"))?
+        .len() as i64;
     let mut start = if offset > size { 0 } else { offset };
     if start == 0 && size > max {
         start = size - max;
     }
     let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    f.seek(SeekFrom::Start(start as u64)).map_err(|e| e.to_string())?;
+    f.seek(SeekFrom::Start(start as u64))
+        .map_err(|e| e.to_string())?;
     let mut buf = vec![0u8; max as usize];
     let n = f.read(&mut buf).map_err(|e| e.to_string())?;
     Ok(TailChunk {
@@ -549,11 +587,31 @@ fn proc_from_json(v: &serde_json::Value) -> Option<ProcInfo> {
     Some(ProcInfo {
         pid: v.get("pid")?.as_i64()?,
         ppid: v.get("ppid")?.as_i64()?,
-        etime: v.get("etime").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        pcpu: v.get("pcpu").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        pmem: v.get("pmem").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        stat: v.get("stat").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-        args: v.get("args").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        etime: v
+            .get("etime")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        pcpu: v
+            .get("pcpu")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        pmem: v
+            .get("pmem")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        stat: v
+            .get("stat")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        args: v
+            .get("args")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -577,7 +635,15 @@ fn parse_all(raw: &str) -> Vec<ProcInfo> {
         let pmem = it.next().unwrap_or("").to_string();
         let stat = it.next().unwrap_or("").to_string();
         let args = it.collect::<Vec<_>>().join(" ");
-        procs.push(ProcInfo { pid, ppid, etime, pcpu, pmem, stat, args });
+        procs.push(ProcInfo {
+            pid,
+            ppid,
+            etime,
+            pcpu,
+            pmem,
+            stat,
+            args,
+        });
     }
     procs
 }

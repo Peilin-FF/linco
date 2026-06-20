@@ -56,8 +56,7 @@ fn key(host: &Option<String>, repo: &str) -> String {
 /// 影子仓库目录:<linco_home>/shadows/<工作目录路径哈希>。随发布版/dev 版隔离。
 /// 哈希用一个稳定的字符串散列(不引第三方 crate),足够避免不同工作目录冲突。
 fn shadow_dir(repo: &str) -> PathBuf {
-    let base = crate::config::linco_home()
-        .unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
+    let base = crate::config::linco_home().unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
     let h = stable_hash(repo);
     base.join("shadows").join(format!("{h:016x}"))
 }
@@ -78,28 +77,118 @@ const MAX_SNAPSHOT_FILE: u64 = 1024 * 1024; // 1MB
 
 /// 噪声目录:整目录跳过,不递归。
 const SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "target", "__pycache__", ".venv", "venv", "env", "dist", "build",
-    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", ".cache",
-    "site-packages", "swanlog", "wandb", "outputs", "checkpoints", "logs",
-    ".ipynb_checkpoints", ".conda", ".eggs", "__MACOSX",
+    ".git",
+    "node_modules",
+    "target",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "dist",
+    "build",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".idea",
+    ".vscode",
+    ".cache",
+    "site-packages",
+    "swanlog",
+    "wandb",
+    "outputs",
+    "checkpoints",
+    "logs",
+    ".ipynb_checkpoints",
+    ".conda",
+    ".eggs",
+    "__MACOSX",
 ];
 
 /// 只收人类会手改的源码/文本/配置扩展名;venv 库、模型权重、数据产物等一律不进影子。
 const SNAPSHOT_EXTS: &[&str] = &[
-    "py", "pyi", "pyx", "ipynb", "json", "jsonl", "md", "markdown", "rst", "txt",
-    "yaml", "yml", "toml", "cfg", "ini", "conf", "env", "properties",
-    "sh", "bash", "zsh", "fish", "ps1", "bat",
-    "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "svelte",
-    "css", "scss", "less", "html", "htm", "xml", "svg",
-    "c", "h", "cpp", "cc", "hpp", "rs", "go", "java", "kt", "rb", "php", "lua",
-    "sql", "graphql", "proto", "tex", "csv", "tsv", "gradle", "cmake", "mk",
-    "r", "jl", "scala", "swift", "m", "mm",
+    "py",
+    "pyi",
+    "pyx",
+    "ipynb",
+    "json",
+    "jsonl",
+    "md",
+    "markdown",
+    "rst",
+    "txt",
+    "yaml",
+    "yml",
+    "toml",
+    "cfg",
+    "ini",
+    "conf",
+    "env",
+    "properties",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "bat",
+    "ts",
+    "tsx",
+    "js",
+    "jsx",
+    "mjs",
+    "cjs",
+    "vue",
+    "svelte",
+    "css",
+    "scss",
+    "less",
+    "html",
+    "htm",
+    "xml",
+    "svg",
+    "c",
+    "h",
+    "cpp",
+    "cc",
+    "hpp",
+    "rs",
+    "go",
+    "java",
+    "kt",
+    "rb",
+    "php",
+    "lua",
+    "sql",
+    "graphql",
+    "proto",
+    "tex",
+    "csv",
+    "tsv",
+    "gradle",
+    "cmake",
+    "mk",
+    "r",
+    "jl",
+    "scala",
+    "swift",
+    "m",
+    "mm",
 ];
 
 /// 无扩展名但人类常改的文件名。
 const SNAPSHOT_NAMES: &[&str] = &[
-    "Dockerfile", "Makefile", "makefile", "CMakeLists.txt", "Justfile", "justfile",
-    "README", "LICENSE", "Procfile", ".gitignore", ".dockerignore", ".env",
+    "Dockerfile",
+    "Makefile",
+    "makefile",
+    "CMakeLists.txt",
+    "Justfile",
+    "justfile",
+    "README",
+    "LICENSE",
+    "Procfile",
+    ".gitignore",
+    ".dockerignore",
+    ".env",
     "requirements.txt",
 ];
 
@@ -160,8 +249,8 @@ fn collect_files(repo: &str) -> Vec<String> {
                     .rsplit_once('.')
                     .map(|(_, e)| e.to_ascii_lowercase())
                     .unwrap_or_default();
-                let wanted =
-                    SNAPSHOT_EXTS.contains(&ext.as_str()) || SNAPSHOT_NAMES.contains(&name.as_str());
+                let wanted = SNAPSHOT_EXTS.contains(&ext.as_str())
+                    || SNAPSHOT_NAMES.contains(&name.as_str());
                 if !wanted {
                     continue;
                 }
@@ -219,7 +308,6 @@ fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
     shadow_git(repo, gitdir, &["add", "-u"]).map(|_| ())
 }
 
-
 /// 确保影子仓库已初始化(init + 写 excludes)。幂等:进程内只做一次真正的 init。
 fn ensure_init(host: &Option<String>, repo: &str) -> Result<PathBuf, String> {
     let gitdir = shadow_dir(repo);
@@ -270,13 +358,7 @@ pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(),
         shadow_git(
             &repo,
             &gitdir,
-            &[
-                "commit",
-                "-q",
-                "--allow-empty",
-                "-m",
-                "linco-turn-baseline",
-            ],
+            &["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"],
         )?;
         Ok(())
     })
@@ -332,7 +414,11 @@ pub async fn shadow_changed(
         let lk = repo_lock(&host, &repo);
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
         stage_snapshot(&repo, &gitdir)?;
-        let out = shadow_git(&repo, &gitdir, &["diff", "--cached", "--name-status", "HEAD"])?;
+        let out = shadow_git(
+            &repo,
+            &gitdir,
+            &["diff", "--cached", "--name-status", "HEAD"],
+        )?;
         Ok(parse_name_status(&repo, &out))
     })
     .await
@@ -384,7 +470,11 @@ mod tests {
         let a = format!("{repo}/a.txt");
         let b = format!("{repo}/b.txt");
         assert_eq!(changed.get(&a).map(String::as_str), Some("M"));
-        assert_eq!(changed.get(&b).map(String::as_str), Some("A"), "未跟踪新建文件应标 A");
+        assert_eq!(
+            changed.get(&b).map(String::as_str),
+            Some("A"),
+            "未跟踪新建文件应标 A"
+        );
 
         // a.txt 的 diff 应含红绿增删
         let d = run(shadow_diff(None, repo.clone(), a)).unwrap();

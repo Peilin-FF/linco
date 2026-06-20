@@ -280,10 +280,9 @@ fn apply_cli_status_sources(stats: &mut UsageStats) {
     normalize(stats);
     reset_cli_reported_tokens(stats);
 
-    let Ok(home) = std::env::var("HOME") else {
+    let Ok(home) = crate::config::home_dir() else {
         return;
     };
-    let home = PathBuf::from(home);
     apply_claude_stats_cache_file(stats, &home.join(".claude").join("stats-cache.json"));
     apply_codex_sessions_dir(stats, &home.join(".codex").join("sessions"));
     apply_codex_sessions_dir(stats, &home.join(".codex").join("archived_sessions"));
@@ -400,6 +399,7 @@ fn apply_codex_session_file(stats: &mut UsageStats, path: &Path) {
     }
 }
 
+#[cfg(test)]
 fn apply_codex_session_jsonl(stats: &mut UsageStats, text: &str) -> Result<(), String> {
     let mut session = CodexSessionImport::default();
     for line in text.lines() {

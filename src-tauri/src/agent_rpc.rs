@@ -455,8 +455,13 @@ const SHADOW_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// 远端拍本轮基线(独立影子仓库:自筛文件 + add -f + commit)。
 pub fn shadow_begin(host: &str, repo: &str) -> Result<(), String> {
-    call_background_timeout(host, "shadow_begin", json!({ "repo": repo }), SHADOW_TIMEOUT)
-        .map(|_| ())
+    call_background_timeout(
+        host,
+        "shadow_begin",
+        json!({ "repo": repo }),
+        SHADOW_TIMEOUT,
+    )
+    .map(|_| ())
 }
 
 /// 远端本轮改过哪些文件:绝对路径 → 状态字符(M/A/D)。
@@ -489,7 +494,10 @@ pub fn shadow_diff_remote(host: &str, repo: &str, path: &str) -> Result<String, 
         json!({ "repo": repo, "path": path }),
         SHADOW_TIMEOUT,
     )?;
-    Ok(v.get("diff").and_then(|x| x.as_str()).unwrap_or("").to_string())
+    Ok(v.get("diff")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 #[cfg(test)]

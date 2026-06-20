@@ -22,8 +22,7 @@ use base64::Engine;
 
 /// ControlMaster socket 目录(<linco_home>/ssh)。随发布版/dev 版隔离。
 fn control_dir() -> PathBuf {
-    let base = crate::config::linco_home()
-        .unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
+    let base = crate::config::linco_home().unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
     let dir = base.join("ssh");
     let _ = std::fs::create_dir_all(&dir);
     dir
@@ -458,11 +457,11 @@ pub fn shq(s: &str) -> String {
 /// 读取 ~/.ssh/config 里的 Host 别名(过滤通配符项),供前端列出可选主机。
 #[tauri::command]
 pub fn ssh_config_hosts() -> Vec<String> {
-    let home = match std::env::var("HOME") {
+    let home = match crate::config::home_dir() {
         Ok(h) => h,
         Err(_) => return vec![],
     };
-    let path = PathBuf::from(home).join(".ssh").join("config");
+    let path = home.join(".ssh").join("config");
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(_) => return vec![],
@@ -1106,7 +1105,7 @@ pub fn ssh_config_add(
     port: String,
     identity: String,
 ) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "无法定位 HOME".to_string())?;
+    let home = crate::config::home_dir()?;
     let ssh_dir = PathBuf::from(&home).join(".ssh");
     std::fs::create_dir_all(&ssh_dir).map_err(|e| e.to_string())?;
     let path = ssh_dir.join("config");

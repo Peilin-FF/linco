@@ -74,6 +74,22 @@ interface RawConfig {
   ui_font_size?: number
 }
 
+function toRawAgent(a: AgentConfig): RawAgent {
+  return {
+    id: a.id,
+    name: a.name,
+    provider: a.provider,
+    command: a.command,
+    api_key: a.apiKey,
+    base_url: a.baseUrl,
+    model: a.model,
+    models: a.models ?? [],
+    permission: a.permission ?? '',
+    effort: a.effort ?? '',
+    auth_mode: a.authMode ?? ''
+  }
+}
+
 function fromRaw(raw: RawConfig): AppConfig {
   return {
     agents: (raw.agents ?? []).map((a) => ({
@@ -105,19 +121,7 @@ function fromRaw(raw: RawConfig): AppConfig {
 
 function toRaw(cfg: AppConfig): RawConfig {
   return {
-    agents: cfg.agents.map((a) => ({
-      id: a.id,
-      name: a.name,
-      provider: a.provider,
-      command: a.command,
-      api_key: a.apiKey,
-      base_url: a.baseUrl,
-      model: a.model,
-      models: a.models ?? [],
-      permission: a.permission ?? '',
-      effort: a.effort ?? '',
-      auth_mode: a.authMode ?? ''
-    })),
+    agents: cfg.agents.map(toRawAgent),
     default_agent: cfg.defaultAgent,
     auto_start: cfg.autoStart,
     cwd: cfg.cwd,
@@ -132,6 +136,13 @@ function toRaw(cfg: AppConfig): RawConfig {
   }
 }
 
+export interface ModelTestResult {
+  ok: boolean
+  message: string
+  status: number | null
+  latencyMs: number
+}
+
 export async function loadConfig(): Promise<AppConfig> {
   const raw = await invoke<RawConfig>('load_config')
   return fromRaw(raw)
@@ -139,6 +150,10 @@ export async function loadConfig(): Promise<AppConfig> {
 
 export async function saveConfig(cfg: AppConfig): Promise<void> {
   await invoke('save_config', { config: toRaw(cfg) })
+}
+
+export async function testModelConnection(agent: AgentConfig): Promise<ModelTestResult> {
+  return invoke<ModelTestResult>('test_model_connection', { agent: toRawAgent(agent) })
 }
 
 /** 首启选定 agent + 开发语言:写回 config + 装对应那套(claude→~/.claude/plugins,codex→~/.codex)。 */
@@ -259,13 +274,49 @@ export function providerCaps(agent: AgentConfig): ProviderCaps {
 }
 
 /** 生成真正写入 PTY 的 TUI 启动命令。 */
-export function agentLaunchCommand(agent: AgentConfig): string {
+// 构造 `codex resume <id>` 命令。resume 子命令只认部分 flag,这里只拼安全的:
+// 模型(-m)、provider 配置(-c)、思考力(-c model_reasoning_effort)、
+// 权限映射(full-auto → 宽松沙箱;bypass → --dangerously-bypass…)。
+function codexResumeCommand(agent: AgentConfig, exe: string, resumeId: string): string {
+  let cmd = `${exe} resume ${shellQuote(resumeId)}`
+  if (agent.baseUrl.trim()) {
+    cmd += codexConfigArg('model_provider', 'linco')
+    cmd += codexConfigArg('model_providers.linco.name', 'Linco')
+    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim())
+    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses')
+    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY')
+    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false)
+  }
+  const model = agent.model.trim()
+  if (model) cmd += ` -m ${shellQuote(model)}`
+  const perm = agent.permission.trim()
+  if (perm === 'bypass') {
+    cmd += ' --dangerously-bypass-approvals-and-sandbox'
+  } else if (perm === 'full-auto') {
+    // resume 不认 --full-auto,用等价的沙箱+审批组合
+    cmd += ' --sandbox workspace-write --ask-for-approval on-failure'
+  }
+  const effort = agent.effort.trim()
+  if (effort) cmd += codexConfigArg('model_reasoning_effort', effort)
+  return cmd
+}
+
+export function agentLaunchCommand(agent: AgentConfig, resumeId?: string): string {
   let cmd = agent.command.trim()
   if (!cmd) cmd = defaultCommandForProvider(agent.provider)
 
   const head = commandHead(cmd).split('/').pop() ?? ''
   const model = agent.model.trim()
   const isCodex = agent.provider === 'openai' || head === 'codex'
+  const resume = resumeId?.trim()
+
+  // codex 恢复:`codex resume <id>` 是子命令,且**只接受**部分 flag
+  // (-m / -c / -s / -a / --dangerously-bypass…,但 **不认** --full-auto)。
+  // 故不能复用 agent.command 的自由尾巴(可能含 --full-auto 等根级 flag),
+  // 必须从可执行名重新拼一条只含 resume 安全 flag 的命令。
+  if (resume && isCodex) {
+    return codexResumeCommand(agent, commandHead(cmd), resume)
+  }
   if (isCodex && agent.baseUrl.trim() && !hasCodexProviderConfig(cmd)) {
     cmd += codexConfigArg('model_provider', 'linco')
     cmd += codexConfigArg('model_providers.linco.name', 'Linco')
@@ -312,6 +363,10 @@ export function agentLaunchCommand(agent: AgentConfig): string {
     } else if (!hasFlag(cmd, '--effort', '--effort')) {
       cmd += ` --effort ${shellQuote(effort)}`
     }
+  }
+  // claude 的恢复 flag 放末尾(codex 的 resume 子命令已在前面拼好)
+  if (resume && !isCodex && !hasFlag(cmd, '-r', '--resume')) {
+    cmd += ` --resume ${shellQuote(resume)}`
   }
   return cmd
 }

@@ -1,12 +1,14 @@
 import { useState } from 'react'
-import { Plus, Trash2, Check } from 'lucide-react'
+import { Plus, Trash2, Check, Loader2, Wifi, CircleCheck, CircleX } from 'lucide-react'
 import {
   AGENT_PRESETS,
   agentLaunchCommand,
   agentExecutable,
   syncConfigToRemote,
+  testModelConnection,
   type AgentConfig,
-  type AppConfig
+  type AppConfig,
+  type ModelTestResult
 } from '@/lib/config'
 import { useI18n } from '@/lib/i18n'
 
@@ -22,6 +24,10 @@ const PROVIDERS: { id: string; label?: string; labelKey?: string }[] = [
   { id: 'custom', labelKey: 'model.customCompat' }
 ]
 
+type StoredModelTestResult =
+  | ModelTestResult
+  | { ok: false; message: string; status: null; latencyMs: 0 }
+
 export default function ModelSettings({
   config,
   onChange
@@ -36,6 +42,8 @@ export default function ModelSettings({
   // 同步配置到远程的状态
   const [syncing, setSyncing] = useState<string | null>(null)
   const [syncMsg, setSyncMsg] = useState<string>('')
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [testResults, setTestResults] = useState<Record<string, StoredModelTestResult>>({})
 
   const syncTo = async (hostStr: string, label: string): Promise<void> => {
     // 信任确认:WKWebView 支持 window.confirm。明确告知含密钥 + 风险。
@@ -62,6 +70,31 @@ export default function ModelSettings({
     update({
       agents: config.agents.map((a) => (a.id === id ? { ...a, ...patch } : a))
     })
+  }
+
+  const runConnectionTest = async (agent: AgentConfig): Promise<void> => {
+    setTestingId(agent.id)
+    setTestResults((prev) => {
+      const next = { ...prev }
+      delete next[agent.id]
+      return next
+    })
+    try {
+      const result = await testModelConnection(agent)
+      setTestResults((prev) => ({ ...prev, [agent.id]: result }))
+    } catch (e) {
+      setTestResults((prev) => ({
+        ...prev,
+        [agent.id]: {
+          ok: false,
+          message: String(e),
+          status: null,
+          latencyMs: 0
+        }
+      }))
+    } finally {
+      setTestingId(null)
+    }
   }
 
   const addPreset = (presetId: string): void => {
@@ -203,9 +236,49 @@ export default function ModelSettings({
       {/* 编辑选中项 */}
       {selected && (
         <div className="mt-6 rounded-2xl bg-sidebar p-5">
-          <div className="mb-4 text-[14px] font-medium text-ink">
-            {t('model.editTitle', { name: selected.name })}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-[14px] font-medium text-ink">
+              {t('model.editTitle', { name: selected.name })}
+            </div>
+            <button
+              onClick={() => {
+                runConnectionTest(selected).catch(() => {})
+              }}
+              disabled={testingId === selected.id}
+              className="flex items-center gap-1.5 rounded-lg bg-canvas px-3 py-1.5 text-[12.5px] text-ink-muted ring-1 ring-black/10 hover:text-ink disabled:cursor-default disabled:opacity-60"
+            >
+              {testingId === selected.id ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Wifi size={14} />
+              )}
+              {testingId === selected.id ? t('model.testRunning') : t('model.testConnection')}
+            </button>
           </div>
+          {testResults[selected.id] && (
+            <div
+              className={`mb-4 flex items-start gap-2 rounded-lg px-3 py-2 text-[12.5px] ring-1 ${
+                testResults[selected.id].ok
+                  ? 'bg-emerald-50 text-emerald-700 ring-emerald-100'
+                  : 'bg-red-50 text-red-700 ring-red-100'
+              }`}
+            >
+              {testResults[selected.id].ok ? (
+                <CircleCheck size={15} className="mt-0.5 shrink-0" />
+              ) : (
+                <CircleX size={15} className="mt-0.5 shrink-0" />
+              )}
+              <div className="min-w-0">
+                <div>{testResults[selected.id].message}</div>
+                <div className="mt-0.5 text-[11px] opacity-75">
+                  {t('model.testMeta', {
+                    status: testResults[selected.id].status ?? '-',
+                    ms: testResults[selected.id].latencyMs
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
           <div className="flex flex-col gap-4">
             <Field label={t('model.name')}>
               <input

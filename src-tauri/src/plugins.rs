@@ -15,7 +15,11 @@ use tauri::{AppHandle, Manager};
 /// 某语言对应的三个插件目录名。
 fn plugin_names(lang: &str) -> [&'static str; 3] {
     if lang == "en" {
-        ["linco-html-en", "linco-task-monitor-en", "linco-shadow-diff-en"]
+        [
+            "linco-html-en",
+            "linco-task-monitor-en",
+            "linco-shadow-diff-en",
+        ]
     } else {
         ["linco-html", "linco-task-monitor", "linco-shadow-diff"]
     }
@@ -26,7 +30,11 @@ fn other_names(lang: &str) -> [&'static str; 3] {
     if lang == "en" {
         ["linco-html", "linco-task-monitor", "linco-shadow-diff"]
     } else {
-        ["linco-html-en", "linco-task-monitor-en", "linco-shadow-diff-en"]
+        [
+            "linco-html-en",
+            "linco-task-monitor-en",
+            "linco-shadow-diff-en",
+        ]
     }
 }
 
@@ -35,21 +43,29 @@ fn plugins_source(app: &AppHandle) -> Result<PathBuf, String> {
     // release:resource_dir/plugins(对应 tauri.conf bundle.resources 的 "plugins")
     if let Ok(res) = app.path().resource_dir() {
         let p = res.join("plugins");
-        if p.join("linco-html").join(".claude-plugin").join("plugin.json").exists() {
+        if p.join("linco-html")
+            .join(".claude-plugin")
+            .join("plugin.json")
+            .exists()
+        {
             return Ok(p);
         }
     }
     // dev 回退:源码树 vendor
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../vendor/HTML-VibeCoding/plugins");
-    if dev.join("linco-html").join(".claude-plugin").join("plugin.json").exists() {
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vendor/HTML-VibeCoding/plugins");
+    if dev
+        .join("linco-html")
+        .join(".claude-plugin")
+        .join("plugin.json")
+        .exists()
+    {
         return Ok(dev);
     }
     Err("找不到插件源目录(resource_dir/plugins 与 vendor 均不存在)".into())
 }
 
 fn claude_plugins_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "无法定位 HOME".to_string())?;
+    let home = crate::config::home_dir()?;
     let dir = PathBuf::from(home).join(".claude").join("plugins");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -71,9 +87,16 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
         } else if ft.is_symlink() {
             // 跟随符号链接拷其内容(资源里一般无,稳妥处理)
             let real = std::fs::read_link(&from).map_err(|e| e.to_string())?;
-            let base = if real.is_absolute() { real } else { from.parent().unwrap().join(real) };
-            if base.is_dir() { copy_dir(&base, &to)?; }
-            else { std::fs::copy(&base, &to).map_err(|e| e.to_string())?; }
+            let base = if real.is_absolute() {
+                real
+            } else {
+                from.parent().unwrap().join(real)
+            };
+            if base.is_dir() {
+                copy_dir(&base, &to)?;
+            } else {
+                std::fs::copy(&base, &to).map_err(|e| e.to_string())?;
+            }
         } else {
             std::fs::copy(&from, &to).map_err(|e| e.to_string())?;
         }
@@ -161,7 +184,8 @@ fn codex_source(app: &AppHandle) -> Result<PathBuf, String> {
 /// 把 LINCO marker 区块更新进 ~/.codex/AGENTS.md(保留用户的其余内容;替换旧区块或追加)。
 fn upsert_agents_md(path: &Path, block: &str) -> Result<(), String> {
     let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let merged = if let (Some(b), Some(e)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END)) {
+    let merged = if let (Some(b), Some(e)) = (existing.find(CODEX_BEGIN), existing.find(CODEX_END))
+    {
         // 替换旧 LINCO 区块
         let end = e + CODEX_END.len();
         format!("{}{}{}", &existing[..b], block.trim_end(), &existing[end..])
@@ -178,7 +202,7 @@ fn upsert_agents_md(path: &Path, block: &str) -> Result<(), String> {
 
 /// codex 本地安装:写 AGENTS.md 常驻区块 + 复制 html-kit skill 到 ~/.codex/skills/。
 fn install_codex_local(app: &AppHandle, lang: &str) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "无法定位 HOME".to_string())?;
+    let home = crate::config::home_dir()?;
     let codex_home = PathBuf::from(&home).join(".codex");
     let src = codex_source(app)?.join(lang);
     // AGENTS.md

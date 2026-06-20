@@ -1,6 +1,6 @@
 [package]
 name = "linco"
-version = "0.1.0"
+version = "0.2.0"
 description = "Linco — 直接驱动 Claude Code / Codex 等 CLI agent 的桌面应用"
 authors = ["Linco"]
 edition = "2021"
@@ -24,3 +24,4 @@ regex = "1"
 tiny_http = "0.12"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+reqwest = { version = "0.13.4", features = ["json"] }

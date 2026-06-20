@@ -21,10 +21,12 @@ import FilesView from './components/FilesView'
 import GitView from './components/GitView'
 import AgentTaskOutput from './components/AgentTaskOutput'
 import SessionRail, { type RailSession, type SessionStatus } from './components/SessionRail'
+import SessionHistory from './components/SessionHistory'
 import Settings from './components/Settings'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
 import LanguagePicker from './components/LanguagePicker'
+import UpdatePanel from './components/UpdatePanel'
 import CodeMirrorWarmup from './components/CodeMirrorWarmup'
 import ResizeHandle from './components/ResizeHandle'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -108,14 +110,15 @@ interface ChatSession {
 let shellSeq = 0
 
 export default function App(): JSX.Element {
-  const { t, setLang } = useI18n()
+  const { t, lang: uiLang, setLang } = useI18n()
   const [view, setView] = useState<ViewId>('chat')
   const [showSettings, setShowSettings] = useState(false)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
+  // 点更新横幅 → 弹出「新版更新内容」公告(展示 release notes,再让用户决定是否更新)
+  const [showUpdatePanel, setShowUpdatePanel] = useState(false)
   // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
   const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat']))
   // 后台预热:app 就绪后空闲时悄悄把 文件/Git/预览 三视图挂载好(含各自首次
@@ -141,6 +144,11 @@ export default function App(): JSX.Element {
   const [dockOpened, setDockOpened] = useState(false)
   const [dockTerminalOpen, setDockTerminalOpen] = useState(false)
   const [dockHeight, setDockHeight] = useState(110) // 可拖拽调整(默认矮)
+  // 已开过的 dock 终端(每个 连接+项目 一个独立 PTY,常驻挂载、互不干扰)。
+  // 修复:固定 id="dock" 只会在首次挂载时读 cwd/host,切到远程后仍停在本机路径。
+  const [dockKeys, setDockKeys] = useState<
+    { key: string; cwd?: string; host?: string; identity?: string }[]
+  >([])
   const [chatBoxHeight, setChatBoxHeight] = useState(0) // 对话框输入区额外高度(0=默认)
 
   // 终端/预览视图的左侧对话分栏:默认打开,可拖宽、可关闭。
@@ -203,7 +211,6 @@ export default function App(): JSX.Element {
   useEffect(() => {
     let cancelled = false
     const runCheck = async (): Promise<void> => {
-      setCheckingUpdate(true)
       try {
         const update = await check({ timeout: 8000 })
         if (!cancelled) {
@@ -214,8 +221,6 @@ export default function App(): JSX.Element {
         if (!cancelled) {
           setUpdateError(err instanceof Error ? err.message : String(err))
         }
-      } finally {
-        if (!cancelled) setCheckingUpdate(false)
       }
     }
 
@@ -272,6 +277,7 @@ export default function App(): JSX.Element {
     if (!config) return
     const lng = config.language === 'en' ? 'en' : config.language === 'zh' ? 'zh' : ''
     if (!lng || !defaultAgent) return // 未选语言时交给首启弹窗
+    if (config.pluginAgent === 'skip') return // 用户选了「稍后配置」:不自动安装
     const key = `${pluginFamily}:${lng}`
     if (localPluginKeyRef.current === key) return // 本会话已装过这套
     if ((config.pluginAgent || '') === pluginFamily && config.language === lng) {
@@ -383,6 +389,8 @@ export default function App(): JSX.Element {
   // 切回旧组合时原 TUI 还在现场。
   const agentId = defaultAgent?.id || 'agent'
   const activeChatId = `chat:${connId}:${agentId}:${cwd ?? ''}`
+  // dock 终端 key:每个 连接+项目 一个独立 PTY(切远程→新 key→新终端起在远端 cwd)。
+  const dockKey = `dock:${connId}:${cwd ?? ''}`
 
   // 左侧对话分栏是否当前生效:开关开 + 存在活动会话 + 在终端/预览视图。
   // 无活动会话时不留左栏空位。
@@ -418,6 +426,22 @@ export default function App(): JSX.Element {
     // 仅在活动会话 id 变化时运行(切连接/切项目)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChatId])
+
+  // dock 终端常驻挂载:打开 dock 后,把当前 连接+项目 的 dockKey 记下并保留。
+  // 切到别的连接/项目再切回来,原 PTY 还在;切远程则用新 key 起在远端 cwd。
+  useEffect(() => {
+    if (!dockOpened || !cwd) return
+    setDockKeys((prev) =>
+      prev.some((d) => d.key === dockKey)
+        ? prev
+        : [
+            ...prev,
+            { key: dockKey, cwd, host, identity: activeConn?.identity || undefined }
+          ]
+    )
+    // 仅在 dock 打开 / 连接+项目 变化时运行
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockOpened, dockKey])
 
   // 会话忙/空闲心跳:每 1s tick 一次,驱动侧栏重算(近 3s 有输出=忙)。
   useEffect(() => {
@@ -555,6 +579,27 @@ export default function App(): JSX.Element {
         )
       })
     }
+  }
+
+  // 恢复历史会话:切到对话视图,用 `--resume <id>`(claude)/`resume <id>`(codex)
+  // 重启当前项目的对话 PTY,把那次历史对话载回来继续聊。
+  // 历史属于「当前项目 + 当前 agent」,所以恢复进的就是当前活动会话(activeChatId)。
+  const resumeSession = (id: string): void => {
+    if (!defaultAgent) return
+    setView('chat')
+    const cmd = agentLaunchCommand(defaultAgent, id)
+    // 活动会话的 TerminalView 可能要等懒挂载;轮询拿到句柄再重启(最多 ~2s)。
+    let tries = 0
+    const tryRestart = (): void => {
+      const handle = chatRefs.current.get(activeChatId)
+      if (handle) {
+        handle.restartWith(cmd)
+        handle.focus()
+        return
+      }
+      if (tries++ < 20) window.setTimeout(tryRestart, 100)
+    }
+    tryRestart()
   }
 
   // 从 ~/.ssh/config 主机一键连接:创建一个连接并激活
@@ -705,6 +750,19 @@ export default function App(): JSX.Element {
     chatRefs.current.get(activeChatId)?.write(data)
   }
 
+  // 从预览页「提交给 Agent」:把一段指令发给当前对话会话(等价于在对话框输入并回车)。
+  // 走 handleSend 记基线/用量,再把 Ctrl-U + 文本 + 回车写进 PTY 放行 agent。
+  // 不切到对话视图——用户多在预览/终端分栏里看,左侧对话栏会实时显示 agent 动作。
+  const submitToAgent = (text: string): void => {
+    const t = text.trim()
+    if (!t) return
+    const handle = chatRefs.current.get(activeChatId)
+    if (!handle) return
+    handleSend(t)
+    handle.write('\x15' + t + '\r')
+    handle.focus()
+  }
+
   const handleInstallUpdate = async (): Promise<void> => {
     if (!availableUpdate || installingUpdate) return
     setInstallingUpdate(true)
@@ -777,27 +835,42 @@ export default function App(): JSX.Element {
         )}
         <div data-tauri-drag-region className="flex-1" />
         {availableUpdate && (
-          <button
-            onClick={() => {
-              handleInstallUpdate().catch(() => {})
-            }}
-            disabled={installingUpdate}
-            title={
-              updateError
-                ? t('update.failed', { error: updateError })
-                : checkingUpdate
-                  ? t('update.checking')
-                  : t('update.install', { version: availableUpdate.version })
-            }
-            className="no-drag flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-100 px-2.5 py-1.5 text-[12px] font-medium text-sky-700 shadow-sm ring-1 ring-sky-200 transition-colors hover:bg-sky-200 disabled:cursor-default disabled:opacity-75"
-          >
-            {installingUpdate ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Download size={14} />
+          <div className="no-drag relative shrink-0">
+            <button
+              onClick={() => setShowUpdatePanel((o) => !o)}
+              disabled={installingUpdate}
+              title={
+                updateError
+                  ? t('update.failed', { error: updateError })
+                  : t('update.whatsNew')
+              }
+              className="flex items-center gap-1.5 rounded-lg bg-sky-100 px-2.5 py-1.5 text-[12px] font-medium text-sky-700 shadow-sm ring-1 ring-sky-200 transition-colors hover:bg-sky-200 disabled:cursor-default disabled:opacity-75"
+            >
+              {installingUpdate ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Download size={14} />
+              )}
+              <span>
+                {installingUpdate
+                  ? t('update.installing')
+                  : t('update.available', { version: availableUpdate.version })}
+              </span>
+            </button>
+            {showUpdatePanel && !installingUpdate && (
+              <UpdatePanel
+                version={availableUpdate.version}
+                body={availableUpdate.body}
+                error={updateError}
+                t={t}
+                onInstall={() => {
+                  setShowUpdatePanel(false)
+                  handleInstallUpdate().catch(() => {})
+                }}
+                onClose={() => setShowUpdatePanel(false)}
+              />
             )}
-            <span>{installingUpdate ? t('update.installing') : t('update.available', { version: availableUpdate.version })}</span>
-          </button>
+          </div>
         )}
         <ConnectionPicker
           connections={config.connections}
@@ -887,11 +960,18 @@ export default function App(): JSX.Element {
             </div>
           )}
 
-          {/* 终端视图:agent 后台任务(自动 tab)+ 用户独立 shell(可多开) */}
-          {view === 'terminal' && (
+          {/* 终端视图:agent 后台任务(自动 tab)+ 用户独立 shell(可多开)。
+              **常驻挂载**(访问过即保留):切到 git/文件/预览再切回来,PTY 不被销毁
+              (卸载会触发 TerminalView 的 termKill,把后台 shell 杀掉 → 终端全没了)。
+              用 opacity 切换可见性,而非 unmount。 */}
+          {(prewarmed || visited.has('terminal')) && (
             <div
               style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
-              className="absolute right-0 top-0 bottom-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5"
+              className={`absolute right-0 top-0 bottom-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
+                view === 'terminal'
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
             >
               {/* 终端标签条:用户的 shell + 「新建终端」按钮放最前(固定好找),
                   agent 自动起的后台任务 tab 放在它们之后,避免把用户的入口挤跑。
@@ -1021,6 +1101,7 @@ export default function App(): JSX.Element {
                 host={host}
                 cwd={cwd}
                 previewPath={previewPath}
+                onSubmitToAgent={submitToAgent}
               />
             </div>
           )}
@@ -1105,6 +1186,21 @@ export default function App(): JSX.Element {
             </div>
           </div>
         )}
+        {/* 会话历史面板:对话框左侧空白区(与右侧 SessionRail 镜像)。
+            只列「当前项目」里该 agent 存的历史会话,可逐个删除防堆积。
+            右边界 = 居中对话框(max-w-820)的左边缘(中线-410px);窄屏 xl 以下隐藏。 */}
+        {cwd && (
+          <div className="pointer-events-none absolute bottom-1.5 right-[calc(50%_+_410px)] top-0 hidden left-0 items-stretch justify-center xl:flex">
+            <div className="pointer-events-auto w-[200px] overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 empty:hidden">
+              <SessionHistory
+                cwd={cwd}
+                provider={defaultAgent?.provider || ''}
+                host={host}
+                onResume={resumeSession}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 底部停靠终端(VS Code 式):放在对话框下方。干净的普通终端——
@@ -1138,12 +1234,23 @@ export default function App(): JSX.Element {
                 <X size={14} />
               </button>
             </div>
-            <TerminalView
-              id="dock"
-              cwd={cwd}
-              host={host}
-              identity={activeConn?.identity || undefined}
-            />
+            {/* 每个 连接+项目 一个常驻 dock 终端,只显示当前 key 对应的那个。
+                切远程 → dockKey 变 → 新终端起在远端 cwd(不再停在本机路径)。 */}
+            {dockKeys.map((d) => (
+              <div
+                key={d.key}
+                className={`absolute inset-0 ${
+                  d.key === dockKey ? 'z-[1] opacity-100' : 'pointer-events-none opacity-0'
+                }`}
+              >
+                <TerminalView
+                  id={d.key}
+                  cwd={d.cwd}
+                  host={d.host}
+                  identity={d.identity}
+                />
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -1161,12 +1268,22 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {/* 首启语言选择:config 已载入但未选语言时弹出,选定即装对应语言插件。 */}
+      {/* 首启语言选择:config 已载入但未选语言时弹出,选定即装对应语言插件。
+          「稍后配置」:只记下界面语言(不装任何插件)关掉引导,之后可在设置里再配。 */}
       {config && !config.language && (
         <LanguagePicker
           onPick={async (agent, lang) => {
             await setLanguage(agent, lang)
             setConfig((c) => (c ? { ...c, language: lang } : c))
+          }}
+          onSkip={() => {
+            // 不装插件:写 language(关掉引导、下次不再弹)+ pluginAgent='skip'
+            //(让自动安装 effect 跳过),之后可在设置里再正式选 agent/语言。
+            handleConfigChange({
+              ...config,
+              language: uiLang === 'en' ? 'en' : 'zh',
+              pluginAgent: 'skip'
+            })
           }}
         />
       )}
