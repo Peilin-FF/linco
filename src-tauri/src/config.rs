@@ -125,9 +125,24 @@ fn default_true() -> bool {
     true
 }
 
-fn config_dir() -> Result<PathBuf, String> {
+/// Linco 本地数据根目录。**发布版与 dev 版隔离**:
+/// - debug build(`tauri dev`)→ `~/.linco`(开发者日常用,保留)
+/// - release build(`tauri build` 出来的发布版)→ `~/.linco-app`(独立、默认空,
+///   装上即从零开始,绝不导入开发者已有的 SSH 连接/模型/密钥)。
+/// config / shadows / ssh socket / usage 全部挂在这个根下,一并隔离。
+/// 注意:SSH **主机别名**读的是系统 `~/.ssh/config`(ssh 命令标准位置),不受此影响。
+pub fn linco_home() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "无法定位 HOME 目录".to_string())?;
-    Ok(PathBuf::from(home).join(".linco"))
+    let dir = if cfg!(debug_assertions) {
+        ".linco"
+    } else {
+        ".linco-app"
+    };
+    Ok(PathBuf::from(home).join(dir))
+}
+
+fn config_dir() -> Result<PathBuf, String> {
+    linco_home()
 }
 
 fn config_path() -> Result<PathBuf, String> {

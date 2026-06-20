@@ -809,8 +809,7 @@ fn strip_ansi(text: &str) -> String {
 }
 
 fn usage_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "无法定位 HOME 目录".to_string())?;
-    Ok(PathBuf::from(home).join(".linco").join("usage.json"))
+    Ok(crate::config::linco_home()?.join("usage.json"))
 }
 
 fn load_stats() -> Result<UsageStats, String> {

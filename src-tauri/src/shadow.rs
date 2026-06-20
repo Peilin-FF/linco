@@ -53,15 +53,13 @@ fn key(host: &Option<String>, repo: &str) -> String {
     format!("{}|{}", host.as_deref().unwrap_or(""), repo)
 }
 
-/// 影子仓库目录:~/.linco/shadows/<工作目录路径哈希>。
+/// 影子仓库目录:<linco_home>/shadows/<工作目录路径哈希>。随发布版/dev 版隔离。
 /// 哈希用一个稳定的字符串散列(不引第三方 crate),足够避免不同工作目录冲突。
 fn shadow_dir(repo: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let base = crate::config::linco_home()
+        .unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
     let h = stable_hash(repo);
-    PathBuf::from(home)
-        .join(".linco")
-        .join("shadows")
-        .join(format!("{h:016x}"))
+    base.join("shadows").join(format!("{h:016x}"))
 }
 
 /// 稳定的 FNV-1a 64 位哈希(进程间一致,不依赖 RandomState)。

@@ -20,10 +20,11 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 
-/// ControlMaster socket 目录(~/.linco/ssh)。
+/// ControlMaster socket 目录(<linco_home>/ssh)。随发布版/dev 版隔离。
 fn control_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let dir = PathBuf::from(home).join(".linco").join("ssh");
+    let base = crate::config::linco_home()
+        .unwrap_or_else(|_| PathBuf::from("/tmp").join(".linco"));
+    let dir = base.join("ssh");
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
