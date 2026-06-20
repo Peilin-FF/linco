@@ -9,6 +9,7 @@ import {
   TerminalSquare
 } from 'lucide-react'
 import type { Connection } from '@/lib/connection'
+import { useI18n } from '@/lib/i18n'
 
 export type ConnState = 'idle' | 'connecting' | 'connected' | 'error'
 
@@ -36,6 +37,7 @@ export default function ConnectionPicker({
   onManage,
   onAddSshCommand
 }: ConnectionPickerProps): JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [sshInput, setSshInput] = useState('')
   const [sshErr, setSshErr] = useState<string | null>(null)
@@ -67,7 +69,7 @@ export default function ConnectionPicker({
 
   const active = connections.find((c) => c.id === activeId)
   const isLocal = !activeId
-  const label = isLocal ? '本地' : active?.name || active?.host || '远程'
+  const label = isLocal ? t('common.local') : active?.name || active?.host || t('conn.remote')
 
   // 已存连接已用过的 host,避免在“快速连接”里重复列
   const savedHosts = new Set(connections.map((c) => c.host))
@@ -87,7 +89,7 @@ export default function ConnectionPicker({
       <button
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] text-ink-muted hover:bg-black/5 hover:text-ink"
-        title="切换连接"
+        title={t('conn.switch')}
       >
         {isLocal ? (
           <Monitor size={14} />
@@ -132,7 +134,7 @@ export default function ConnectionPicker({
                   onClick={() => void submitSsh()}
                   className="shrink-0 rounded-md bg-ink px-2 py-0.5 text-[11px] text-canvas hover:opacity-90"
                 >
-                  添加
+                  {t('conn.add')}
                 </button>
               )}
             </div>
@@ -151,7 +153,7 @@ export default function ConnectionPicker({
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] hover:bg-black/5"
           >
             <Monitor size={14} className="text-ink-muted" />
-            <span className="flex-1">本地</span>
+            <span className="flex-1">{t('common.local')}</span>
             {isLocal && <Check size={13} className="text-[#2f6fd0]" />}
           </button>
 
@@ -159,7 +161,7 @@ export default function ConnectionPicker({
           {connections.length > 0 && (
             <>
               <div className="my-1 h-px bg-black/8" />
-              <div className="px-3 py-0.5 text-[11px] text-ink-faint">连接</div>
+              <div className="px-3 py-0.5 text-[11px] text-ink-faint">{t('conn.group')}</div>
               {connections.map((c) => (
                 <button
                   key={c.id}
@@ -216,7 +218,7 @@ export default function ConnectionPicker({
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink-muted hover:bg-black/5"
           >
             <Plus size={14} />
-            管理连接…
+            {t('conn.manage')}
           </button>
         </div>
       )}

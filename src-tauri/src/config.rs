@@ -91,6 +91,15 @@ pub struct AppConfig {
     /// 首启选定的插件 agent:""=未选 / "claude" / "codex"。决定装哪套插件、远程也装哪套。
     #[serde(default)]
     pub plugin_agent: String,
+    /// 界面主题 id(见前端 theme.ts);空=默认 github-light。
+    #[serde(default)]
+    pub theme: String,
+    /// 界面字体(CSS font-family);空=系统默认。
+    #[serde(default)]
+    pub ui_font: String,
+    /// 界面字号(px);0=默认 14。
+    #[serde(default)]
+    pub ui_font_size: u32,
 }
 
 impl Default for AppConfig {
@@ -105,6 +114,9 @@ impl Default for AppConfig {
             active_connection: String::new(),
             language: String::new(),
             plugin_agent: String::new(),
+            theme: String::new(),
+            ui_font: String::new(),
+            ui_font_size: 0,
         }
     }
 }

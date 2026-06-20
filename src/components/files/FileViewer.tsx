@@ -4,6 +4,7 @@ import { Loader2, FileQuestion, Download, GitCompare, FileText } from 'lucide-re
 import { readBytesCached } from '@/lib/fs'
 import { shadowDiff } from '@/lib/shadow'
 import { onRemoteFsChange } from '@/lib/watch'
+import { useI18n } from '@/lib/i18n'
 import FileEditor from './FileEditor'
 import TableViewer, { isTableFile } from './TableViewer'
 import DiffView from '../git/DiffView'
@@ -193,6 +194,7 @@ function ViewToggle({
   onMode: (m: 'diff' | 'file') => void
   name: string
 }): JSX.Element {
+  const { t } = useI18n()
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1.5 text-[12px]">
       <span className="truncate text-ink-muted">{name}</span>
@@ -204,7 +206,7 @@ function ViewToggle({
             mode === 'diff' ? 'bg-canvas text-ink shadow-sm' : 'text-ink-muted'
           } disabled:opacity-40`}
         >
-          <GitCompare size={12} />改动
+          <GitCompare size={12} />{t('fileViewer.changes')}
         </button>
         <button
           onClick={() => onMode('file')}
@@ -212,7 +214,7 @@ function ViewToggle({
             mode === 'file' ? 'bg-canvas text-ink shadow-sm' : 'text-ink-muted'
           }`}
         >
-          <FileText size={12} />文件
+          <FileText size={12} />{t('fileViewer.file')}
         </button>
       </div>
     </div>
@@ -230,6 +232,7 @@ function MediaViewer({
   kind: Exclude<Kind, 'text'>
   mime: string
 }): JSX.Element {
+  const { t } = useI18n()
   const [src, setSrc] = useState('')
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -273,7 +276,7 @@ function MediaViewer({
         {loading ? (
           <span className="flex items-center gap-2 text-[13px] text-ink-faint">
             <Loader2 size={14} className="animate-spin" />
-            加载中…
+            {t('fileViewer.loading')}
           </span>
         ) : err ? (
           <span className="flex items-center gap-2 text-[13px] text-ink-faint">

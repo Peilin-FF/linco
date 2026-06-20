@@ -6,6 +6,7 @@ import {
   previewSetTarget,
   previewStart
 } from '@/lib/preview'
+import { useI18n } from '@/lib/i18n'
 
 interface ScreenViewProps {
   /** 远程主机(空=本地) */
@@ -31,6 +32,7 @@ export default function ScreenView({
   cwd,
   previewPath
 }: ScreenViewProps): JSX.Element {
+  const { t } = useI18n()
   const [port, setPort] = useState(0)
   // 导航历史栈 + 当前位置(浏览器式前进后退)。url 由 stack[idx] 派生。
   const [nav, setNav] = useState<{ stack: string[]; idx: number }>({ stack: [], idx: -1 })
@@ -172,7 +174,7 @@ export default function ScreenView({
           onClick={back}
           disabled={!canBack}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink disabled:text-ink-faint/40 disabled:hover:bg-transparent"
-          title="后退"
+          title={t('screen.back')}
         >
           <ChevronLeft size={15} />
         </button>
@@ -180,14 +182,14 @@ export default function ScreenView({
           onClick={forward}
           disabled={!canForward}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink disabled:text-ink-faint/40 disabled:hover:bg-transparent"
-          title="前进"
+          title={t('screen.forward')}
         >
           <ChevronRight size={15} />
         </button>
         <button
           onClick={reload}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title="刷新"
+          title={t('screen.refresh')}
         >
           <RotateCw size={15} />
         </button>
@@ -210,10 +212,10 @@ export default function ScreenView({
               setEditing(true)
             }}
             className="flex flex-1 items-center gap-1.5 truncate rounded-md px-2 py-1 text-left font-mono text-[12px] text-ink-muted hover:bg-black/5"
-            title="点击编辑地址"
+            title={t('screen.editUrl')}
           >
             <Link2 size={13} className="shrink-0 text-ink-faint" />
-            <span className="truncate">{url || '未选择预览'}</span>
+            <span className="truncate">{url || t('screen.noPreview')}</span>
           </button>
         )}
         <a
@@ -221,7 +223,7 @@ export default function ScreenView({
           target="_blank"
           rel="noreferrer"
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title="在浏览器中打开"
+          title={t('screen.openInBrowser')}
         >
           <ExternalLink size={15} />
         </a>
@@ -230,8 +232,7 @@ export default function ScreenView({
       {/* 预览 iframe / 空态 */}
       {empty ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-[13px] text-ink-faint">
-          工作目录里没找到 HTML。让 claude 生成 index.html,或在文件树右键某个
-          .html 选「预览」,也可在上方地址栏手填地址。
+          {t('screen.noHtml')}
         </div>
       ) : (
         <iframe

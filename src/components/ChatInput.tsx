@@ -14,6 +14,7 @@ import {
   TerminalSquare
 } from 'lucide-react'
 import { providerCaps, type AgentConfig } from '@/lib/config'
+import { useI18n } from '@/lib/i18n'
 
 interface ChatInputProps {
   onSend?: (text: string) => void
@@ -45,9 +46,9 @@ interface ChatInputProps {
   onPatchAgent?: (patch: Partial<AgentConfig>) => void
 }
 
-// 取路径最后一段作为短名显示
+// 取路径最后一段作为短名显示(空路径返回 ''，由调用方用 t() 兜底)
 function baseName(p: string): string {
-  if (!p) return '选择工作目录'
+  if (!p) return ''
   const parts = p.replace(/\/+$/, '').split('/')
   return parts[parts.length - 1] || p
 }
@@ -68,6 +69,7 @@ export default function ChatInput({
   agent,
   onPatchAgent
 }: ChatInputProps): JSX.Element {
+  const { t } = useI18n()
   const [value, setValue] = useState('')
   // 三个下拉的开合(模型/权限/effort),互斥
   const [openMenu, setOpenMenu] = useState<'model' | 'perm' | 'effort' | null>(null)
@@ -141,7 +143,7 @@ export default function ChatInput({
     const selected = await open({
       directory: true,
       multiple: false,
-      title: '选择工作目录'
+      title: t('chat.pickDir')
     })
     if (typeof selected === 'string') onPickDir?.(selected)
   }
@@ -158,10 +160,10 @@ export default function ChatInput({
           className={`flex items-center gap-1.5 rounded-t-2xl px-4 pt-3 pb-1 text-[14px] text-ink-muted hover:text-ink ${
             compact ? 'min-w-0' : 'max-w-full'
           }`}
-          title={cwd || '未选择工作目录'}
+          title={cwd || t('chat.pickDir.none')}
         >
           <Folder size={16} className="shrink-0 text-ink-faint" />
-          <span className="truncate">{baseName(cwd ?? '')}</span>
+          <span className="truncate">{baseName(cwd ?? '') || t('chat.pickDir')}</span>
           {dirOpen ? (
             <ChevronUp size={15} className="shrink-0 text-ink-faint" />
           ) : (
@@ -172,7 +174,7 @@ export default function ChatInput({
         {compact && onToggleTerminal && (
           <button
             onClick={onToggleTerminal}
-            title={terminalOpen ? '关闭终端' : '打开终端'}
+            title={terminalOpen ? t('chat.terminal.close') : t('chat.terminal.open')}
             className={`ml-1 mt-1 flex shrink-0 items-center rounded-md p-1 ${
               terminalOpen
                 ? 'bg-ink/10 text-ink'
@@ -190,13 +192,13 @@ export default function ChatInput({
               className="flex w-full shrink-0 items-center gap-2 px-3 py-2 text-left text-[13px] text-ink hover:bg-black/5"
             >
               <FolderOpen size={15} className="text-ink-muted" />
-              选择文件夹…
+              {t('chat.pickFolder')}
             </button>
             {recentDirs.length > 0 && (
               <>
                 <div className="my-1 h-px shrink-0 bg-black/8" />
                 <div className="shrink-0 px-3 py-1 text-[11px] text-ink-faint">
-                  最近
+                  {t('chat.recent')}
                 </div>
                 {/* 固定约 3 个高度,第 4 个起在框内滚动(不累加撑高) */}
                 <div className="max-h-[90px] overflow-y-auto">
@@ -249,7 +251,7 @@ export default function ChatInput({
             }
           }}
           rows={compact ? 1 : 2}
-          placeholder="向 Linco 提问,Enter 发送,Shift+Enter 换行"
+          placeholder={t('chat.placeholder')}
           style={extraHeight ? { minHeight: extraHeight } : undefined}
           className={`block resize-none bg-transparent px-4 py-2 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none ${
             compact ? 'min-w-0 flex-1' : 'w-full'
@@ -284,7 +286,7 @@ export default function ChatInput({
               return (
                 <button className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[13px] font-medium text-accent">
                   <ShieldAlert size={15} />
-                  <span>完全访问</span>
+                  <span>{t('chat.fullAccess')}</span>
                 </button>
               )
             }
@@ -324,7 +326,12 @@ export default function ChatInput({
 
           <div className="flex-1" />
 
-          <TerminalToggle open={terminalOpen} onClick={onToggleTerminal} />
+          <TerminalToggle
+            open={terminalOpen}
+            onClick={onToggleTerminal}
+            openLabel={t('chat.terminal.open')}
+            closeLabel={t('chat.terminal.close')}
+          />
 
           {/* 模型下拉:列 agent.models(空则只显当前) */}
           {agent && onPatchAgent && (agent.models?.length ?? 0) > 0 ? (
@@ -453,16 +460,20 @@ function Menu({
 // 终端面板开关按钮
 function TerminalToggle({
   open,
-  onClick
+  onClick,
+  openLabel,
+  closeLabel
 }: {
   open?: boolean
   onClick?: () => void
+  openLabel: string
+  closeLabel: string
 }): JSX.Element | null {
   if (!onClick) return null
   return (
     <button
       onClick={onClick}
-      title={open ? '关闭终端' : '打开终端'}
+      title={open ? closeLabel : openLabel}
       className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[13px] ${
         open
           ? 'bg-ink/10 text-ink'

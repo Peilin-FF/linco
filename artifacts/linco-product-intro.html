@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linco 产品介绍 Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "html": "<div class=\"eyebrow\">Linco / 产品介绍</div><h1>下一代 Vibe Coding 工作台</h1><p class=\"lede\">Linco 不替你“猜”模型在干什么——它让 <b>Claude Code、Codex</b> 在真实终端里运行，把 Agent 的<b>实时编辑、后台进程、文件改动、远端算力</b>全部摊在你眼前。从灵感到上线，一个原生桌面工作台，全程透明可控。</p><div class=\"toc\"><a href=\"#preview\">预览界面</a><a href=\"#terminal\">终端界面</a><a href=\"#files\">文件界面</a><a href=\"#cluster\">集群管理</a><a href=\"#why\">为什么是 Linco</a></div>",
+    "type": "html"
+  },
+  {
+    "html": "<div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">实时</div><div class=\"stat-label\">HTML 与 Agent 同画布编辑</div></div><div class=\"stat-card\"><div class=\"stat-num\">100%</div><div class=\"stat-label\">Agent 后台进程可见</div></div><div class=\"stat-card\"><div class=\"stat-num\">Shadow Diff</div><div class=\"stat-label\">按对话追踪改动</div></div><div class=\"stat-card\"><div class=\"stat-num\">毫秒级</div><div class=\"stat-label\">集群 RPC 响应</div></div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"preview\">① 预览界面 · 所见即所得的协作画布</h2><div class=\"callout rec\"><div class=\"callout-h\">一句话</div><p>不再“写代码 → 切窗口 → 刷新看效果”。在 <b>HTML Notebook</b> 里，你提需求、加交互，Code Agent <b>当场改、当场渲染</b>——像和一位坐在你旁边的工程师结对。</p></div><div class=\"grid col-3\"><div class=\"card\"><h3>双向编辑</h3><p>同一份产物，cell 既能你手动双击改，也能交给 Claude Code / Codex 改，两条路汇入一处，永不打架。</p><p><span class=\"badge info\">手动 cell</span> <span class=\"badge info\">Agent 编辑</span></p></div><div class=\"card\"><h3>需求即交互</h3><p>一句“加个可拖拽重排的卡片”，Agent 就把交互逻辑直接写进 HTML 产物，立刻可点可拖。</p><p><span class=\"badge new\">自然语言</span> <span class=\"badge new\">实时渲染</span></p></div><div class=\"card\"><h3>本地预览服务</h3><p>内置 HTTP 预览 + 热刷新，<code>iframe</code> 即时回显，无需手动起服务；产物自包含，随处可独立打开。</p><p><span class=\"badge warn\">热刷新</span> <span class=\"badge warn\">自包含</span></p></div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"terminal\">② 终端界面 · Agent 后台进程的显示器</h2><div class=\"callout rec\"><div class=\"callout-h\">一句话</div><p>你能开自己的终端；更关键的是，Code Agent 在后台偷偷拉起的 <b>shell、子进程、subagent</b>，全部从“盲盒”里被点亮——再也不用猜 Agent 在后台干了什么。</p></div><div class=\"grid col-2\"><div class=\"card\"><h3>多会话真实终端</h3><p>基于 <code>xterm.js</code> + 真实 PTY，随手开多个标签。和你平时的终端行为完全一致，TUI 兼容性强。</p></div><div class=\"card\"><h3>后台进程可视化</h3><p>沿 <code>ppid</code> 向下 BFS 收集 Agent 进程子树，列出每个后代的命令、PID、运行时长、CPU、内存、状态。构建、装依赖、dev server 全都暴露在阳光下。</p></div></div><div class=\"callout rec\"><div class=\"callout-h\">本地 / 远程同构</div><p>远端走常驻 Agent 的 <code>ps</code>，本地直接解析进程表，体验完全一致；连接波动时还有断线重连覆盖层自动恢复会话，不丢上下文。</p></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"files\">③ 文件界面 · 以对话为单位的改动雷达</h2><div class=\"callout rec\"><div class=\"callout-h\">核心创新 · Shadow Diff</div><p>万能文件查看器之外，Linco 引入 <b>Shadow Diff</b>：以“<b>一次对话</b>”为 scope，精确标出本轮 Agent 动过的每个文件，并给出原生红绿 diff。Cursor 式 checkpoint，放进了每一次对话里。</p></div><div class=\"grid col-2\"><div class=\"card\"><h3>对话级 scope</h3><p>不是看 git 全量变更，而是聚焦“<b>这次聊天</b>到底改了哪些文件”。每次发消息，后台悄悄打一个基线快照；Agent 跑完，文件树即高亮新增 / 修改。</p></div><div class=\"card\"><h3>绝不污染你的 Git</h3><p>用一个与项目 <code>.git</code> 完全独立的<b>影子仓库</b>记录改动，不碰你的暂存区；连被 <code>.gitignore</code> 屏蔽的临时产物、artifacts 也能追踪到。</p></div></div>",
+    "type": "html"
+  },
+  {
+    "head": [
+      "文件界面能力",
+      "说明",
+      "价值"
+    ],
+    "rows": [
+      [
+        "万能查看器",
+        "代码、表格、图片、二进制统一渲染，多标签 + CodeMirror 编辑。",
+        "一个界面看尽所有文件类型"
+      ],
+      [
+        "本轮改动高亮",
+        "影子仓库 diff 出本次对话的新增/修改文件，文件树直接标记。",
+        "一眼看清 Agent 的手脚"
+      ],
+      [
+        "原生红绿 Diff",
+        "git 原生 diff 输出，大文件、二进制、改名都妥善处理。",
+        "改了什么逐行可审"
+      ],
+      [
+        "不碰项目 Git",
+        "独立 git-dir，绝不写入用户项目的 .git 与暂存区。",
+        "放心让 Agent 跑，零副作用"
+      ]
+    ],
+    "type": "table"
+  },
+  {
+    "html": "<h2 id=\"cluster\">④ 强大的集群管理 · 毫秒级远程窗口渲染</h2><div class=\"callout rec\"><div class=\"callout-h\">一句话</div><p>采用持久连接上的 <b>RPC 与集群通讯</b>，把远程目录、文件、终端、Agent 全程拉进毫秒级联动——<b>算力在远端，也可以极速渲染</b></p></div><div class=\"grid col-3\"><div class=\"card\"><h3>持久 RPC 通道</h3><p>传统远程开发每个操作都要新起连接、来回握手。Linco 借鉴 VS Code Remote 的“远端常驻 + RPC”，在一条持久连接里跑常驻进程，消除反复建连的往返延迟。</p><p><span class=\"badge info\">常驻进程</span> <span class=\"badge info\">低延迟</span></p></div><div class=\"card\"><h3>多 Lane 隔离</h3><p>文件树、编辑器、预览各占独立 RPC lane，互不抢占、互不阻塞，高频操作下响应依旧稳定。</p><p><span class=\"badge new\">通道隔离</span> <span class=\"badge new\">高并发</span></p></div><div class=\"card\"><h3>优雅回退</h3><p>RPC 不可用时自动回退到 shell，稳定不掉链；远端文件 / 终端 / Shadow Diff 与本地体验同构。</p><p><span class=\"badge warn\">自动回退</span> <span class=\"badge warn\">远程同构</span></p></div></div><div class=\"callout rec\"><div class=\"callout-h\">设计目标</div><p>它不是“远程桌面”，而是“<b>本地 UI + 远端执行环境</b>”：本地保持原生界面与预览服务器，远端承担 Agent、训练、文件与 Git 操作。</p></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"why\">为什么是 Linco</h2><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">01</div><div class=\"tl-body\"><b>透明</b><br>Agent 的实时编辑、后台进程、文件改动、远端调用，全部可见，不再是黑箱。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">02</div><div class=\"tl-body\"><b>可控</b><br>Human-in-the-loop：每一步都看得见、改得动、回退得了。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">03</div><div class=\"tl-body\"><b>可信</b><br>Shadow Diff 让“这轮改了什么”一目了然，且绝不污染你的项目 Git。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">04</div><div class=\"tl-body\"><b>够快</b><br>毫秒级集群 RPC，让远端算力用起来和本地一样顺手。</div></div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<div class=\"summary-band\"><div><span class=\"k\">产品定位</span>下一代 Vibe Coding 工作台</div><div><span class=\"k\">四大界面</span>预览 / 终端 / 文件 / 集群</div><div><span class=\"k\">一句话</span>让 Agent 替你写，让 Linco 替你看</div></div>",
+    "type": "html"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

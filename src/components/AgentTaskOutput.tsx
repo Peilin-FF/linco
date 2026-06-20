@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { tailFile } from '@/lib/procs'
+import { useI18n } from '@/lib/i18n'
 
 interface Props {
   // 输出文件路径(agent 后台任务的 stdout 落盘文件)
@@ -27,6 +28,7 @@ export default function AgentTaskOutput({
   active,
   exited
 }: Props): JSX.Element {
+  const { t } = useI18n()
   const wrapRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -124,7 +126,7 @@ export default function AgentTaskOutput({
         <span className="truncate font-mono" title={file}>
           {file}
         </span>
-        {exited && <span className="ml-auto text-amber-400/80">已结束</span>}
+        {exited && <span className="ml-auto text-amber-400/80">{t('task.exited')}</span>}
       </div>
       <div ref={wrapRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />
     </div>

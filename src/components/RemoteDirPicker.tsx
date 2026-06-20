@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Folder, CornerLeftUp, X, Check, Loader2 } from 'lucide-react'
 import { listDir } from '@/lib/fs'
+import { useI18n } from '@/lib/i18n'
 
 interface RemoteDirPickerProps {
   host: string
@@ -33,6 +34,7 @@ export default function RemoteDirPicker({
   onPick,
   onClose
 }: RemoteDirPickerProps): JSX.Element {
+  const { t } = useI18n()
   const init = (initialPath || '/').replace(/\/+$/, '') || '/'
   const [input, setInput] = useState(init + '/')
   const [listedDir, setListedDir] = useState('') // 当前已列出的目录
@@ -111,7 +113,7 @@ export default function RemoteDirPicker({
         {/* 头部 */}
         <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-2">
           <span className="text-[13px] font-medium text-ink">
-            选择远端工作目录
+            {t('remoteDir.title')}
           </span>
           <span className="rounded bg-sidebar px-1.5 py-0.5 font-mono text-[11px] text-ink-muted">
             {host}
@@ -130,7 +132,7 @@ export default function RemoteDirPicker({
           <button
             onClick={goUp}
             className="shrink-0 rounded-md p-1 text-ink-muted hover:bg-black/5 hover:text-ink"
-            title="上级目录"
+            title={t('remoteDir.parent')}
           >
             <CornerLeftUp size={15} />
           </button>
@@ -138,7 +140,7 @@ export default function RemoteDirPicker({
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="输入路径,如 /home/user/exp —— 边打边筛"
+            placeholder={t('remoteDir.pathPlaceholder')}
             spellCheck={false}
             className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1.5 font-mono text-[12.5px] text-ink outline-none focus:border-[#5c8bd6]"
           />
@@ -153,7 +155,7 @@ export default function RemoteDirPicker({
             <div className="px-3 py-2 text-[12.5px] text-[#cf222e]">{err}</div>
           ) : shown.length === 0 ? (
             <div className="px-3 py-2 text-[12.5px] text-ink-faint">
-              {dirs.length === 0 ? '(无子目录)' : '(无匹配)'}
+              {dirs.length === 0 ? t('remoteDir.noSubdir') : t('remoteDir.noMatch')}
             </div>
           ) : (
             shown.map((d) => (
@@ -174,14 +176,14 @@ export default function RemoteDirPicker({
         {/* 底部:确认 */}
         <div className="flex shrink-0 items-center justify-between border-t border-black/8 px-3 py-2">
           <span className="truncate font-mono text-[11px] text-ink-faint">
-            将选择:{targetDir}
+            {t('remoteDir.willSelect', { dir: targetDir })}
           </span>
           <button
             onClick={() => onPick(targetDir)}
             className="flex shrink-0 items-center gap-1.5 rounded-lg bg-ink px-3 py-1.5 text-[12.5px] text-canvas hover:opacity-90"
           >
             <Check size={13} />
-            选择此目录
+            {t('remoteDir.confirm')}
           </button>
         </div>
       </div>

@@ -8,8 +8,10 @@ import {
   Cloud
 } from 'lucide-react'
 import type { AppConfig } from '@/lib/config'
+import { useI18n } from '@/lib/i18n'
 import ModelSettings from './settings/ModelSettings'
 import Connections from './settings/Connections'
+import GeneralSettings from './settings/GeneralSettings'
 import UsageStats from './settings/UsageStats'
 
 type SectionId =
@@ -18,11 +20,11 @@ type SectionId =
   | 'connections'
   | 'usage'
 
-const NAV: { id: SectionId; label: string; icon: typeof SlidersHorizontal }[] = [
-  { id: 'general', label: '常规', icon: SlidersHorizontal },
-  { id: 'model', label: '模型设置', icon: Server },
-  { id: 'connections', label: '连接', icon: Cloud },
-  { id: 'usage', label: '使用统计', icon: BarChart3 }
+const NAV: { id: SectionId; labelKey: string; icon: typeof SlidersHorizontal }[] = [
+  { id: 'general', labelKey: 'settings.nav.general', icon: SlidersHorizontal },
+  { id: 'model', labelKey: 'settings.nav.model', icon: Server },
+  { id: 'connections', labelKey: 'settings.nav.connections', icon: Cloud },
+  { id: 'usage', labelKey: 'settings.nav.usage', icon: BarChart3 }
 ]
 
 interface SettingsProps {
@@ -36,6 +38,7 @@ export default function Settings({
   onChange,
   onClose
 }: SettingsProps): JSX.Element {
+  const { t } = useI18n()
   const [section, setSection] = useState<SectionId>('general')
 
   return (
@@ -48,11 +51,11 @@ export default function Settings({
           className="no-drag mb-3 flex items-center gap-2 px-2.5 py-1.5 text-[14px] text-ink-muted hover:text-ink"
         >
           <ArrowLeft size={18} />
-          <span>返回工作区</span>
+          <span>{t('settings.back')}</span>
         </button>
 
         <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
-          {NAV.map(({ id, label, icon: Icon }) => (
+          {NAV.map(({ id, labelKey, icon: Icon }) => (
             <button
               key={id}
               onClick={() => setSection(id)}
@@ -63,14 +66,14 @@ export default function Settings({
               }`}
             >
               <Icon size={18} className="shrink-0" />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
             </button>
           ))}
         </nav>
 
         <button className="no-drag mb-3 mt-2 flex items-center gap-3 rounded-xl border border-dashed border-black/15 px-3 py-2.5 text-[14px] text-ink-muted hover:bg-black/5">
           <Rocket size={18} className="shrink-0" />
-          <span>引导</span>
+          <span>{t('settings.onboarding')}</span>
         </button>
       </aside>
 
@@ -83,9 +86,11 @@ export default function Settings({
             <Connections config={config} onChange={onChange} />
           ) : section === 'usage' ? (
             <UsageStats />
+          ) : section === 'general' ? (
+            <GeneralSettings config={config} onChange={onChange} />
           ) : (
             <SectionPlaceholder
-              title={NAV.find((n) => n.id === section)?.label ?? ''}
+              title={t(NAV.find((n) => n.id === section)?.labelKey ?? '')}
             />
           )}
         </div>
@@ -95,10 +100,11 @@ export default function Settings({
 }
 
 function SectionPlaceholder({ title }: { title: string }): JSX.Element {
+  const { t } = useI18n()
   return (
     <div>
       <h2 className="text-[20px] font-semibold text-ink">{title}</h2>
-      <p className="mt-3 text-[14px] text-ink-faint">该模块待接入。</p>
+      <p className="mt-3 text-[14px] text-ink-faint">{t('settings.placeholder')}</p>
     </div>
   )
 }

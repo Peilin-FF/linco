@@ -21,6 +21,7 @@ import {
   usageIngestTerminalOutput,
   type UsageAgentContext
 } from '@/lib/usage'
+import { useI18n } from '@/lib/i18n'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 // 跟随系统深浅色:深色模式下 claude 等 TUI 会用深色背景的 ANSI 块,
@@ -102,6 +103,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const hostRef = useRef<HTMLDivElement>(null)
     const termRef = useRef<Terminal | null>(null)
     const fitRef = useRef<FitAddon | null>(null)
+    const { t } = useI18n()
+    // t 用 ref 持有,供 effect 闭包读最新(语言切换后终端内提示也用新语言)
+    const tRef = useRef(t)
+    tRef.current = t
     // 断线后显示「重连」覆盖层
     const [exited, setExited] = useState(false)
     // 重连用:持有重启 PTY 会话的函数(由 effect 内赋值)
@@ -199,7 +204,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       }
       restartRef.current = () => {
         if (disposed) return
-        term.write('\r\n\x1b[90m[重连中…]\x1b[0m\r\n')
+        term.write(`\r\n\x1b[90m[${tRef.current('term.reconnecting')}]\x1b[0m\r\n`)
         start()
       }
 
@@ -225,7 +230,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         })
         unlistenExit = await onTermExit(id, () => {
           if (!disposed) {
-            term.write('\r\n\x1b[90m[连接已断开]\x1b[0m\r\n')
+            term.write(`\r\n\x1b[90m[${tRef.current('term.disconnected')}]\x1b[0m\r\n`)
             setExited(true)
             onExitRef.current?.(id)
           }
@@ -279,11 +284,11 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           <div className="pointer-events-none absolute right-2.5 top-2 flex justify-end">
             <button
               onClick={() => restartRef.current?.()}
-              title="重新连接"
+              title={t('term.reconnect')}
               className="pointer-events-auto flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-[11px] text-ink-muted ring-1 ring-black/10 hover:bg-black/10 hover:text-ink"
             >
               <RotateCw size={12} />
-              重连
+              {t('term.reconnectBtn')}
             </button>
           </div>
         )}

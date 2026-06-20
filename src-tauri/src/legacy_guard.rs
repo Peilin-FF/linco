@@ -140,7 +140,8 @@ fn update_notice_sits_immediately_left_of_connection_picker() {
         "update notice should sit between the header spacer and ConnectionPicker"
     );
     assert!(
-        before_picker[install_button..].contains("新版本"),
+        before_picker[install_button..].contains("新版本")
+            || before_picker[install_button..].contains("update.available"),
         "the update control should be a visible new-version notice"
     );
 }

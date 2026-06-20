@@ -42,6 +42,7 @@ import {
   type GitStatus
 } from '@/lib/git'
 import { onRemoteFsChange } from '@/lib/watch'
+import { useI18n } from '@/lib/i18n'
 import { iconForFile } from './files/icons'
 import DiffView from './git/DiffView'
 import { usePrompt } from './usePrompt'
@@ -60,6 +61,7 @@ function baseName(p: string): string {
 }
 
 export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.Element {
+  const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('changes')
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [sel, setSel] = useState<GitFile | null>(null)
@@ -162,7 +164,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
       await refresh()
       if (ok) notify(ok)
     } catch (e) {
-      notify(`失败:${e}`)
+      notify(t('git.toast.failed', { error: String(e) }))
     } finally {
       setBusy(false)
     }
@@ -176,7 +178,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           className="flex items-center gap-2 rounded-lg bg-sidebar px-4 py-2.5 text-[14px] text-ink hover:bg-black/5"
         >
           <BranchIcon size={16} />
-          选择工作目录
+          {t('git.pickDir')}
         </button>
       </div>
     )
@@ -185,7 +187,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
   if (status && !status.isRepo) {
     return (
       <div className="flex h-full w-full items-center justify-center rounded-2xl bg-canvas text-[14px] text-ink-faint shadow-card ring-1 ring-black/5">
-        当前目录不是 Git 仓库
+        {t('git.notRepo')}
       </div>
     )
   }
@@ -202,7 +204,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
       if (staged.length === 0) await gitStageAll(repo, host)
       await gitCommit(repo, commitMsg, host)
       setCommitMsg('')
-    }, '已提交')
+    }, t('git.toast.committed'))
   }
 
   const FileRow = ({
@@ -245,7 +247,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
               onAction()
             }}
             className="rounded p-0.5 text-ink-faint opacity-0 hover:bg-black/10 hover:text-ink group-hover:opacity-100"
-            title="暂存/取消"
+            title={t('git.stageToggle')}
           >
             <ActionIcon size={13} />
           </button>
@@ -281,7 +283,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
         )}
         <div className="flex-1" />
         <button
-          onClick={() => run(() => gitFetch(repo, host), '已 fetch')}
+          onClick={() => run(() => gitFetch(repo, host), t('git.toast.fetched'))}
           disabled={busy}
           className="rounded-md p-1 text-ink-muted hover:bg-black/5 hover:text-ink"
           title="fetch"
@@ -289,20 +291,20 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           <RefreshCw size={14} />
         </button>
         <button
-          onClick={() => run(() => gitPull(repo, host), '已拉取')}
+          onClick={() => run(() => gitPull(repo, host), t('git.toast.pulled'))}
           disabled={busy}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5 hover:text-ink"
           title="pull"
         >
-          <ArrowDown size={13} />拉取
+          <ArrowDown size={13} />{t('git.pull')}
         </button>
         <button
-          onClick={() => run(() => gitPush(repo, host), '已推送')}
+          onClick={() => run(() => gitPush(repo, host), t('git.toast.pushed'))}
           disabled={busy}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5 hover:text-ink"
           title="push"
         >
-          <ArrowUp size={13} />推送
+          <ArrowUp size={13} />{t('git.push')}
         </button>
       </div>
 
@@ -311,15 +313,15 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
         <div className="flex shrink-0 items-center gap-2 bg-[#5c8bd6]/12 px-3 py-1.5 text-[12.5px] text-[#2f6fd0]">
           <ArrowDown size={14} className="shrink-0" />
           <span className="flex-1">
-            远端有 {status.behind} 个新提交可拉取
-            {status.ahead > 0 && `,本地领先 ${status.ahead} 个`}
+            {t('git.behindHint', { behind: status.behind })}
+            {status.ahead > 0 && t('git.aheadHint', { ahead: status.ahead })}
           </span>
           <button
-            onClick={() => run(() => gitPull(repo, host), '已拉取')}
+            onClick={() => run(() => gitPull(repo, host), t('git.toast.pulled'))}
             disabled={busy}
             className="shrink-0 rounded-md bg-[#2f6fd0] px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            拉取
+            {t('git.pull')}
           </button>
         </div>
       )}
@@ -328,9 +330,9 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
       <div className="flex shrink-0 items-center gap-1 border-b border-black/8 px-2 py-1">
         {(
           [
-            ['changes', '变更', GitCommitHorizontal],
-            ['history', '历史', History],
-            ['branches', '分支', BranchIcon],
+            ['changes', t('git.tab.changes'), GitCommitHorizontal],
+            ['history', t('git.tab.history'), History],
+            ['branches', t('git.tab.branches'), BranchIcon],
             ['stash', 'Stash', Archive]
           ] as [Tab, string, typeof History][]
         ).map(([id, label, Icon]) => (
@@ -363,12 +365,12 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
               <div className="min-h-0 flex-1 overflow-auto">
                 {/* 暂存区 */}
                 <div className="flex items-center justify-between px-2 py-1 text-[11px] font-medium uppercase text-ink-faint">
-                  <span>已暂存 ({staged.length})</span>
+                  <span>{t('git.staged', { n: staged.length })}</span>
                   {staged.length > 0 && (
                     <button
                       onClick={() => run(() => gitUnstageAll(repo, host))}
                       className="text-ink-faint hover:text-ink"
-                      title="全部取消暂存"
+                      title={t('git.unstageAll')}
                     >
                       <Minus size={12} />
                     </button>
@@ -385,12 +387,12 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
 
                 {/* 未暂存 */}
                 <div className="mt-1 flex items-center justify-between px-2 py-1 text-[11px] font-medium uppercase text-ink-faint">
-                  <span>变更 ({unstaged.length})</span>
+                  <span>{t('git.changes', { n: unstaged.length })}</span>
                   {unstaged.length > 0 && (
                     <button
                       onClick={() => run(() => gitStageAll(repo, host))}
                       className="text-ink-faint hover:text-ink"
-                      title="全部暂存"
+                      title={t('git.stageAll')}
                     >
                       <Plus size={12} />
                     </button>
@@ -411,7 +413,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                 <textarea
                   value={commitMsg}
                   onChange={(e) => setCommitMsg(e.target.value)}
-                  placeholder="提交信息(⌘↩ 提交)"
+                  placeholder={t('git.commitPlaceholder')}
                   rows={2}
                   onKeyDown={(e) => {
                     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
@@ -428,8 +430,8 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                 >
                   <Check size={13} />
                   {staged.length > 0
-                    ? `提交已暂存 (${staged.length})`
-                    : `提交全部更改 (${unstaged.length})`}
+                    ? t('git.commitStaged', { n: staged.length })
+                    : t('git.commitAll', { n: unstaged.length })}
                 </button>
               </div>
             </div>
@@ -448,9 +450,9 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                           run(() => gitDiscard(repo, sel.path, sel.untracked, host))
                         }
                         className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-faint hover:bg-black/5 hover:text-[#cf222e]"
-                        title="丢弃改动"
+                        title={t('git.discardTitle')}
                       >
-                        <Undo2 size={12} />丢弃
+                        <Undo2 size={12} />{t('git.discard')}
                       </button>
                     )}
                   </div>
@@ -460,7 +462,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                 </div>
               ) : (
                 <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
-                  选择左侧文件查看改动
+                  {t('git.selectFile')}
                 </div>
               )}
             </div>
@@ -471,13 +473,13 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           <div className="flex flex-1 flex-col overflow-hidden">
             {/* 分支选择:看本地或远端(其他人)分支的提交 */}
             <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1.5 text-[12px]">
-              <span className="text-ink-faint">查看分支</span>
+              <span className="text-ink-faint">{t('git.viewBranch')}</span>
               <select
                 value={historyRev}
                 onChange={(e) => setHistoryRev(e.target.value)}
                 className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6]"
               >
-                <option value="">当前分支 ({status?.branch || 'HEAD'})</option>
+                <option value="">{t('git.currentBranch', { branch: status?.branch || 'HEAD' })}</option>
                 {branches
                   .filter((b) => !b.current)
                   .map((b) => (
@@ -516,7 +518,7 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                   <DiffView diff={diff} />
                 ) : (
                   <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
-                    点击提交查看改动
+                    {t('git.clickCommit')}
                   </div>
                 )}
               </div>
@@ -528,18 +530,18 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           <div className="flex-1 overflow-auto p-2">
             <button
               onClick={async () => {
-                const name = (await prompt('新分支名'))?.trim()
-                if (name) run(() => gitCreateBranch(repo, name, host), `已创建 ${name}`)
+                const name = (await prompt(t('git.newBranchName')))?.trim()
+                if (name) run(() => gitCreateBranch(repo, name, host), t('git.toast.branchCreated', { name }))
               }}
               className="mb-2 flex items-center gap-1.5 rounded-md bg-sidebar px-2.5 py-1 text-[12.5px] text-ink hover:bg-black/5"
             >
-              <Plus size={13} />新建分支
+              <Plus size={13} />{t('git.newBranch')}
             </button>
             {branches.map((b) => (
               <div
                 key={b.name}
                 onClick={() =>
-                  !b.current && run(() => gitCheckout(repo, b.name, host), `已切换到 ${b.name}`)
+                  !b.current && run(() => gitCheckout(repo, b.name, host), t('git.toast.switched', { name: b.name }))
                 }
                 className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[12.5px] ${
                   b.current ? 'bg-[#5c8bd6]/15 text-ink' : 'text-ink-muted hover:bg-black/5'
@@ -562,15 +564,15 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           <div className="flex-1 overflow-auto p-2">
             <button
               onClick={async () => {
-                const msg = (await prompt('Stash 描述(可空)')) ?? ''
-                run(() => gitStashPush(repo, msg, host), '已 stash')
+                const msg = (await prompt(t('git.stashDesc'))) ?? ''
+                run(() => gitStashPush(repo, msg, host), t('git.toast.stashed'))
               }}
               className="mb-2 flex items-center gap-1.5 rounded-md bg-sidebar px-2.5 py-1 text-[12.5px] text-ink hover:bg-black/5"
             >
-              <Archive size={13} />保存当前改动到 Stash
+              <Archive size={13} />{t('git.stashSave')}
             </button>
             {stashes.length === 0 && (
-              <div className="px-2 py-2 text-[12px] text-ink-faint">无 stash</div>
+              <div className="px-2 py-2 text-[12px] text-ink-faint">{t('git.stashEmpty')}</div>
             )}
             {stashes.map((s) => (
               <div
@@ -581,19 +583,19 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
                 <span className="truncate">{s.message}</span>
                 <span className="ml-auto flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
                   <button
-                    onClick={() => run(() => gitStashPop(repo, s.index, host), '已 pop')}
+                    onClick={() => run(() => gitStashPop(repo, s.index, host), t('git.toast.popped'))}
                     className="rounded px-1.5 py-0.5 text-[11px] hover:bg-black/10"
                   >
                     pop
                   </button>
                   <button
-                    onClick={() => run(() => gitStashApply(repo, s.index, host), '已 apply')}
+                    onClick={() => run(() => gitStashApply(repo, s.index, host), t('git.toast.applied'))}
                     className="rounded px-1.5 py-0.5 text-[11px] hover:bg-black/10"
                   >
                     apply
                   </button>
                   <button
-                    onClick={() => run(() => gitStashDrop(repo, s.index, host), '已删除')}
+                    onClick={() => run(() => gitStashDrop(repo, s.index, host), t('git.toast.dropped'))}
                     className="rounded px-1.5 py-0.5 text-[11px] text-[#cf222e] hover:bg-black/10"
                   >
                     drop

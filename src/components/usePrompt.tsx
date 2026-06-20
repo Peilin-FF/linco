@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useI18n } from '@/lib/i18n'
 
 interface PromptState {
   title: string
@@ -25,6 +26,7 @@ export function usePrompt(): {
 } {
   const [state, setState] = useState<PromptState | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const { t } = useI18n()
 
   const prompt = useCallback(
     (title: string, defaultValue = '', placeholder?: string): Promise<string | null> =>
@@ -71,14 +73,14 @@ export function usePrompt(): {
             onClick={() => close(null)}
             className="rounded-md px-3 py-1.5 text-[12.5px] text-ink-muted hover:bg-black/5"
           >
-            取消
+            {t('prompt.cancel')}
           </button>
           <button
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => close(inputRef.current?.value.trim() ?? '')}
             className="rounded-md bg-ink px-3 py-1.5 text-[12.5px] text-canvas hover:opacity-90"
           >
-            确定
+            {t('prompt.confirm')}
           </button>
         </div>
       </div>

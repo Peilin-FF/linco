@@ -42,7 +42,8 @@ fi
 
 CTX="HTML interactive workflow is enabled (linco-html plugin). \
 For substantive deliverables (multi-option comparisons, implementation plans, code reviews, charts/flowcharts, status/experiment reports, concept explainers, prototypes, custom editors, etc.), \
-default to producing a single self-contained .html file in ${ARTIFACTS}/, inlining all CSS/JS/SVG so it opens directly in a browser (no build step). \
+default to producing a single self-contained .html file in ${ARTIFACTS}/ that opens directly in a browser (no build step). \
+The moment the user says \"use HTML\" / \"make a web page\" / \"produce an HTML intro,\" default to this notebook thin-shell template: copy templates/notebook.html from the html-kit skill and only fill the JSON content array (cell list) inside <script id=seed>, leaving the shell and /__assets/ references untouched. Never hand-roll a standalone HTML with a large inlined <style> block or a custom render script — such an artifact cannot be edited/saved/hot-reloaded in place inside Linco, throwing away the kit's entire value; only for special cases like a pure static single diagram should you inline CSS/JS/SVG without the notebook. \
 Design kit: background #FAF9F5 (ivory), body text #3D3D3A, accent #D97757 (clay), dark #141413 (slate), good/correct uses #788C5D (olive), bad/wrong uses clay; \
 headings in serif (Georgia), body in system-ui sans, code in ui-monospace; cards on white with a 1.5px #D1CFC5 border and 12-14px radius; \
 code panels on dark slate with #E8E6DE text. Common components: side-by-side comparison grids, pro/con tables, metric chips, a recommendation callout with a clay left border, inline SVG module/flow diagrams, <details> folds, <section>+JS slides; \

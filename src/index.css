@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 主题默认变量(GitHub Light)。切主题时 src/lib/theme.ts 覆盖这些。
+   先在 :root 给一份,避免首帧无变量时闪烁。 */
+:root {
+  --canvas: #ffffff;
+  --sidebar: #f6f6f4;
+  --ink: #1a1a1a;
+  --ink-muted: #6b6b6b;
+  --ink-faint: #9a9a9a;
+  --accent: #d97a2b;
+  --app-font-size: 14px;
+  /* --app-font 默认不设,让 tailwind sans 链回退到系统字体 */
+}
+
 html,
 body,
 #root {
@@ -13,6 +26,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   user-select: none;
+  font-size: var(--app-font-size, 14px);
 }
 
 /* 整个顶部区域可拖动窗口;交互元素用 .no-drag 排除 */

@@ -1,5 +1,7 @@
 // 解析并渲染 unified diff(git diff 输出),增删行红绿高亮。
 
+import { useI18n } from '@/lib/i18n'
+
 interface Row {
   kind: 'add' | 'del' | 'ctx' | 'hunk' | 'meta'
   text: string
@@ -52,10 +54,11 @@ function parseDiff(diff: string): Row[] {
 }
 
 export default function DiffView({ diff }: { diff: string }): JSX.Element {
+  const { t } = useI18n()
   if (!diff.trim()) {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
-        无差异
+        {t('diff.noDiff')}
       </div>
     )
   }

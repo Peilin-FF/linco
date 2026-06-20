@@ -21,6 +21,7 @@ import {
 } from '@/lib/search'
 import { iconForFile } from './icons'
 import { isMediaFile } from './FileViewer'
+import { useI18n } from '@/lib/i18n'
 
 export interface TreeContextTarget {
   entry: DirEntry
@@ -98,6 +99,7 @@ const Node = memo(function Node({
   host,
   gitMap
 }: NodeProps): JSX.Element {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [children, setChildren] = useState<DirEntry[] | null>(null)
   const [loading, setLoading] = useState(false)
@@ -279,7 +281,7 @@ const Node = memo(function Node({
               className="py-1 text-[12px] text-ink-faint"
               style={{ paddingLeft: (depth + 1) * 12 + 20 }}
             >
-              加载中…
+              {t('tree.loading')}
             </div>
           ) : (
             children?.map((c) => (
@@ -319,6 +321,7 @@ export default function FileTree({
   revealRequest,
   gitMap
 }: FileTreeProps): JSX.Element {
+  const { t } = useI18n()
   const [entries, setEntries] = useState<DirEntry[]>([])
   const [revealPath, setRevealPath] = useState('')
 
@@ -422,19 +425,19 @@ export default function FileTree({
       await replaceInFile(path, query, replacement, opts, host)
       await rerun()
     } catch (e) {
-      window.alert(`替换失败:${e}`)
+      window.alert(t('tree.replaceFailed', { error: String(e) }))
     }
   }
 
   const replaceAll = async (): Promise<void> => {
     if (!results || totalMatches === 0) return
-    if (!window.confirm(`在 ${results.length} 个文件中替换全部匹配?`)) return
+    if (!window.confirm(t('tree.confirmReplaceAll', { files: results.length }))) return
     try {
       for (const f of results)
         await replaceInFile(f.path, query, replacement, opts, host)
       await rerun()
     } catch (e) {
-      window.alert(`替换失败:${e}`)
+      window.alert(t('tree.replaceFailed', { error: String(e) }))
     }
   }
 
@@ -473,7 +476,7 @@ export default function FileTree({
           <button
             onClick={() => setShowReplace((s) => !s)}
             className="mt-1 shrink-0 rounded p-0.5 text-ink-faint hover:bg-black/5"
-            title="切换替换"
+            title={t('tree.toggleReplace')}
           >
             {showReplace ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           </button>
@@ -485,7 +488,7 @@ export default function FileTree({
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="搜索"
+                placeholder={t('tree.search')}
                 className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-faint"
               />
               <Toggle
@@ -494,26 +497,26 @@ export default function FileTree({
                   setOpts((o) => ({ ...o, caseSensitive: !o.caseSensitive }))
                 }
                 icon={CaseSensitive}
-                title="区分大小写"
+                title={t('tree.caseSensitive')}
               />
               <Toggle
                 active={opts.wholeWord}
                 onClick={() => setOpts((o) => ({ ...o, wholeWord: !o.wholeWord }))}
                 icon={WholeWord}
-                title="全词匹配"
+                title={t('tree.wholeWord')}
               />
               <Toggle
                 active={opts.isRegex}
                 onClick={() => setOpts((o) => ({ ...o, isRegex: !o.isRegex }))}
                 icon={Regex}
-                title="正则"
+                title={t('tree.regex')}
               />
               {/* ⋯ 展开过滤 */}
               <Toggle
                 active={showFilters}
                 onClick={() => setShowFilters((s) => !s)}
                 icon={MoreHorizontal}
-                title="包含/排除文件"
+                title={t('tree.filterFiles')}
               />
             </div>
 
@@ -525,14 +528,14 @@ export default function FileTree({
                   <input
                     value={replacement}
                     onChange={(e) => setReplacement(e.target.value)}
-                    placeholder="替换"
+                    placeholder={t('tree.replace')}
                     className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-faint"
                   />
                 </div>
                 <button
                   onClick={replaceAll}
                   disabled={!results || totalMatches === 0}
-                  title="全部替换"
+                  title={t('tree.replaceAll')}
                   className="shrink-0 rounded-md p-1 text-ink-muted hover:bg-black/5 hover:text-ink disabled:opacity-40"
                 >
                   <ReplaceAll size={14} />
@@ -545,27 +548,27 @@ export default function FileTree({
               <div className="space-y-1 pt-0.5">
                 <div>
                   <div className="mb-0.5 text-[11px] text-ink-faint">
-                    包含的文件
+                    {t('tree.include')}
                   </div>
                   <input
                     value={opts.include}
                     onChange={(e) =>
                       setOpts((o) => ({ ...o, include: e.target.value }))
                     }
-                    placeholder="例如 *.ts, src/**/*.py"
+                    placeholder={t('tree.includePlaceholder')}
                     className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6] placeholder:text-ink-faint"
                   />
                 </div>
                 <div>
                   <div className="mb-0.5 text-[11px] text-ink-faint">
-                    排除的文件
+                    {t('tree.exclude')}
                   </div>
                   <input
                     value={opts.exclude}
                     onChange={(e) =>
                       setOpts((o) => ({ ...o, exclude: e.target.value }))
                     }
-                    placeholder="例如 *.test.ts, dist/**"
+                    placeholder={t('tree.excludePlaceholder')}
                     className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6] placeholder:text-ink-faint"
                   />
                 </div>
@@ -587,15 +590,15 @@ export default function FileTree({
       >
         {query ? (
           searching && results === null ? (
-            <div className="px-3 py-2 text-[12px] text-ink-faint">搜索中…</div>
+            <div className="px-3 py-2 text-[12px] text-ink-faint">{t('tree.searching')}</div>
           ) : !results || results.length === 0 ? (
             <div className="px-3 py-2 text-[12px] text-ink-faint">
-              {searching ? '搜索中…' : '无结果'}
+              {searching ? t('tree.searching') : t('tree.noResults')}
             </div>
           ) : (
             <>
               <div className="px-3 py-1 text-[11px] text-ink-faint">
-                {results.length} 个文件,{totalMatches} 处匹配
+                {t('tree.resultSummary', { files: results.length, matches: totalMatches })}
               </div>
               {results.map((f) => {
                 const isCol = collapsed.has(f.path)
@@ -624,7 +627,7 @@ export default function FileTree({
                             e.stopPropagation()
                             void replaceFile(f.path)
                           }}
-                          title="替换此文件"
+                          title={t('tree.replaceThisFile')}
                           className="shrink-0 rounded p-0.5 text-ink-faint opacity-0 hover:bg-black/10 hover:text-ink group-hover:opacity-100"
                         >
                           <Replace size={12} />
@@ -637,7 +640,7 @@ export default function FileTree({
                           key={m.line}
                           onClick={() => onSelectFile(f.path)}
                           className="flex cursor-pointer items-baseline gap-2 py-[1px] pl-7 pr-2 hover:bg-black/[0.05]"
-                          title={`第 ${m.line} 行`}
+                          title={t('tree.lineN', { line: m.line })}
                         >
                           <span className="shrink-0 text-[10.5px] tabular-nums text-ink-faint">
                             {m.line}

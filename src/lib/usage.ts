@@ -2,8 +2,11 @@ import { invoke } from '@tauri-apps/api/core'
 
 export interface UsageTotals {
   turns: number
+  cliTurns: number
   estimatedInputTokens: number
   reportedTokens: number
+  cliReportedTokens: number
+  terminalReportedTokens: number
 }
 
 export interface ModelUsage {
@@ -14,8 +17,11 @@ export interface ModelUsage {
   provider: string
   model: string
   turns: number
+  cliTurns: number
   estimatedInputTokens: number
   reportedTokens: number
+  cliReportedTokens: number
+  terminalReportedTokens: number
   firstAt: string
   lastAt: string
 }
@@ -23,8 +29,11 @@ export interface ModelUsage {
 export interface DayUsage {
   day: string
   turns: number
+  cliTurns: number
   estimatedInputTokens: number
   reportedTokens: number
+  cliReportedTokens: number
+  terminalReportedTokens: number
 }
 
 export interface SessionUsage {

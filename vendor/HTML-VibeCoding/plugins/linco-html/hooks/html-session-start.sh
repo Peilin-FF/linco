@@ -43,7 +43,8 @@ fi
 
 CTX="HTML 交互工作流已启用（html-vibe 插件）。\
 对于实质性产物（多方案对比、实现计划、代码审查、图表/流程图、状态/实验报告、概念讲解、原型、自定义编辑器等），\
-默认产出单个自包含的 .html 文件到 ${ARTIFACTS}/，内联所有 CSS/JS/SVG，使其能直接在浏览器打开（无构建步骤）。\
+默认产出单个自包含的 .html 文件到 ${ARTIFACTS}/，能直接在浏览器打开（无构建步骤）。\
+用户一说「用 HTML」「做个网页/页面」「出个 HTML 介绍」就默认走本套 notebook 薄壳模板：直接复制 html-kit 技能里的 templates/notebook.html，只填 <script id=seed> 里的 JSON 内容数组(cell 列表)，其余壳与 /__assets/ 引用原样保留。严禁手搓自带大段内联 <style> 或自定义渲染脚本的独立 HTML——那种产物在 Linco 里无法就地编辑/保存/热刷新，等于丢掉本套件全部价值；只有需要纯静态单图等特例时,才内联 CSS/JS/SVG 不套 notebook。\
 设计套件：背景 #FAF9F5(ivory)，正文 #3D3D3A，强调色 #D97757(clay)，深色 #141413(slate)，好/对用 #788C5D(olive)、坏/错用 clay；\
 标题用 serif(Georgia)、正文 system-ui sans、代码 ui-monospace；卡片白底 1.5px #D1CFC5 边框、圆角 12-14px；\
 代码面板深色 slate 底 #E8E6DE 字。常用组件：并排对比网格、pro/con 表、指标 chips、左边框 clay 的推荐 callout、内联 SVG 模块图/流程图、<details> 折叠、<section>+JS 幻灯片；\

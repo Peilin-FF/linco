@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Save, FileText } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
-import { githubLight } from '@uiw/codemirror-theme-github'
+import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
 import type { Extension } from '@codemirror/state'
 import { keymap } from '@codemirror/view'
 import {
@@ -20,6 +20,8 @@ import { css } from '@codemirror/lang-css'
 import { yaml } from '@codemirror/lang-yaml'
 import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
+import { useIsDark } from '@/lib/theme'
+import { useI18n } from '@/lib/i18n'
 
 // VS Code 式编辑能力(显式接入,不依赖 basicSetup 默认):
 //   ⌘F 查找 / ⌘⌥F 替换(search panel)、⌘G 下一个、⇧⌘G 上一个
@@ -80,6 +82,8 @@ function langFor(name: string): Extension[] {
 }
 
 export default function FileEditor({ path, host }: FileEditorProps): JSX.Element {
+  const { t } = useI18n()
+  const dark = useIsDark()
   const [content, setContent] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -173,17 +177,17 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
           className={`flex items-center gap-1 rounded-md px-2 py-1 text-[12px] ${
             dirty ? 'text-ink hover:bg-black/5' : 'cursor-default text-ink-faint'
           }`}
-          title="保存 (⌘S)"
+          title={t('editor.saveHint')}
         >
           <Save size={13} />
-          {saving ? '保存中…' : '保存'}
+          {saving ? t('editor.saving') : t('editor.save')}
         </button>
       </div>
 
       {/* 内容 */}
       {!loaded ? (
         <div className="flex flex-1 items-center justify-center text-[13px] text-ink-faint">
-          加载中…
+          {t('editor.loading')}
         </div>
       ) : error ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-ink-faint">
@@ -203,7 +207,7 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
             value={content}
             onChange={onChange}
             extensions={extensions}
-            theme={githubLight}
+            theme={dark ? githubDark : githubLight}
             height="100%"
             basicSetup={{
               lineNumbers: true,

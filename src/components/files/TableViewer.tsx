@@ -8,6 +8,7 @@ import {
   writeBytes,
   writeFile
 } from '@/lib/fs'
+import { useI18n } from '@/lib/i18n'
 
 interface TableViewerProps {
   path: string
@@ -74,6 +75,7 @@ function colLabel(i: number): string {
  * 双击单元格编辑;行号/表头右键可插入/删除行列;⌘S 或按钮保存。
  */
 export default function TableViewer({ path, host }: TableViewerProps): JSX.Element {
+  const { t } = useI18n()
   const ext = extOf(path)
   const isXlsx = ext === 'xlsx' || ext === 'xls'
 
@@ -226,17 +228,17 @@ export default function TableViewer({ path, host }: TableViewerProps): JSX.Eleme
           onClick={addRow}
           disabled={!loaded || !!error}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5 disabled:text-ink-faint"
-          title="末尾加一行"
+          title={t('table.addRowHint')}
         >
-          <Plus size={13} />行
+          <Plus size={13} />{t('table.addRow')}
         </button>
         <button
           onClick={addCol}
           disabled={!loaded || !!error}
           className="flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5 disabled:text-ink-faint"
-          title="末尾加一列"
+          title={t('table.addColHint')}
         >
-          <Plus size={13} />列
+          <Plus size={13} />{t('table.addCol')}
         </button>
         <button
           onClick={save}
@@ -244,10 +246,10 @@ export default function TableViewer({ path, host }: TableViewerProps): JSX.Eleme
           className={`flex items-center gap-1 rounded-md px-2 py-1 text-[12px] ${
             dirty ? 'text-ink hover:bg-black/5' : 'cursor-default text-ink-faint'
           }`}
-          title="保存 (⌘S)"
+          title={t('editor.saveHint')}
         >
           <Save size={13} />
-          {saving ? '保存中…' : '保存'}
+          {saving ? t('editor.saving') : t('editor.save')}
         </button>
       </div>
 
@@ -277,7 +279,7 @@ export default function TableViewer({ path, host }: TableViewerProps): JSX.Eleme
       {!loaded ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-[13px] text-ink-faint">
           <Loader2 size={14} className="animate-spin" />
-          加载中…
+          {t('editor.loading')}
         </div>
       ) : error ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-ink-faint">
@@ -325,6 +327,7 @@ function Grid({
   setCell: (r: number, c: number, v: string) => void
   onCtx: (m: CtxMenu) => void
 }): JSX.Element {
+  const { t } = useI18n()
   const cols = useMemo(
     () => rows.reduce((m, r) => Math.max(m, r.length), 0),
     [rows]
@@ -332,7 +335,7 @@ function Grid({
   if (rows.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
-        空表格
+        {t('table.empty')}
       </div>
     )
   }
@@ -349,7 +352,7 @@ function Grid({
                 e.preventDefault()
                 onCtx({ kind: 'col', index: c, x: e.clientX, y: e.clientY })
               }}
-              title={`第 ${colLabel(c)} 列 — 右键插入/删除`}
+              title={t('table.colHint', { col: colLabel(c) })}
               className="sticky top-0 z-10 min-w-[80px] cursor-context-menu border border-black/10 bg-sidebar px-2 py-1 text-left font-semibold text-ink"
             >
               {header[c] ?? ''}
@@ -367,7 +370,7 @@ function Grid({
                   e.preventDefault()
                   onCtx({ kind: 'row', index: r, x: e.clientX, y: e.clientY })
                 }}
-                title={`第 ${r} 行 — 右键插入/删除`}
+                title={t('table.rowHint', { row: r })}
                 className="sticky left-0 z-10 cursor-context-menu border border-black/10 bg-sidebar px-2 py-1 text-right text-ink-faint"
               >
                 {r}
@@ -431,17 +434,18 @@ function RowColMenu({
   onInsertCol: (at: number) => void
   onDeleteCol: (c: number) => void
 }): JSX.Element {
+  const { t } = useI18n()
   const isRow = ctx.kind === 'row'
   const items: { label: string; danger?: boolean; run: () => void }[] = isRow
     ? [
-        { label: '在上方插入行', run: () => onInsertRow(ctx.index) },
-        { label: '在下方插入行', run: () => onInsertRow(ctx.index + 1) },
-        { label: '删除此行', danger: true, run: () => onDeleteRow(ctx.index) }
+        { label: t('table.insertRowAbove'), run: () => onInsertRow(ctx.index) },
+        { label: t('table.insertRowBelow'), run: () => onInsertRow(ctx.index + 1) },
+        { label: t('table.deleteRow'), danger: true, run: () => onDeleteRow(ctx.index) }
       ]
     : [
-        { label: '在左侧插入列', run: () => onInsertCol(ctx.index) },
-        { label: '在右侧插入列', run: () => onInsertCol(ctx.index + 1) },
-        { label: '删除此列', danger: true, run: () => onDeleteCol(ctx.index) }
+        { label: t('table.insertColLeft'), run: () => onInsertCol(ctx.index) },
+        { label: t('table.insertColRight'), run: () => onInsertCol(ctx.index + 1) },
+        { label: t('table.deleteCol'), danger: true, run: () => onDeleteCol(ctx.index) }
       ]
   const style: React.CSSProperties = {
     left: Math.min(ctx.x, window.innerWidth - 180),

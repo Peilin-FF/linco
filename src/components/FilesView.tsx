@@ -16,6 +16,7 @@ import {
 } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
 import { shadowChanged } from '@/lib/shadow'
+import { useI18n } from '@/lib/i18n'
 
 interface FilesViewProps {
   /** 工作目录(资源管理器根) */
@@ -44,6 +45,7 @@ export default function FilesView({
   openPath,
   host
 }: FilesViewProps): JSX.Element {
+  const { t } = useI18n()
   // 多标签:已打开的文件列表 + 当前激活的文件
   const [tabs, setTabs] = useState<string[]>([])
   const [active, setActive] = useState('')
@@ -217,7 +219,7 @@ export default function FilesView({
       if (tabs.includes(src)) closeTab(src)
       refresh(srcDir, destDir)
     } catch (e) {
-      window.alert(`移动失败:${e}`)
+      window.alert(t('files.moveFailed', { error: String(e) }))
     }
   }
 
@@ -228,7 +230,7 @@ export default function FilesView({
     try {
       switch (action) {
         case 'new-file': {
-          const name = (await prompt('新建文件名'))?.trim()
+          const name = (await prompt(t('files.newFileName')))?.trim()
           if (!name) return
           const created = await createFile(target.path, name, host)
           refresh(target.path)
@@ -237,7 +239,7 @@ export default function FilesView({
           break
         }
         case 'new-folder': {
-          const name = (await prompt('新建文件夹名'))?.trim()
+          const name = (await prompt(t('files.newFolderName')))?.trim()
           if (!name) return
           const created = await createDir(target.path, name, host)
           refresh(target.path)
@@ -287,14 +289,14 @@ export default function FilesView({
           )
           break
         case 'rename': {
-          const name = (await prompt('重命名为', target.name))?.trim()
+          const name = (await prompt(t('files.renameTo'), target.name))?.trim()
           if (!name || name === target.name) return
           await renamePath(target.path, name, host)
           refresh(dirOf(target))
           break
         }
         case 'delete': {
-          const ok = window.confirm(`确定删除「${target.name}」?`)
+          const ok = window.confirm(t('files.confirmDelete', { name: target.name }))
           if (!ok) return
           await deletePath(target.path, host)
           if (tabs.includes(target.path)) closeTab(target.path)
@@ -303,7 +305,7 @@ export default function FilesView({
         }
       }
     } catch (e) {
-      window.alert(`操作失败:${e}`)
+      window.alert(t('files.actionFailed', { error: String(e) }))
     }
   }
 
@@ -315,7 +317,7 @@ export default function FilesView({
           className="flex items-center gap-2 rounded-lg bg-sidebar px-4 py-2.5 text-[14px] text-ink hover:bg-black/5"
         >
           <FolderOpen size={16} />
-          选择工作目录以浏览文件
+          {t('files.pickDir')}
         </button>
       </div>
     )
@@ -380,7 +382,7 @@ export default function FilesView({
       <div className="flex min-w-0 flex-1 flex-col">
         {tabs.length === 0 ? (
           <div className="flex h-full items-center justify-center text-[13px] text-ink-faint">
-            从左侧选择文件查看 / 编辑
+            {t('files.empty')}
           </div>
         ) : (
           <>

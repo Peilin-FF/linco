@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Server, FolderInput } from 'lucide-react'
 import type { AppConfig } from '@/lib/config'
 import { sshConfigHosts, type Connection } from '@/lib/connection'
+import { useI18n } from '@/lib/i18n'
 
 interface ConnectionsProps {
   config: AppConfig
@@ -15,6 +16,7 @@ export default function Connections({
   config,
   onChange
 }: ConnectionsProps): JSX.Element {
+  const { t } = useI18n()
   const [hosts, setHosts] = useState<string[]>([])
   const [selId, setSelId] = useState(config.connections[0]?.id ?? '')
 
@@ -36,7 +38,7 @@ export default function Connections({
   const add = (host = ''): void => {
     const conn: Connection = {
       id: newId(),
-      name: host || '新连接',
+      name: host || t('connSet.newConn'),
       host,
       cwd: '',
       identity: ''
@@ -61,17 +63,16 @@ export default function Connections({
 
   return (
     <div className="mx-auto max-w-[720px]">
-      <h2 className="text-[20px] font-semibold text-ink">连接</h2>
+      <h2 className="text-[20px] font-semibold text-ink">{t('connSet.title')}</h2>
       <p className="mt-1.5 text-[13px] text-ink-faint">
-        配置远程开发服务器(SSH)。切到某连接后,终端 / 对话 / 文件 / Git
-        都运行在该服务器上 —— agent 真正进入远程环境。
+        {t('connSet.desc')}
       </p>
 
       {/* 从 ~/.ssh/config 快速添加 */}
       {hosts.length > 0 && (
         <div className="mt-5">
           <div className="mb-2 text-[13px] font-medium text-ink-muted">
-            从 ~/.ssh/config 添加
+            {t('connSet.addFromSsh')}
           </div>
           <div className="flex flex-wrap gap-2">
             {hosts.slice(0, 40).map((h) => (
@@ -93,7 +94,7 @@ export default function Connections({
         className="mt-3 flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-1.5 text-[13px] text-ink hover:bg-black/5"
       >
         <Plus size={14} />
-        手动添加连接
+        {t('connSet.addManual')}
       </button>
 
       {/* 已配置连接列表 */}
@@ -129,10 +130,10 @@ export default function Connections({
       {selected && (
         <div className="mt-6 rounded-2xl bg-sidebar p-5">
           <div className="mb-4 text-[14px] font-medium text-ink">
-            编辑「{selected.name || selected.host}」
+            {t('connSet.editTitle', { name: selected.name || selected.host })}
           </div>
           <div className="flex flex-col gap-4">
-            <Field label="名称">
+            <Field label={t('connSet.name')}>
               <input
                 value={selected.name}
                 onChange={(e) => update(selected.id, { name: e.target.value })}
@@ -140,8 +141,8 @@ export default function Connections({
               />
             </Field>
             <Field
-              label="主机"
-              hint="user@ip 或 ~/.ssh/config 别名(如 shouyun_1)"
+              label={t('connSet.host')}
+              hint={t('connSet.hostHint')}
             >
               <input
                 value={selected.host}
@@ -151,8 +152,8 @@ export default function Connections({
               />
             </Field>
             <Field
-              label="远程工作目录"
-              hint="切到该连接后默认进入的目录,如 /root/project"
+              label={t('connSet.workDir')}
+              hint={t('connSet.workDirHint')}
             >
               <div className="flex items-center gap-2">
                 <FolderInput size={15} className="shrink-0 text-ink-faint" />
@@ -164,7 +165,7 @@ export default function Connections({
                 />
               </div>
             </Field>
-            <Field label="私钥路径" hint="可选。留空用默认 key / ssh-agent / 密码">
+            <Field label={t('connSet.keyPath')} hint={t('connSet.keyPathHint')}>
               <input
                 value={selected.identity}
                 onChange={(e) =>
@@ -175,7 +176,7 @@ export default function Connections({
               />
             </Field>
             <p className="text-[12px] text-ink-faint">
-              需要密码或动态令牌的连接:切换到该连接后会自动进入终端,在终端里输入一次即可建立连接,之后各视图复用。
+              {t('connSet.authNote')}
             </p>
           </div>
         </div>

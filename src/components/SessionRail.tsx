@@ -1,4 +1,5 @@
 import { Activity, Check } from 'lucide-react'
+import { useI18n } from '@/lib/i18n'
 
 // 会话状态:忙(有输出)/ 空闲(静默)/ 已结束(PTY 退出)
 export type SessionStatus = 'busy' | 'idle' | 'exited'
@@ -43,6 +44,7 @@ export default function SessionRail({
   activeId,
   onJump
 }: Props): JSX.Element | null {
+  const { t } = useI18n()
   if (sessions.length === 0) return null
   // 忙的排前面,方便一眼看到"谁在跑/谁停了"
   const order = { busy: 0, idle: 1, exited: 2 }
@@ -52,7 +54,7 @@ export default function SessionRail({
     <div className="flex h-full flex-col px-1.5 py-1.5">
       <div className="flex shrink-0 items-center gap-1 px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
         <Activity size={11} />
-        会话
+        {t('rail.sessions')}
       </div>
       {/* 列表区:一屏约 3 张卡片(每张含 max-height),超出上下滚动 */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">

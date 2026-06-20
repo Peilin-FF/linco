@@ -13,6 +13,7 @@ import {
   Trash2,
   Eye
 } from 'lucide-react'
+import { useI18n } from '@/lib/i18n'
 
 export type ContextAction =
   | 'new-file'
@@ -41,7 +42,7 @@ interface ContextMenuProps {
 
 interface Item {
   action: ContextAction
-  label: string
+  labelKey: string
   icon: typeof FilePlus
   shortcut?: string
   danger?: boolean
@@ -61,6 +62,7 @@ export default function ContextMenu({
   onAction,
   onClose
 }: ContextMenuProps): JSX.Element {
+  const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -79,34 +81,34 @@ export default function ContextMenu({
   }, [onClose])
 
   const items: Item[] = [
-    { action: 'new-file', label: '新建文件', icon: FilePlus, dirOnly: true, group: 0 },
+    { action: 'new-file', labelKey: 'ctx.newFile', icon: FilePlus, dirOnly: true, group: 0 },
     {
       action: 'new-folder',
-      label: '新建文件夹',
+      labelKey: 'ctx.newFolder',
       icon: FolderPlus,
       dirOnly: true,
       group: 0
     },
-    { action: 'reveal', label: '在访达中显示', icon: FolderSearch, shortcut: '⌥⌘R', group: 1 },
+    { action: 'reveal', labelKey: 'ctx.reveal', icon: FolderSearch, shortcut: '⌥⌘R', group: 1 },
     {
       action: 'preview',
-      label: '预览',
+      labelKey: 'ctx.preview',
       icon: Eye,
       htmlOnly: true,
       group: 1
     },
     {
       action: 'open-terminal',
-      label: '在终端中打开',
+      labelKey: 'ctx.openTerminal',
       icon: TerminalSquare,
       dirOnly: true,
       group: 1
     },
-    { action: 'cut', label: '剪切', icon: Scissors, shortcut: '⌘X', group: 2 },
-    { action: 'copy', label: '复制', icon: Copy, shortcut: '⌘C', group: 2 },
+    { action: 'cut', labelKey: 'ctx.cut', icon: Scissors, shortcut: '⌘X', group: 2 },
+    { action: 'copy', labelKey: 'ctx.copy', icon: Copy, shortcut: '⌘C', group: 2 },
     {
       action: 'paste',
-      label: '粘贴',
+      labelKey: 'ctx.paste',
       icon: ClipboardPaste,
       shortcut: '⌘V',
       dirOnly: true,
@@ -115,22 +117,22 @@ export default function ContextMenu({
     },
     {
       action: 'copy-path',
-      label: '复制路径',
+      labelKey: 'ctx.copyPath',
       icon: Link2,
       shortcut: '⌥⌘C',
       group: 3
     },
     {
       action: 'copy-relative-path',
-      label: '复制相对路径',
+      labelKey: 'ctx.copyRelPath',
       icon: CornerUpLeft,
       shortcut: '⇧⌥⌘C',
       group: 3
     },
-    { action: 'rename', label: '重命名', icon: Pencil, shortcut: '⏎', group: 4 },
+    { action: 'rename', labelKey: 'ctx.rename', icon: Pencil, shortcut: '⏎', group: 4 },
     {
       action: 'delete',
-      label: '删除',
+      labelKey: 'ctx.delete',
       icon: Trash2,
       shortcut: '⌘⌫',
       danger: true,
@@ -178,7 +180,7 @@ export default function ContextMenu({
               }`}
             >
               <it.icon size={14} className="shrink-0" />
-              <span className="flex-1">{it.label}</span>
+              <span className="flex-1">{t(it.labelKey)}</span>
               {it.shortcut && (
                 <span className="text-[11px] text-ink-faint">{it.shortcut}</span>
               )}

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linco 项目解读 Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ 产物的全部内容只在这里（SEED）。引擎在插件里，不占这个文件。 ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Linco / 项目解读</div><h1>一个直接驱动 CLI Agent 的原生桌面工作台</h1><p class=\"lede\">Linco 不是自己实现 agent 推理框架，而是把 Claude Code、Codex 等真实命令行 TUI 放进 PTY 里运行；React 前端提供对话、终端、文件、Git、HTML 预览和后台任务视图，Rust/Tauri 层负责本地系统能力、远程 SSH 和高频 IO。</p><div class=\"toc\"><a href=\"#arch\">运行架构</a><a href=\"#frontend\">前端模块</a><a href=\"#backend\">Rust 后端</a><a href=\"#remote\">远程机制</a><a href=\"#features\">功能拆解</a><a href=\"#readpath\">阅读路线</a></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">React 18</div><div class=\"stat-label\">Vite 前端工作台</div></div><div class=\"stat-card\"><div class=\"stat-num\">Tauri 2</div><div class=\"stat-label\">原生桌面外壳</div></div><div class=\"stat-card\"><div class=\"stat-num\">17.6k</div><div class=\"stat-label\">src 与 src-tauri/src 约代码行</div></div><div class=\"stat-card\"><div class=\"stat-num\">PTY</div><div class=\"stat-label\">真实终端驱动 agent</div></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"arch\">运行架构</h2><div class=\"callout rec\"><div class=\"callout-h\">核心判断</div><p>项目的核心设计是：<b>UI 不调用模型 API，UI 操作真实命令行 agent。</b> 用户输入从 <code>ChatInput</code> 进入，最终写入 Rust 创建的 PTY；agent 输出以原始字节流返回，前端用 xterm.js 渲染。</p></div><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">1</div><div class=\"tl-body\"><b>用户输入</b><br>对话框或终端把文本写到当前会话。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">2</div><div class=\"tl-body\"><b>React 调用 Tauri</b><br><code>src/lib/*.ts</code> 封装 <code>invoke</code> 和事件监听。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">3</div><div class=\"tl-body\"><b>Rust PTY / SSH</b><br>本地跑 shell，远程通过 SSH 跑真实终端。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">4</div><div class=\"tl-body\"><b>CLI Agent</b><br>Claude Code、Codex 等 TUI 原样运行。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">5</div><div class=\"tl-body\"><b>多视图联动</b><br>文件、Git、预览、任务面板监听变化并刷新。</div></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>目录结构</h2><div class=\"grid col-2\"><div class=\"card\"><h3>工程分层</h3><pre><code>linco/\n├─ src/                 React 前端\n│  ├─ App.tsx            总装配与会话状态\n│  ├─ components/        终端、文件、Git、预览、设置\n│  └─ lib/               Tauri 命令绑定\n├─ src-tauri/           Tauri / Rust 后端\n│  ├─ src/lib.rs         invoke handler 汇总\n│  ├─ src/terminal.rs    PTY 会话\n│  ├─ src/remote.rs      SSH 与远端文件\n│  └─ src/agent/         远端常驻 Python RPC\n├─ vendor/              HTML VibeCoding 插件\n└─ artifacts/            HTML 产物目录</code></pre></div><div class=\"card\"><h3>三个最该先看的入口</h3><p><code>src/App.tsx</code>：视图切换、连接选择、agent 会话常驻、预热文件/Git/预览视图、任务轮询、更新检查。</p><p><code>src-tauri/src/lib.rs</code>：Tauri 命令注册中心，暴露终端、文件、Git、远程、预览、watch、usage、插件安装等能力。</p><p><code>vendor/HTML-VibeCoding/plugins</code>：HTML 产物、后台任务约定、shadow diff 三个插件能力。</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"frontend\">前端模块</h2><div class=\"grid col-3\"><div class=\"card\"><h3>对话与终端</h3><p><code>TerminalView.tsx</code> 用 xterm.js 渲染 PTY 输出；<code>ChatInput.tsx</code> 把用户文本转发到活动 agent 会话。</p><p><span class=\"badge info\">xterm.js</span> <span class=\"badge info\">多会话</span> <span class=\"badge info\">重连覆盖层</span></p></div><div class=\"card\"><h3>文件工作区</h3><p><code>FilesView.tsx</code> 管理文件树、多标签编辑、右键菜单、拖拽移动，以及本轮 agent 改动标记。</p><p><span class=\"badge new\">FileTree</span> <span class=\"badge new\">CodeMirror</span> <span class=\"badge new\">shadow diff</span></p></div><div class=\"card\"><h3>Git 与预览</h3><p><code>GitView.tsx</code> 提供 status、diff、commit、branch、stash；<code>ScreenView.tsx</code> 内嵌本地预览服务器。</p><p><span class=\"badge warn\">DiffView</span> <span class=\"badge warn\">iframe</span> <span class=\"badge warn\">热刷新</span></p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["前端绑定", "对应后端", "职责"],
+    "rows": [
+      ["src/lib/terminal.ts", "terminal.rs", "启动 PTY、写入、resize、kill、监听输出和退出事件。"],
+      ["src/lib/fs.ts", "fs.rs / remote.rs", "本地与远程文件读写、创建、删除、复制、移动、搜索。"],
+      ["src/lib/git.ts", "git.rs", "Git status、diff、stage、commit、pull/push、branch、log、stash。"],
+      ["src/lib/preview.ts", "preview.rs", "启动本地 HTTP 预览服务、设置目标 HTML、预取资源、监听重载。"],
+      ["src/lib/connection.ts", "remote.rs", "SSH 配置读取、连接检查、解析 SSH 命令、保存连接。"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"backend\">Rust 后端</h2><div class=\"grid col-2\"><div class=\"callout olive\"><div class=\"callout-h\">PTY 是主干</div><p>Claude Code / Codex 这类 CLI 往往是全屏 TUI，依赖 ANSI 转义、光标控制和终端尺寸。<code>terminal.rs</code> 使用 <code>portable-pty</code> 创建伪终端，并把输出以 base64 原始字节发给前端，避免 UTF-8 截断或控制序列损坏。</p></div><div class=\"callout\"><div class=\"callout-h\">Tauri 命令边界</div><p><code>lib.rs</code> 中的 <code>generate_handler!</code> 是完整后端 API 表。前端不直接碰系统资源，所有系统调用都通过这些命令进入 Rust 层，职责边界清晰。</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Rust 模块", "主要职责", "重要性"],
+    "rows": [
+      ["terminal.rs", "本地/远程 PTY 会话生命周期、输出事件、自动启动 agent 命令。", "核心链路"],
+      ["remote.rs", "SSH master 复用、远程命令执行、远程文件操作、远程目录搜索。", "远程能力底座"],
+      ["agent_rpc.rs", "部署并驱动远程 linco_agent.py，提供更快的持久 RPC 通道。", "远程性能关键"],
+      ["preview.rs", "本地 HTTP 服务器、HTML 列表、资源代理、远程文件缓存、热刷新。", "HTML 产物体验"],
+      ["shadow.rs", "独立影子 git 记录每轮 agent 改动，不污染项目自身 Git。", "回合级 diff"],
+      ["procs.rs", "识别 agent 启动的后台任务，定位输出文件并 tail。", "训练/评测监控"],
+      ["usage.rs", "从对话轮次、终端输出、CLI 缓存中汇总代币使用统计。", "成本可视化"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"remote\">远程机制</h2><div class=\"grid col-2\"><div class=\"card\"><h3>两条远程路径</h3><p>普通交互终端走 <code>ssh -tt</code>，保证 agent 在远端真实 TTY 里运行。文件、Git、预览等高频操作优先走常驻 <code>linco_agent.py</code> RPC，降低反复 SSH 启动成本。</p></div><div class=\"card\"><h3>远端插件安装</h3><p>连接成功后，Linco 会把当前语言版本的 vendored 插件安装到远端的 Claude/Codex 配置目录。这让远端 agent 也遵守“产物写到 artifacts、后台任务可监控、shadow diff 可用”的约定。</p></div></div><div class=\"callout rec\"><div class=\"callout-h\">远程设计目标</div><p>它不是“远程桌面”，而是“本地 UI + 远端执行环境”：本地保持原生界面和预览服务器，远端承担 agent、训练、文件和 Git 操作。</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"features\">功能拆解</h2><div class=\"grid col-3\"><div class=\"card\"><h3>Agent 会话</h3><p>支持 Claude Code / Codex 预设，自定义 API Key、base URL、模型、权限模式和推理强度。订阅登录模式下不注入 API Key。</p></div><div class=\"card\"><h3>HTML 预览</h3><p>Linco 自己启动本地 HTTP 服务器，支持 artifacts 首页、指定文件预览、外部 URL 手填、历史前进后退和热刷新。</p></div><div class=\"card\"><h3>文件编辑</h3><p>文件树、多标签、CodeMirror 编辑器、表格查看器、上下文菜单，并和 shadow diff 的“本轮改动”状态联动。</p></div><div class=\"card\"><h3>Git 工作流</h3><p>内置常用 Git 操作：diff、stage、commit、pull/push/fetch、branches、history、stash。</p></div><div class=\"card\"><h3>后台任务</h3><p>轮询 agent 进程树和项目 cwd，识别训练/评测类后台进程，自动生成任务输出 tab 并 tail 日志。</p></div><div class=\"card\"><h3>使用统计</h3><p>从显式 turn 记录、终端输出以及 Claude/Codex 本地缓存中补全 token 使用情况。</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>工程取舍</h2><div class=\"procon\"><div class=\"pros\"><ul><li>复用真实 CLI agent 能力，不绑定单一供应商 SDK。</li><li>PTY 方案对 TUI 兼容性强，和用户真实终端行为一致。</li><li>本地/远程抽象基本统一，文件、Git、预览都能接入远端工作区。</li><li>预览、Git、文件、任务视图围绕 agent 工作流组织，human-in-loop 感强。</li></ul></div><div class=\"cons\"><ul><li>PTY、SSH、文件监听、进程识别都是状态型系统，边界条件多。</li><li>远程路径依赖 Python 标准库和系统工具，集群环境差异会带来兼容成本。</li><li>后台任务识别基于进程、cwd、输出文件启发式，仍需要持续打磨。</li><li>插件、预览资源、远程安装之间存在约定耦合，文档和校验要跟上。</li></ul></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"readpath\">建议阅读路线</h2><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">01</div><div class=\"tl-body\"><b><code>README.md</code> 与 <code>package.json</code></b><br>确认产品定位、插件体系、运行脚本和主要依赖。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">02</div><div class=\"tl-body\"><b><code>src/App.tsx</code></b><br>理解会话、连接、视图、预热、任务轮询如何被装配起来。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">03</div><div class=\"tl-body\"><b><code>TerminalView.tsx</code> 与 <code>terminal.rs</code></b><br>这是“输入进入 agent、输出回到 UI”的主干链路。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">04</div><div class=\"tl-body\"><b><code>remote.rs</code> 与 <code>agent_rpc.rs</code></b><br>理解远程 SSH、持久 RPC、远程文件/Git/预览为什么能保持响应速度。</div></div><div class=\"tl-entry\"><div class=\"tl-time\">05</div><div class=\"tl-body\"><b>按功能继续读文件、Git、预览模块</b><br>分别对应 <code>FilesView.tsx/fs.rs</code>、<code>GitView.tsx/git.rs</code>、<code>ScreenView.tsx/preview.rs</code>。</div></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"summary-band\"><div><span class=\"k\">产物形态</span>Linco notebook</div><div><span class=\"k\">内容来源</span>README / package.json / src / src-tauri</div><div><span class=\"k\">适用场景</span>onboarding、重构前梳理、代码阅读索引</div></div>"
+  }
+]
+</script>
+<!-- ▲▲▲ 内容结束 ▲▲▲ -->
+
+<!-- 公式引擎:KaTeX 优先(同步、~270KB),冷门公式由 notebook.js 按需懒加载 MathJax 兜底 -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

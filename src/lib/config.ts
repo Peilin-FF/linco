@@ -34,6 +34,14 @@ export interface AppConfig {
   activeConnection: string
   /** 开发语言偏好:''=未选(首启询问)/ 'zh' / 'en' */
   language?: string
+  /** 已安装的插件 agent:''=未选 / 'claude' / 'codex'。决定装哪套插件。 */
+  pluginAgent?: string
+  /** 界面主题 id(见 lib/theme.ts);空=github-light */
+  theme?: string
+  /** 界面字体 CSS font-family;空=系统默认 */
+  uiFont?: string
+  /** 界面字号 px;0/缺省=14 */
+  uiFontSize?: number
 }
 
 // Rust 端用 snake_case 序列化,Tauri 默认 camelCase 转换;
@@ -60,6 +68,10 @@ interface RawConfig {
   connections: Connection[]
   active_connection: string
   language: string
+  plugin_agent?: string
+  theme?: string
+  ui_font?: string
+  ui_font_size?: number
 }
 
 function fromRaw(raw: RawConfig): AppConfig {
@@ -83,7 +95,11 @@ function fromRaw(raw: RawConfig): AppConfig {
     recentDirs: raw.recent_dirs ?? [],
     connections: raw.connections ?? [],
     activeConnection: raw.active_connection ?? '',
-    language: raw.language ?? ''
+    language: raw.language ?? '',
+    pluginAgent: raw.plugin_agent ?? '',
+    theme: raw.theme ?? '',
+    uiFont: raw.ui_font ?? '',
+    uiFontSize: raw.ui_font_size ?? 0
   }
 }
 
@@ -108,7 +124,11 @@ function toRaw(cfg: AppConfig): RawConfig {
     recent_dirs: cfg.recentDirs,
     connections: cfg.connections,
     active_connection: cfg.activeConnection,
-    language: cfg.language ?? ''
+    language: cfg.language ?? '',
+    plugin_agent: cfg.pluginAgent ?? '',
+    theme: cfg.theme ?? '',
+    ui_font: cfg.uiFont ?? '',
+    ui_font_size: cfg.uiFontSize ?? 0
   }
 }
 

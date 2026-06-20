@@ -7,18 +7,27 @@ import {
   type ModelUsage,
   type UsageStats as UsageStatsData
 } from '@/lib/usage'
+import { useI18n } from '@/lib/i18n'
 
 const WEEKS = 26
 
 export default function UsageStats(): JSX.Element {
+  const { t } = useI18n()
   const [stats, setStats] = useState<UsageStatsData | null>(null)
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const reload = (): void => {
     setLoading(true)
     usageLoad()
-      .then(setStats)
-      .catch(() => setStats(null))
+      .then((next) => {
+        setStats(next)
+        setError(null)
+      })
+      .catch((err) => {
+        setStats(null)
+        setError(err instanceof Error ? err.message : String(err))
+      })
       .finally(() => setLoading(false))
   }
 
@@ -31,25 +40,27 @@ export default function UsageStats(): JSX.Element {
     () =>
       Object.values(stats?.models ?? {}).sort(
         (a, b) =>
-          b.reportedTokens +
+          b.cliReportedTokens +
+          modelTurns(b) +
           b.estimatedInputTokens -
-          (a.reportedTokens + a.estimatedInputTokens)
+          (a.cliReportedTokens + modelTurns(a) + a.estimatedInputTokens)
       ),
     [stats]
   )
-  const activeDays = Object.values(stats?.days ?? {}).filter((d) => d.turns > 0).length
+  const totalTurns = (stats?.totals.turns ?? 0) + (stats?.totals.cliTurns ?? 0)
+  const activeDays = Object.values(stats?.days ?? {}).filter((d) => dayActivity(d) > 0).length
   const recentTurns = heatDays
     .slice(-30)
-    .reduce((sum, d) => sum + (d.usage?.turns ?? 0), 0)
+    .reduce((sum, d) => sum + dayActivity(d.usage), 0)
   const streak = currentStreak(stats?.days ?? {})
 
   return (
     <div className="mx-auto max-w-[920px]">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-[20px] font-semibold text-ink">使用统计</h2>
+          <h2 className="text-[20px] font-semibold text-ink">{t('usage.title')}</h2>
           <div className="mt-1 text-[12.5px] text-ink-faint">
-            Token 以 CLI 报告为准；未报告时保留输入估算。
+            {t('usage.desc')}
           </div>
         </div>
         <button
@@ -57,22 +68,27 @@ export default function UsageStats(): JSX.Element {
           className="flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-1.5 text-[12.5px] text-ink-muted hover:bg-black/5 hover:text-ink"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          刷新
+          {t('usage.refresh')}
         </button>
       </div>
+      {error && (
+        <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-700 ring-1 ring-red-100">
+          {t('usage.loadFailed', { error })}
+        </div>
+      )}
 
       <div className="mt-5 grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <Metric label="Vibe 轮次" value={formatNum(stats?.totals.turns ?? 0)} />
-        <Metric label="CLI 报告 token" value={formatNum(stats?.totals.reportedTokens ?? 0)} />
-        <Metric label="输入估算 token" value={formatNum(stats?.totals.estimatedInputTokens ?? 0)} />
-        <Metric label="连续活跃" value={`${streak} 天`} />
+        <Metric label={t('usage.turns')} value={formatNum(totalTurns)} />
+        <Metric label={t('usage.cliTokens')} value={formatNum(stats?.totals.cliReportedTokens ?? 0)} />
+        <Metric label={t('usage.inputTokens')} value={formatNum(stats?.totals.estimatedInputTokens ?? 0)} />
+        <Metric label={t('usage.streak')} value={t('usage.days', { n: streak })} />
       </div>
 
       <section className="mt-7">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-[14px] font-medium text-ink">Vibe coding 频率</h3>
+          <h3 className="text-[14px] font-medium text-ink">{t('usage.vibeFreq')}</h3>
           <span className="text-[12px] text-ink-faint">
-            {activeDays} 个活跃日 · 近 30 天 {recentTurns} 轮
+            {t('usage.activeSummary', { activeDays, recentTurns })}
           </span>
         </div>
         <div className="overflow-x-auto rounded-xl bg-sidebar p-4">
@@ -80,36 +96,36 @@ export default function UsageStats(): JSX.Element {
             {heatDays.map((d) => (
               <div
                 key={d.day}
-                title={`${d.day}: ${d.usage?.turns ?? 0} 轮`}
-                className={`h-3 w-3 rounded-[3px] ${heatClass(d.usage?.turns ?? 0)} ${
+                title={t('usage.dayActivity', { day: d.day, count: dayActivity(d.usage) })}
+                className={`h-3 w-3 rounded-[3px] ${heatClass(dayActivity(d.usage))} ${
                   d.future ? 'opacity-25' : ''
                 }`}
               />
             ))}
           </div>
           <div className="mt-3 flex items-center justify-end gap-1 text-[11px] text-ink-faint">
-            <span>少</span>
+            <span>{t('usage.less')}</span>
             {[0, 1, 3, 6, 10].map((n) => (
               <span key={n} className={`h-3 w-3 rounded-[3px] ${heatClass(n)}`} />
             ))}
-            <span>多</span>
+            <span>{t('usage.more')}</span>
           </div>
         </div>
       </section>
 
       <section className="mt-7">
-        <h3 className="mb-2 text-[14px] font-medium text-ink">模型消耗</h3>
+        <h3 className="mb-2 text-[14px] font-medium text-ink">{t('usage.modelUsage')}</h3>
         <div className="overflow-hidden rounded-xl bg-sidebar">
           <div className="grid grid-cols-[1.4fr_0.8fr_0.7fr_0.9fr_0.9fr] border-b border-black/8 px-4 py-2 text-[12px] text-ink-faint">
-            <span>模型</span>
+            <span>{t('usage.col.model')}</span>
             <span>Agent</span>
-            <span className="text-right">轮次</span>
-            <span className="text-right">报告 token</span>
-            <span className="text-right">输入估算</span>
+            <span className="text-right">{t('usage.col.turns')}</span>
+            <span className="text-right">{t('usage.col.cliToken')}</span>
+            <span className="text-right">{t('usage.col.inputEst')}</span>
           </div>
           {models.length === 0 ? (
             <div className="px-4 py-8 text-center text-[13px] text-ink-faint">
-              暂无使用记录
+              {t('usage.noRecords')}
             </div>
           ) : (
             models.map((m) => <ModelRow key={m.key} model={m} />)
@@ -137,8 +153,8 @@ function ModelRow({ model }: { model: ModelUsage }): JSX.Element {
         <div className="truncate text-[11px] text-ink-faint">{model.provider}</div>
       </div>
       <span className="truncate text-ink-muted">{model.agentName}</span>
-      <span className="text-right tabular-nums text-ink">{formatNum(model.turns)}</span>
-      <span className="text-right tabular-nums text-ink">{formatNum(model.reportedTokens)}</span>
+      <span className="text-right tabular-nums text-ink">{formatNum(modelTurns(model))}</span>
+      <span className="text-right tabular-nums text-ink">{formatNum(model.cliReportedTokens)}</span>
       <span className="text-right tabular-nums text-ink-muted">
         {formatNum(model.estimatedInputTokens)}
       </span>
@@ -169,10 +185,18 @@ function currentStreak(days: Record<string, DayUsage>): number {
   let n = 0
   for (;;) {
     const key = localDay(d)
-    if ((days[key]?.turns ?? 0) <= 0) return n
+    if (dayActivity(days[key]) <= 0) return n
     n++
     d.setDate(d.getDate() - 1)
   }
+}
+
+function dayActivity(day?: DayUsage): number {
+  return (day?.turns ?? 0) + (day?.cliTurns ?? 0)
+}
+
+function modelTurns(model: ModelUsage): number {
+  return (model.turns ?? 0) + (model.cliTurns ?? 0)
 }
 
 function startOfDay(date: Date): Date {
