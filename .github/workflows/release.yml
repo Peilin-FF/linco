@@ -73,3 +73,45 @@ jobs:
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
+
+  # 构建后清理:只保留 3 个安装包 + latest.json + 2 个 mac 更新 tar.gz。
+  # 删掉 msi 与全部 .sig(签名已内嵌进 latest.json,独立文件无用),
+  # 并把 latest.json 的 Windows 更新入口从 msi 改指向 exe。
+  cleanup:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune redundant assets + fix latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -e
+          # 1) 拉下 latest.json,把 windows 更新入口改成 nsis exe,删冗余变体键
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --output latest.json --clobber
+          python3 - <<'PY'
+          import json
+          d=json.load(open('latest.json'))
+          p=d['platforms']
+          if 'windows-x86_64-nsis' in p:
+              nsis=p['windows-x86_64-nsis']
+              p['windows-x86_64']={'signature':nsis['signature'],'url':nsis['url']}
+          p.pop('windows-x86_64-msi',None)
+          p.pop('darwin-x86_64-app',None)
+          p.pop('darwin-aarch64-app',None)
+          json.dump(d,open('latest.json','w'),indent=2,ensure_ascii=False)
+          PY
+          # 2) 替换 latest.json(先删后传,避免覆盖缓存)
+          gh release delete-asset "$TAG" latest.json --yes || true
+          gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY"
+          # 3) 删除 msi + 所有 .sig(逐个尝试,不存在则忽略)
+          for f in \
+            "Linco_${TAG#v}_x64_en-US.msi" \
+            "Linco_${TAG#v}_x64_en-US.msi.sig" \
+            "Linco_${TAG#v}_x64-setup.exe.sig" \
+            "Linco_aarch64.app.tar.gz.sig" \
+            "Linco_x64.app.tar.gz.sig"; do
+            gh release delete-asset "$TAG" "$f" --yes || true
+          done
+          echo "cleanup done; remaining assets:"
+          gh release view "$TAG" --json assets -q '.assets[].name'
