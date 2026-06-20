@@ -102,7 +102,7 @@ jobs:
           json.dump(d,open('latest.json','w'),indent=2,ensure_ascii=False)
           PY
           # 2) 替换 latest.json(先删后传,避免覆盖缓存)
-          gh release delete-asset "$TAG" latest.json --yes || true
+          gh release delete-asset "$TAG" latest.json --yes --repo "$GITHUB_REPOSITORY" || true
           gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY"
           # 3) 删除 msi + 所有 .sig(逐个尝试,不存在则忽略)
           for f in \
@@ -111,7 +111,7 @@ jobs:
             "Linco_${TAG#v}_x64-setup.exe.sig" \
             "Linco_aarch64.app.tar.gz.sig" \
             "Linco_x64.app.tar.gz.sig"; do
-            gh release delete-asset "$TAG" "$f" --yes || true
+            gh release delete-asset "$TAG" "$f" --yes --repo "$GITHUB_REPOSITORY" || true
           done
           echo "cleanup done; remaining assets:"
-          gh release view "$TAG" --json assets -q '.assets[].name'
+          gh release view "$TAG" --json assets -q '.assets[].name' --repo "$GITHUB_REPOSITORY"
