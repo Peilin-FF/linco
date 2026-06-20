@@ -67,9 +67,9 @@ jobs:
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
             本次更新
-            - 管理历史对话窗口：对话框左侧新增「历史对话」面板,按项目列出该 agent 存的历史会话,可点击恢复继续聊,支持单条删除与批量删除,防止会话堆积。
-            - 解决 Windows 用户无法配置的问题：修复 Windows 上「无法定位 HOME」导致选完 agent/语言后安装失败,现已兼容 USERPROFILE;引导窗口新增「稍后配置」可随时跳过。
-            - 添加模型连通性测试:在「设置 → 模型设置」里可一键测试所选模型/供应商是否连通。
+            - 修复 Windows 无法打开终端/登录的问题:之前 Windows 上找不到 shell 导致终端起不来、Claude/Codex 订阅版无法登录,现已改用 PowerShell,终端与订阅登录恢复正常。
+            - 管理历史对话窗口:对话框左侧「历史对话」面板,按项目列出历史会话,可点击恢复、单条或批量删除。
+            - 模型连通性测试:「设置 → 模型设置」可一键测试所选模型/供应商是否连通。
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
