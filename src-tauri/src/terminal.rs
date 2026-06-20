@@ -131,23 +131,52 @@ pub fn term_start(
         }
         cmd.env("TERM", "xterm-256color");
     } else {
-        // 本地:登录 shell,加载完整 PATH
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        cmd = CommandBuilder::new(&shell);
-        cmd.arg("-l");
-        cmd.env("TERM", "xterm-256color");
-        // 注入配置的环境变量(API Key / base url 等)
-        if let Some(vars) = &env {
-            for (k, v) in vars {
-                if !k.is_empty() {
-                    cmd.env(k, v);
+        // 本地:登录 shell,加载完整 PATH。Windows 没有 SHELL/zsh,用 PowerShell。
+        #[cfg(windows)]
+        {
+            // 优先 PowerShell(更现代、UTF-8 友好);找不到则退回 cmd.exe。
+            let pwsh = which_windows_shell();
+            cmd = CommandBuilder::new(&pwsh);
+            // PowerShell: -NoLogo 干净启动;cmd.exe 不识别该 flag 时不加。
+            if pwsh.to_ascii_lowercase().contains("powershell")
+                || pwsh.to_ascii_lowercase().contains("pwsh")
+            {
+                cmd.arg("-NoLogo");
+            }
+            cmd.env("TERM", "xterm-256color");
+            if let Some(vars) = &env {
+                for (k, v) in vars {
+                    if !k.is_empty() {
+                        cmd.env(k, v);
+                    }
                 }
             }
+            if let Some(dir) = cwd.clone().filter(|d| !d.is_empty()) {
+                cmd.cwd(dir);
+            } else if let Some(home) = dirs_home() {
+                cmd.cwd(home);
+            }
         }
-        if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
-            cmd.cwd(dir);
-        } else if let Some(home) = dirs_home() {
-            cmd.cwd(home);
+        #[cfg(not(windows))]
+        {
+            // macOS/Linux:登录 shell(-l)确保 ~/.cargo/bin、homebrew、npm 全局在 PATH。
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+            cmd = CommandBuilder::new(&shell);
+            cmd.arg("-l");
+            cmd.env("TERM", "xterm-256color");
+            // 注入配置的环境变量(API Key / base url 等)
+            if let Some(vars) = &env {
+                for (k, v) in vars {
+                    if !k.is_empty() {
+                        cmd.env(k, v);
+                    }
+                }
+            }
+            if let Some(dir) = cwd.filter(|d| !d.is_empty()) {
+                cmd.cwd(dir);
+            } else if let Some(home) = dirs_home() {
+                cmd.cwd(home);
+            }
         }
     }
 
@@ -279,6 +308,32 @@ fn dirs_home() -> Option<String> {
     crate::config::home_dir()
         .ok()
         .map(|p| p.to_string_lossy().to_string())
+}
+
+/// Windows 本地终端用的 shell:优先 PowerShell(pwsh > Windows PowerShell),
+/// 都没有则退回 cmd.exe。返回可执行名/路径(PATH 能解析的名字即可)。
+#[cfg(windows)]
+fn which_windows_shell() -> String {
+    // 1) PowerShell 7(pwsh)若装了优先用
+    if let Ok(p) = std::env::var("ProgramFiles") {
+        let pwsh = std::path::Path::new(&p).join("PowerShell").join("7").join("pwsh.exe");
+        if pwsh.exists() {
+            return pwsh.to_string_lossy().to_string();
+        }
+    }
+    // 2) 系统自带 Windows PowerShell(几乎必有)
+    if let Ok(sysroot) = std::env::var("SystemRoot") {
+        let ps = std::path::Path::new(&sysroot)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        if ps.exists() {
+            return ps.to_string_lossy().to_string();
+        }
+    }
+    // 3) 兜底 cmd.exe
+    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
 }
 
 #[cfg(test)]
