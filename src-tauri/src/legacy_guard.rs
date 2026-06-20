@@ -131,17 +131,19 @@ fn update_notice_sits_immediately_left_of_connection_picker() {
     let spacer = before_picker
         .rfind("className=\"flex-1\"")
         .expect("header spacer should precede right-side controls");
-    let install_button = before_picker
-        .rfind("handleInstallUpdate")
-        .expect("update install button should be rendered before ConnectionPicker");
+    // 更新提示横幅:点击打开「新版更新内容」浮层(setShowUpdatePanel 切换),再决定安装。
+    // 锚在切换 onClick(toggle),它在横幅文案 update.available 之前。
+    let update_button = before_picker
+        .rfind("setShowUpdatePanel((o)")
+        .expect("update notice toggle should be rendered before ConnectionPicker");
 
     assert!(
-        spacer < install_button && install_button < picker,
+        spacer < update_button && update_button < picker,
         "update notice should sit between the header spacer and ConnectionPicker"
     );
     assert!(
-        before_picker[install_button..].contains("新版本")
-            || before_picker[install_button..].contains("update.available"),
+        before_picker[update_button..].contains("新版本")
+            || before_picker[update_button..].contains("update.available"),
         "the update control should be a visible new-version notice"
     );
 }

@@ -67,9 +67,9 @@ jobs:
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
             本次更新
-            - 修复 Windows 频繁弹出 git 黑色命令行窗口的问题:后台执行 git/ssh 等命令不再闪黑窗。
-            - 修复 Windows 终端无法复制粘贴:现可用 Ctrl+C 复制(选中文字时)、Ctrl+V 粘贴。
-            - 修复 Windows 无法打开终端/登录:本地终端改用 cmd,Claude/Codex 订阅登录恢复正常。
+            - 彻底修复 Windows 频繁弹出黑色命令行窗口的问题:后台进程探测改用原生方式,不再每秒闪黑窗。
+            - 恢复 Windows 本地 agent 后台任务监控:能在终端区看到 agent 起的后台任务(命令/PID)。
+            - (上一版)Windows 终端复制粘贴 Ctrl+C/V、终端打开/订阅登录 已修复。
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

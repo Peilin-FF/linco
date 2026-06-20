@@ -83,6 +83,81 @@ pub async fn agent_tasks(
 
         // 本地:并集策略(与远端 op_agent_tasks 对称)——
         // (a) agent 子树下的进程 + (b) cwd 命中项目目录的进程,去重,只留输出落盘的。
+        // Windows:无 ps/lsof,改用 sysinfo 快照(零子进程,不闪黑窗)。能列出后台
+        // 任务(命令/PID),但拿不到 stdout 重定向文件 → file 留空(前端会优雅留白)。
+        #[cfg(windows)]
+        {
+            let procs = snapshot_procs();
+            let cwds = snapshot_cwds();
+            let mut cand: HashMap<i64, ProcInfo> = HashMap::new();
+            // (a) agent 子树
+            for p in filter_descendants(&procs, &base) {
+                cand.insert(p.pid, p);
+            }
+            // (b) cwd 命中项目目录(脱离子树的后台任务靠 cwd 锚点保住)
+            if !cwd.is_empty() {
+                let base_name = base.rsplit('/').next().unwrap_or(&base);
+                for p in &procs {
+                    if cand.contains_key(&p.pid) {
+                        continue;
+                    }
+                    if !base_name.is_empty() && p.args.contains(base_name) {
+                        continue; // 跳过 agent 本体
+                    }
+                    if cwd_matches(cwds.get(&p.pid).map(|s| s.as_str()), &cwd) {
+                        cand.insert(p.pid, p.clone());
+                    }
+                }
+            }
+            // 去噪 + 穿透外壳(与非 Windows 对称)
+            let by_pid: HashMap<i64, ProcInfo> =
+                procs.iter().map(|p| (p.pid, p.clone())).collect();
+            let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+            for p in &procs {
+                children.entry(p.ppid).or_default().push(p.pid);
+            }
+            let mut resolved: HashMap<i64, ProcInfo> = HashMap::new();
+            for p in cand.into_values() {
+                let mut target = p;
+                for _ in 0..4 {
+                    if !is_noise(&target) {
+                        break;
+                    }
+                    let real: Vec<&ProcInfo> = children
+                        .get(&target.pid)
+                        .map(|ks| {
+                            ks.iter()
+                                .filter_map(|c| by_pid.get(c))
+                                .filter(|k| !is_noise(k))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if real.len() == 1 {
+                        target = real[0].clone();
+                    } else {
+                        break;
+                    }
+                }
+                resolved.insert(target.pid, target);
+            }
+            let mut tasks = Vec::new();
+            for p in resolved.into_values() {
+                if is_noise(&p) || etime_secs(&p.etime) < 5 {
+                    continue;
+                }
+                // Windows 拿不到 stdout 重定向文件,file 留空(前端不 tail、留白)。
+                tasks.push(AgentTask {
+                    pid: p.pid,
+                    args: p.args,
+                    file: String::new(),
+                    etime: p.etime,
+                });
+            }
+            tasks.sort_by_key(|t| t.pid);
+            return Ok(tasks);
+        }
+        #[cfg(not(windows))]
+        {
         let out = Command::new("ps")
             .args(["-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="])
             .output()
@@ -171,6 +246,7 @@ pub async fn agent_tasks(
         }
         tasks.sort_by_key(|t| t.pid);
         Ok(tasks)
+        }
     })
     .await
 }
@@ -220,13 +296,20 @@ pub async fn agent_processes(
             return Ok(parse_and_filter(&raw, &base, None));
         }
 
-        // 本地:直接跑 ps
+        // 本地:直接跑 ps。Windows 无 ps,直接返回空(避免每次轮询闪黑窗)。
+        #[cfg(windows)]
+        {
+            return Ok(Vec::new());
+        }
+        #[cfg(not(windows))]
+        {
         let out = Command::new("ps")
             .args(["-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="])
             .output()
             .map_err(|e| format!("无法执行 ps: {e}"))?;
         let raw = String::from_utf8_lossy(&out.stdout).to_string();
         Ok(parse_and_filter(&raw, &base, None))
+        }
     })
     .await
 }
@@ -264,7 +347,13 @@ pub async fn proc_output_file(host: Option<String>, pid: i64) -> Result<ProcOutp
                 .filter(|s| s.starts_with('/') && !s.starts_with("/dev/"));
             return Ok(ProcOutput { fd1, fd2: None });
         }
-        // 本地:Linux 读 /proc,macOS 用 lsof
+        // 本地:Linux 读 /proc,macOS 用 lsof;Windows 拿不到(返回空)。
+        #[cfg(windows)]
+        {
+            let _ = pid;
+            return Ok(ProcOutput { fd1: None, fd2: None });
+        }
+        #[cfg(not(windows))]
         Ok(local_proc_output(pid))
     })
     .await
@@ -325,7 +414,8 @@ pub async fn tail_file(
     .await
 }
 
-/// 本地解析进程 fd 1/2 的输出文件(Linux /proc;macOS lsof)。
+/// 本地解析进程 fd 1/2 的输出文件(Linux /proc;macOS lsof)。Windows 无此机制。
+#[cfg(not(windows))]
 fn local_proc_output(pid: i64) -> ProcOutput {
     let resolve = |fd: i64| -> Option<String> {
         // Linux:readlink /proc/PID/fd/N
@@ -368,7 +458,8 @@ fn local_proc_output(pid: i64) -> ProcOutput {
 
 /// 一次性拿到所有进程的 cwd(pid→cwd)。性能关键:对每个进程单独 lsof 在 macOS 上
 /// 几百进程要数十秒,会把前端轮询挂死。Linux 批量 readlink /proc/*/cwd;macOS 一条
-/// `lsof -d cwd -F pn` 拿全部(~0.4s)。
+/// `lsof -d cwd -F pn` 拿全部(~0.4s)。Windows 走 sysinfo 的 snapshot_cwds,不用此函数。
+#[cfg(not(windows))]
 fn all_cwds() -> HashMap<i64, String> {
     let mut out = HashMap::new();
     #[cfg(target_os = "linux")]
@@ -407,7 +498,8 @@ fn all_cwds() -> HashMap<i64, String> {
 
 /// 一次性拿到所有进程 stdout/stderr(fd 1/2)指向的普通文件:{pid: path}。
 /// 用途:launchctl/nohup 起的任务 cwd=/、不在 agent 子树,唯一线索是日志写进了项目
-/// 目录,用输出文件路径兜底锚定。性能同 all_cwds(批量,避免逐进程 lsof)。
+/// 目录,用输出文件路径兜底锚定。性能同 all_cwds(批量,避免逐进程 lsof)。Windows 不用。
+#[cfg(not(windows))]
 fn all_fd_files() -> HashMap<i64, String> {
     let mut out = HashMap::new();
     #[cfg(target_os = "linux")]
@@ -615,6 +707,86 @@ fn proc_from_json(v: &serde_json::Value) -> Option<ProcInfo> {
     })
 }
 
+/// Windows:用 sysinfo 拿全部进程的快照,映射成 ProcInfo(零子进程,不闪黑窗)。
+/// 字段对齐 ps:etime 用 run_time() 秒格式化成 MM:SS / HH:MM:SS(供 etime_secs 解析)。
+#[cfg(windows)]
+fn snapshot_procs() -> Vec<ProcInfo> {
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    sys.processes()
+        .iter()
+        .map(|(pid, p)| {
+            let args = p
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let args = if args.trim().is_empty() {
+                p.name().to_string_lossy().to_string()
+            } else {
+                args
+            };
+            ProcInfo {
+                pid: pid.as_u32() as i64,
+                ppid: p.parent().map(|pp| pp.as_u32() as i64).unwrap_or(0),
+                etime: fmt_etime(p.run_time()),
+                pcpu: format!("{:.1}", p.cpu_usage()),
+                pmem: format!("{}", p.memory() / (1024 * 1024)), // MiB
+                stat: status_letter(p.status()),
+                args,
+            }
+        })
+        .collect()
+}
+
+/// Windows:进程 pid→cwd 映射(从同一 sysinfo 快照拿,复用 cwd_matches)。
+#[cfg(windows)]
+fn snapshot_cwds() -> HashMap<i64, String> {
+    use sysinfo::System;
+    let mut sys = System::new();
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let mut out = HashMap::new();
+    for (pid, p) in sys.processes() {
+        if let Some(cwd) = p.cwd() {
+            out.insert(pid.as_u32() as i64, cwd.to_string_lossy().to_string());
+        }
+    }
+    out
+}
+
+/// run_time(秒)→ ps 风格 ELAPSED 字符串(MM:SS / HH:MM:SS / DD-HH:MM:SS)。
+#[cfg(windows)]
+fn fmt_etime(secs: u64) -> String {
+    let d = secs / 86400;
+    let h = (secs % 86400) / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if d > 0 {
+        format!("{d}-{h:02}:{m:02}:{s:02}")
+    } else if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+/// sysinfo 进程状态 → ps 风格单字母(够前端/去噪用)。
+#[cfg(windows)]
+fn status_letter(st: sysinfo::ProcessStatus) -> String {
+    use sysinfo::ProcessStatus as S;
+    match st {
+        S::Run => "R",
+        S::Sleep => "S",
+        S::Idle => "I",
+        S::Stop => "T",
+        S::Zombie => "Z",
+        _ => "S",
+    }
+    .to_string()
+}
+
 /// 解析 ps 输出,定位命令名为 base 的根进程,沿 ppid 向下 BFS 收后代(不含根)。
 /// cwd 为本地/shell 回退路径,不做 cwd 收窄(远程 cwd 收窄在 agent op_ps 内完成)。
 fn parse_all(raw: &str) -> Vec<ProcInfo> {
@@ -649,9 +821,14 @@ fn parse_all(raw: &str) -> Vec<ProcInfo> {
 }
 
 fn parse_and_filter(raw: &str, base: &str, _cwd: Option<&str>) -> Vec<ProcInfo> {
-    let procs = parse_all(raw);
+    filter_descendants(&parse_all(raw), base)
+}
+
+/// 在一组进程里定位命令名含 base 的根进程,沿 ppid 向下 BFS 收后代(不含根)。
+/// 与进程来源无关(ps 文本 / sysinfo 快照都产出 Vec<ProcInfo>),供 Mac/Windows 共用。
+fn filter_descendants(procs: &[ProcInfo], base: &str) -> Vec<ProcInfo> {
     let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
-    for p in &procs {
+    for p in procs {
         children.entry(p.ppid).or_default().push(p.pid);
     }
     let by_pid: HashMap<i64, &ProcInfo> = procs.iter().map(|p| (p.pid, p)).collect();
@@ -737,5 +914,17 @@ mod tests {
         // command_base 传全路径,取 basename 匹配
         let got = parse_and_filter(SAMPLE, "/opt/foo/claude", None);
         assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn filter_descendants_equivalent_to_parse_and_filter() {
+        // 重构保证:filter_descendants(parse_all(raw)) 与旧 parse_and_filter 等价。
+        // Windows 分支也走 filter_descendants,这条锁住行为一致。
+        let via_wrapper = parse_and_filter(SAMPLE, "claude", None);
+        let via_direct = filter_descendants(&parse_all(SAMPLE), "claude");
+        assert_eq!(via_wrapper, via_direct);
+        let pids: Vec<i64> = via_direct.iter().map(|p| p.pid).collect();
+        assert!(pids.contains(&200) && pids.contains(&300));
+        assert!(!pids.contains(&100) && !pids.contains(&400));
     }
 }
