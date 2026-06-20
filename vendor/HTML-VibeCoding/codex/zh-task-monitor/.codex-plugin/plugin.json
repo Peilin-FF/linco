@@ -1,0 +1,12 @@
+{
+  "name": "task-monitor",
+  "version": "1.0.0",
+  "description": "后台长任务监控:把训练/评测/长数据处理的输出重定向到项目内 .log 文件,Linco 终端的后台任务面板实时显示。",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco 后台任务监控",
+    "shortDescription": "后台长任务用 -u + .log + & 启动,Linco 终端面板实时可见。",
+    "category": "Productivity"
+  }
+}

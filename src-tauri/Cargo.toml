@@ -1,6 +1,6 @@
 [package]
 name = "linco"
-version = "0.2.3"
+version = "0.2.4"
 description = "Linco — 直接驱动 Claude Code / Codex 等 CLI agent 的桌面应用"
 authors = ["Linco"]
 edition = "2021"
@@ -24,7 +24,8 @@ regex = "1"
 tiny_http = "0.12"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-reqwest = { version = "0.13.4", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json", "blocking"] }
 # 跨平台进程信息(纯 Rust,不 spawn 子进程)。用于 Windows 本地 agent 后台任务探测,
 # 避免 ps/lsof 不存在 + 每次轮询闪黑窗。Mac/Linux 仍走原 ps/lsof 路径。
 sysinfo = "0.39"
+tauri-plugin-clipboard-manager = "2.3.2"

@@ -42,6 +42,12 @@ export interface AppConfig {
   uiFont?: string
   /** 界面字号 px;0/缺省=14 */
   uiFontSize?: number
+  /** GitHub 用户名(git 凭据) */
+  githubUser?: string
+  /** GitHub token / 密码(写 ~/.git-credentials) */
+  githubToken?: string
+  /** HTTP 代理(http://host:port);注入 git 的 http_proxy/https_proxy */
+  httpProxy?: string
 }
 
 // Rust 端用 snake_case 序列化,Tauri 默认 camelCase 转换;
@@ -72,6 +78,9 @@ interface RawConfig {
   theme?: string
   ui_font?: string
   ui_font_size?: number
+  github_user?: string
+  github_token?: string
+  http_proxy?: string
 }
 
 function toRawAgent(a: AgentConfig): RawAgent {
@@ -115,7 +124,10 @@ function fromRaw(raw: RawConfig): AppConfig {
     pluginAgent: raw.plugin_agent ?? '',
     theme: raw.theme ?? '',
     uiFont: raw.ui_font ?? '',
-    uiFontSize: raw.ui_font_size ?? 0
+    uiFontSize: raw.ui_font_size ?? 0,
+    githubUser: raw.github_user ?? '',
+    githubToken: raw.github_token ?? '',
+    httpProxy: raw.http_proxy ?? ''
   }
 }
 
@@ -132,7 +144,10 @@ function toRaw(cfg: AppConfig): RawConfig {
     plugin_agent: cfg.pluginAgent ?? '',
     theme: cfg.theme ?? '',
     ui_font: cfg.uiFont ?? '',
-    ui_font_size: cfg.uiFontSize ?? 0
+    ui_font_size: cfg.uiFontSize ?? 0,
+    github_user: cfg.githubUser ?? '',
+    github_token: cfg.githubToken ?? '',
+    http_proxy: cfg.httpProxy ?? ''
   }
 }
 
@@ -166,10 +181,27 @@ export async function installRemotePlugins(host: string): Promise<void> {
   await invoke('install_remote_plugins', { host })
 }
 
-/** 把本地配置(含明文 API Key)整份上传到远程 ~/.linco/config.json。
- *  仅在用户明确信任该服务器时调用。 */
-export async function syncConfigToRemote(host: string): Promise<void> {
-  await invoke('sync_config_to_remote', { host })
+/** 一个插件的安装状态(供设置页插件管理界面)。 */
+export interface PluginStatus {
+  agent: 'claude' | 'codex'
+  id: string
+  name: string
+  desc: string
+  installed: boolean
+}
+
+/** 列出 claude/codex 各插件的安装状态。 */
+export async function pluginStatus(): Promise<PluginStatus[]> {
+  return invoke('plugin_status')
+}
+
+/** 开关单个插件(安装/卸载)。 */
+export async function pluginSet(
+  agent: 'claude' | 'codex',
+  id: string,
+  enabled: boolean
+): Promise<void> {
+  await invoke('plugin_set', { agent, id, enabled })
 }
 
 function shellQuote(s: string): string {

@@ -92,6 +92,30 @@ export const gitPush = (repo: string, host?: string): Promise<string> =>
 export const gitFetch = (repo: string, host?: string): Promise<string> =>
   invoke('git_fetch', { repo, host: H(host) })
 
+/** 远端仓库信息(origin URL + owner/repo)。 */
+export interface GitRemoteInfo {
+  url: string
+  slug: string
+}
+export const gitRemoteUrl = (repo: string, host?: string): Promise<GitRemoteInfo> =>
+  invoke('git_remote_url', { repo, host: H(host) })
+/** Git 连通性测试结果(200 绿点等)。 */
+export interface GitConnTest {
+  ok: boolean
+  status: number | null
+  message: string
+  latencyMs: number
+  slug: string
+}
+export const gitTestConnection = (repo: string, host?: string): Promise<GitConnTest> =>
+  invoke('git_test_connection', { repo, host: H(host) })
+/** 本地应用 GitHub 凭据(写 ~/.git-credentials)。 */
+export const gitApplyCredentials = (): Promise<void> =>
+  invoke('git_apply_credentials')
+/** 把 GitHub 凭据 + http 代理同步到远程主机。 */
+export const syncGitToRemote = (host: string): Promise<void> =>
+  invoke('sync_git_to_remote', { host })
+
 export const gitBranches = (repo: string, host?: string): Promise<GitBranch[]> =>
   invoke('git_branches', { repo, host: H(host) })
 export const gitCheckout = (repo: string, branch: string, host?: string): Promise<string> =>

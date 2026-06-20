@@ -600,6 +600,10 @@ const NOISE_CMDS: &[&str] = &[
     "which", "env", "echo", "printf", "true", "false", "test", "expr", "date", "basename",
     "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync", "tee", "xargs",
     "cp", "mv", "rm", "mkdir", "sleep",
+    // 开发工具链 / dev server:用户自己长驻的开发进程,不是 agent 起的后台任务,过滤掉。
+    "node", "npm", "npx", "yarn", "pnpm", "bun", "deno", "vite", "tauri", "esbuild", "rollup",
+    "webpack", "tsc", "tsserver", "next", "nuxt", "nodemon", "ts-node", "cargo", "rustc",
+    "go", "gradle", "mvn", "make", "cmake", "ninja", "linco",
 ];
 
 /// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
@@ -615,8 +619,45 @@ fn exe_name(args: &str) -> String {
     t.rsplit('/').next().unwrap_or(t).to_string()
 }
 
-/// 进程是否为噪声:纯 shell 外壳 / 短命工具 / claude snapshot shell /
+/// shell 调用是否在"跑一个脚本文件"(如 `bash deploy.sh`),而非临时壳。
+/// 判据:跳过 env/nohup 前缀 + shell 名后,首个非选项 token 是脚本文件
+/// (含 `.sh`/`.bash` 后缀,或带路径分隔符的文件名)。`-c "cmd"` 内联命令不算。
+fn shell_runs_script(args: &str) -> bool {
+    let toks: Vec<&str> = args.split_whitespace().collect();
+    let mut i = 0;
+    // 跳过 env/nohup/VAR=val 前缀
+    while i < toks.len()
+        && (toks[i].contains('=') || matches!(toks[i], "env" | "nohup" | "setsid" | "stdbuf"))
+    {
+        i += 1;
+    }
+    // 跳过 shell 名本身
+    if i < toks.len() {
+        i += 1;
+    }
+    // 看后续 token:遇到 -c 即临时壳(非脚本);遇到脚本文件即 true
+    while i < toks.len() {
+        let t = toks[i];
+        if t == "-c" {
+            return false; // 内联命令壳
+        }
+        if t.starts_with('-') {
+            i += 1; // 其它选项(-l/-e/-x 等)跳过
+            continue;
+        }
+        // 第一个非选项位置参数:是脚本文件吗?
+        let name = t.rsplit('/').next().unwrap_or(t);
+        return name.ends_with(".sh")
+            || name.ends_with(".bash")
+            || t.contains('/'); // 带路径的可执行脚本
+    }
+    false // 裸 bash / 交互壳
+}
+
+
 /// Linco 自身基础设施(html-vibe 预览服务器、linco agent 自己)。
+/// 例外:`bash deploy.sh` 这种**带脚本文件参数**的 shell 不算噪声——那是用户在跑的
+/// 长脚本,应显示;而裸 shell / `bash -c "..."` 临时壳仍过滤。
 fn is_noise(p: &ProcInfo) -> bool {
     if p.args.contains("shell-snapshot")
         || p.args.contains("snapshot-zsh")
@@ -627,7 +668,12 @@ fn is_noise(p: &ProcInfo) -> bool {
     if p.args.contains("artifacts_server.py") || p.args.contains("linco_agent.py") {
         return true;
     }
-    NOISE_CMDS.contains(&exe_name(&p.args).as_str())
+    let exe = exe_name(&p.args);
+    // shell 类:只有"带脚本文件参数"时才放行(不算噪声),其余仍过滤。
+    if matches!(exe.as_str(), "sh" | "bash" | "zsh" | "dash" | "fish" | "ksh") {
+        return !shell_runs_script(&p.args);
+    }
+    NOISE_CMDS.contains(&exe.as_str())
 }
 
 /// 解析 ps ELAPSED:[[DD-]HH:]MM:SS → 秒。解析失败返回大值(不误删长任务)。
@@ -926,5 +972,62 @@ mod tests {
         let pids: Vec<i64> = via_direct.iter().map(|p| p.pid).collect();
         assert!(pids.contains(&200) && pids.contains(&300));
         assert!(!pids.contains(&100) && !pids.contains(&400));
+    }
+
+    fn noise(args: &str) -> bool {
+        is_noise(&ProcInfo {
+            pid: 1,
+            ppid: 1,
+            etime: "01:00".into(),
+            pcpu: "0".into(),
+            pmem: "0".into(),
+            stat: "S".into(),
+            args: args.into(),
+        })
+    }
+
+    #[test]
+    fn bash_with_script_is_not_noise() {
+        // 带脚本文件的 shell → 显示(非噪声)
+        assert!(!noise("bash deploy.sh"));
+        assert!(!noise("bash /opt/run/benchmark.sh --fast"));
+        assert!(!noise("sh ./train.sh"));
+        assert!(!noise("bash scripts/eval.bash"));
+    }
+
+    #[test]
+    fn bare_or_inline_shell_is_noise() {
+        // 裸壳 / -c 内联命令壳 → 仍过滤
+        assert!(noise("bash"));
+        assert!(noise("bash -lc \"ls\""));
+        assert!(noise("sh -c \"grep foo bar\""));
+        assert!(noise("zsh -i"));
+    }
+
+    #[test]
+    fn real_programs_still_show() {
+        // 真实长任务程序仍显示(python 训练等)
+        assert!(!noise("python -u train.py"));
+        assert!(!noise("python eval.py --ckpt best.pt"));
+        assert!(!noise("./my_binary --serve"));
+    }
+
+    #[test]
+    fn dev_tools_are_noise() {
+        // dev server / 构建工具链:用户长驻开发进程,不进后台监控
+        for c in [
+            "node /Users/x/linco/node_modules/.bin/vite",
+            "npm run tauri:dev",
+            "vite",
+            "node /Users/x/.bin/tauri dev",
+            "cargo build",
+            "tsc --noEmit",
+            "webpack serve",
+            "target/debug/linco",
+        ] {
+            assert!(noise(c), "should be noise: {c}");
+        }
+        // 但带脚本的 bash 仍显示(不受 dev 名单影响)
+        assert!(!noise("bash deploy.sh"));
     }
 }

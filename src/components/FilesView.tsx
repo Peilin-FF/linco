@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, X } from 'lucide-react'
+import { writeText as clipWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import FileTree, { type TreeContextTarget } from './files/FileTree'
 import FileViewer from './files/FileViewer'
 import ContextMenu, { type ContextAction } from './files/ContextMenu'
@@ -210,6 +211,11 @@ export default function FilesView({
   const dirOf = (entry: DirEntry): string =>
     entry.isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
 
+  // 某条目所在的「父目录」(不论它是文件还是文件夹)。删除后要刷新父目录,
+  // 否则删文件夹时 dirOf 返回文件夹自身(已删),父级树里残留空节点。
+  const parentOf = (entry: DirEntry): string =>
+    entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+
   // 拖拽移动:把 src 移到 destDir 下,刷新两端
   const handleMove = async (src: string, destDir: string): Promise<void> => {
     const srcDir = src.slice(0, src.lastIndexOf('/'))
@@ -279,10 +285,10 @@ export default function FilesView({
           break
         }
         case 'copy-path':
-          await navigator.clipboard.writeText(target.path)
+          await clipWriteText(target.path)
           break
         case 'copy-relative-path':
-          await navigator.clipboard.writeText(
+          await clipWriteText(
             root && target.path.startsWith(root)
               ? target.path.slice(root.length).replace(/^\//, '')
               : target.path
@@ -300,7 +306,7 @@ export default function FilesView({
           if (!ok) return
           await deletePath(target.path, host)
           if (tabs.includes(target.path)) closeTab(target.path)
-          refresh(dirOf(target))
+          refresh(parentOf(target)) // 刷新父目录,删除的文件/文件夹节点才会消失
           break
         }
       }

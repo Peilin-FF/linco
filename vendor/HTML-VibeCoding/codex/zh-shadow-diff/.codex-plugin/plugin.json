@@ -1,0 +1,12 @@
+{
+  "name": "shadow-diff",
+  "version": "1.0.0",
+  "description": "「本轮 agent 改动」可视化:独立 git 影子仓库追踪每轮改了哪些文件(A/M/D + 红绿 diff)。提供 shadow.sh CLI(begin/changed/diff/status)。",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco 改动可视化",
+    "shortDescription": "影子 git 追踪本轮改动,文件树标 A/M/D、显红绿 diff。",
+    "category": "Productivity"
+  }
+}

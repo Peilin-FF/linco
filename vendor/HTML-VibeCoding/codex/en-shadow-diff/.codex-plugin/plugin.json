@@ -1,0 +1,12 @@
+{
+  "name": "shadow-diff-en",
+  "version": "1.0.0",
+  "description": "This-turn change visualization: an independent shadow git repo tracks which files each turn changed (A/M/D + red/green diff). Ships a shadow.sh CLI (begin/changed/diff/status).",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco Shadow Diff",
+    "shortDescription": "Shadow git tracks this-turn changes; file tree marks A/M/D and shows red/green diff.",
+    "category": "Productivity"
+  }
+}

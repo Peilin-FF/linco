@@ -280,10 +280,25 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
         std::fs::read(&abs).map_err(|e| e.to_string())
     };
     match bytes {
-        Ok(b) => (b, ctype, 200),
+        Ok(b) => {
+            // HTML 页面注入「上报自身路径」脚本:页面加载后把真实 location.pathname 经
+            // postMessage 告诉父窗口(Linco)。这样无论是点链接、热刷新、还是直接导航,
+            // React 的地址栏 / currentRel /「提交给 Agent」按钮都能跟上(跨源读 location
+            // 会被浏览器拦,所以靠子页面主动上报)。
+            if ctype.starts_with("text/html") {
+                let mut out = b;
+                out.extend_from_slice(PATH_REPORTER.as_bytes());
+                (out, ctype, 200)
+            } else {
+                (b, ctype, 200)
+            }
+        }
         Err(_) => (b"not found".to_vec(), "text/plain".into(), 404),
     }
 }
+
+/// 注入到每个被预览 HTML 末尾:加载完成后把自身路径上报给父窗口。
+const PATH_REPORTER: &str = "\n<script>try{parent.postMessage({__lincoPath:location.pathname+location.search},'*');}catch(e){}</script>\n";
 
 /// 产物首页:列出 root(或其子目录 dir_rel)下所有 HTML 为可点链接。
 /// 本地直接遍历;远程经 agent/find 列。链接是相对 URL,点击在 iframe 内导航。

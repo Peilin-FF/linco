@@ -11,7 +11,8 @@ import {
   GitCommitHorizontal,
   History,
   Archive,
-  FileText
+  FileText,
+  Loader2
 } from 'lucide-react'
 import {
   gitBranches,
@@ -35,13 +36,17 @@ import {
   gitStatus,
   gitUnstage,
   gitUnstageAll,
+  gitRemoteUrl,
+  gitTestConnection,
   type GitBranch as GitBranchT,
   type GitCommit,
   type GitFile,
   type GitStash,
-  type GitStatus
+  type GitStatus,
+  type GitConnTest
 } from '@/lib/git'
 import { onRemoteFsChange } from '@/lib/watch'
+import type { AppConfig } from '@/lib/config'
 import { useI18n } from '@/lib/i18n'
 import { iconForFile } from './files/icons'
 import DiffView from './git/DiffView'
@@ -54,16 +59,31 @@ interface GitViewProps {
   onPickRoot?: () => void
   /** 远程主机(空=本地) */
   host?: string
+  /** GitHub 用户名(设置里配的);分支旁展示 */
+  githubUser?: string
+  /** 全量配置 + 写回(用于读/改 http 代理:本地 config.httpProxy / 远程 connection.httpProxy) */
+  config?: AppConfig
+  onChange?: (config: AppConfig) => void
 }
 
 function baseName(p: string): string {
   return p.split('/').pop() || p
 }
 
-export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.Element {
+export default function GitView({
+  repo,
+  onPickRoot,
+  host,
+  githubUser,
+  config,
+  onChange
+}: GitViewProps): JSX.Element {
   const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('changes')
   const [status, setStatus] = useState<GitStatus | null>(null)
+  const [remoteSlug, setRemoteSlug] = useState('') // origin owner/repo
+  const [conn, setConn] = useState<GitConnTest | null>(null) // 连通性测试结果
+  const [testing, setTesting] = useState(false)
   const [sel, setSel] = useState<GitFile | null>(null)
   const [diff, setDiff] = useState('')
   const [commitMsg, setCommitMsg] = useState('')
@@ -91,6 +111,63 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
       console.error('git status 失败', e)
     }
   }, [repo, host])
+
+  // origin 仓库信息(owner/repo)——分支旁展示上游仓库。repo/host 变化时重拉。
+  useEffect(() => {
+    if (!repo) {
+      setRemoteSlug('')
+      return
+    }
+    let alive = true
+    gitRemoteUrl(repo, host)
+      .then((info) => {
+        if (alive) setRemoteSlug(info.slug || '')
+      })
+      .catch(() => {
+        if (alive) setRemoteSlug('')
+      })
+    return () => {
+      alive = false
+    }
+  }, [repo, host])
+
+  // 连通性测试:点状态点手动触发(也在 repo/host 变化时清空旧结果)。
+  const testConn = useCallback(async (): Promise<void> => {
+    if (!repo) return
+    setTesting(true)
+    try {
+      setConn(await gitTestConnection(repo, host))
+    } catch (e) {
+      setConn({ ok: false, status: null, message: String(e), latencyMs: 0, slug: '' })
+    } finally {
+      setTesting(false)
+    }
+  }, [repo, host])
+
+  useEffect(() => {
+    setConn(null) // 切仓库/主机 → 清旧状态(用户点一下重新测)
+  }, [repo, host])
+
+  // 当前位置的 http 代理:本地=config.httpProxy;远程=该连接的 httpProxy。
+  // 本地/远程代理常不同,各自独立存储。
+  const curProxy = ((): string => {
+    if (!config) return ''
+    if (!host) return config.httpProxy ?? ''
+    return config.connections.find((c) => c.host === host)?.httpProxy ?? ''
+  })()
+  const setProxy = (v: string): void => {
+    if (!config || !onChange) return
+    if (!host) {
+      onChange({ ...config, httpProxy: v })
+    } else {
+      onChange({
+        ...config,
+        connections: config.connections.map((c) =>
+          c.host === host ? { ...c, httpProxy: v } : c
+        )
+      })
+    }
+  }
 
   useEffect(() => {
     void refresh()
@@ -261,8 +338,17 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
-      {/* 顶部:分支 + 同步操作 */}
+      {/* 顶部:用户名 · 上游仓库 · 分支 + 同步操作 */}
       <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1.5 text-[13px]">
+        {/* GitHub 用户名 + 上游仓库(配了/拿到才显示) */}
+        {(githubUser || remoteSlug) && (
+          <span className="flex items-center gap-1 text-[12px] text-ink-faint">
+            {githubUser && <span className="text-ink-muted">{githubUser}</span>}
+            {githubUser && remoteSlug && <span className="text-ink-faint/50">·</span>}
+            {remoteSlug && <span className="font-mono">{remoteSlug}</span>}
+            <span className="mx-0.5 text-ink-faint/40">/</span>
+          </span>
+        )}
         <BranchIcon size={14} className="text-ink-muted" />
         <span className="font-medium text-ink">{status?.branch || '—'}</span>
         {!!status && (status.ahead > 0 || status.behind > 0) && (
@@ -282,8 +368,39 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           </span>
         )}
         <div className="flex-1" />
+        {/* 连通性状态:点一下测试。200 绿、其它码黄/红、失败灰。 */}
         <button
-          onClick={() => run(() => gitFetch(repo, host), t('git.toast.fetched'))}
+          onClick={() => void testConn()}
+          disabled={testing || !repo}
+          title={conn ? `${conn.message} · ${conn.latencyMs}ms` : t('git.conn.test')}
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-ink-muted hover:bg-black/5"
+        >
+          {testing ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                !conn
+                  ? 'bg-ink-faint/40'
+                  : conn.status && conn.status >= 200 && conn.status < 300
+                    ? 'bg-emerald-500'
+                    : conn.status
+                      ? 'bg-amber-500'
+                      : 'bg-red-500'
+              }`}
+            />
+          )}
+          <span className="font-mono">
+            {testing
+              ? t('git.conn.testing')
+              : conn?.status
+                ? conn.status
+                : conn
+                  ? t('git.conn.fail')
+                  : t('git.conn.test')}
+          </span>
+        </button>
+        <button
           disabled={busy}
           className="rounded-md p-1 text-ink-muted hover:bg-black/5 hover:text-ink"
           title="fetch"
@@ -307,6 +424,29 @@ export default function GitView({ repo, onPickRoot, host }: GitViewProps): JSX.E
           <ArrowUp size={13} />{t('git.push')}
         </button>
       </div>
+
+      {/* HTTP 代理(按位置:本地 / 当前远程各自独立)。国内 push GitHub 常需配。 */}
+      {config && onChange && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1.5">
+          <span className="shrink-0 text-[11px] text-ink-faint">
+            {host ? t('git.proxy.remote') : t('git.proxy.local')}
+          </span>
+          <input
+            value={curProxy}
+            onChange={(e) => setProxy(e.target.value)}
+            placeholder="http://127.0.0.1:7890"
+            className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-black/25"
+          />
+          {curProxy && (
+            <button
+              onClick={() => setProxy('')}
+              className="shrink-0 rounded-md px-1.5 py-1 text-[11px] text-ink-faint hover:bg-black/5 hover:text-ink"
+            >
+              {t('git.proxy.clear')}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 远端有新提交:醒目提示拉取(behind>0) */}
       {!!status && status.behind > 0 && (

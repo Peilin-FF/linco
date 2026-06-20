@@ -99,6 +99,10 @@ export default function ChatInput({
   const prevRef = useRef('') // 已转发到 PTY 的内容
   const taRef = useRef<HTMLTextAreaElement>(null)
   const canSend = value.trim().length > 0
+  // 已发送消息历史(本会话)+ 当前翻阅位置。histIdx === null = 没在翻历史(停在草稿)。
+  const historyRef = useRef<string[]>([])
+  const [histIdx, setHistIdx] = useState<number | null>(null)
+  const draftRef = useRef('') // 进入历史前的草稿,翻到底退出时还原
 
   // 计算 prev→next 的增量并转发(前缀 diff:末尾增删)
   const forwardDiff = (next: string): void => {
@@ -117,6 +121,8 @@ export default function ChatInput({
 
   const handleChange = (next: string): void => {
     setValue(next)
+    // 用户手动改了内容 → 退出历史翻阅态(此后 ↑/↓ 基于当前编辑内容)
+    if (histIdx !== null) setHistIdx(null)
     // 合成中不转发,等 compositionend
     if (!composingRef.current) forwardDiff(next)
   }
@@ -124,14 +130,64 @@ export default function ChatInput({
   const handleSend = (): void => {
     if (!canSend) return
     const text = value.trim()
-    // 顺序要紧:先 onSend(它会 git stash create 拍“本轮基线”),再 onForward 把回车
-    // 送进 PTY 放行 agent。否则 agent 可能在基线拍好前就改完文件,改动被基线吞掉 → diff 空。
-    onSend?.(text)
-    // 兜底重发:先清空 agent 输入行(Ctrl-U),重打完整文本,再回车提交,
-    // 保证即使逐字转发期间有偏差,最终命令也准确无误。
-    onForward?.('\x15' + text + '\r')
+    // 文本在打字时已由 forwardDiff 逐字转发进 TUI(且补全已生效),回车时**只需提交**。
+    // 不再 Ctrl-U 清行 + 重打全文 —— claude/codex 不认 Ctrl-U,重打会叠成 "hellohello"。
+    onSend?.(text) // 记 git 基线 / 用量(不写 PTY)
+    // 单独发一个 \r 提交:用下一帧发,避免和刚转发的字符 burst 混在一起被当 paste 换行。
+    setTimeout(() => onForward?.('\r'), 16)
+    // 记入发送历史(去掉与上一条完全相同的连续重复),重置翻阅位置。
+    if (historyRef.current[historyRef.current.length - 1] !== text) {
+      historyRef.current.push(text)
+    }
+    setHistIdx(null)
+    draftRef.current = ''
     setValue('')
     prevRef.current = ''
+  }
+
+  // 把 textarea 内容整体替换(翻历史用):同步转发给 TUI + 光标置末尾。
+  const replaceValue = (next: string): void => {
+    setValue(next)
+    if (!composingRef.current) forwardDiff(next)
+    // 光标移到末尾(下一帧,等 value 更新到 DOM)
+    requestAnimationFrame(() => {
+      const ta = taRef.current
+      if (ta) {
+        ta.selectionStart = ta.selectionEnd = next.length
+      }
+    })
+  }
+
+  // 光标是否在第一行(↑ 翻上一条的边界)/最后一行(↓ 翻下一条的边界)。
+  const atFirstLine = (ta: HTMLTextAreaElement): boolean =>
+    ta.value.lastIndexOf('\n', ta.selectionStart - 1) === -1
+  const atLastLine = (ta: HTMLTextAreaElement): boolean =>
+    ta.value.indexOf('\n', ta.selectionEnd) === -1
+
+  // ↑:翻到更早的已发送消息。histIdx===null 时先存草稿。
+  const historyPrev = (): void => {
+    const h = historyRef.current
+    if (h.length === 0) return
+    const cur = histIdx === null ? h.length : histIdx
+    if (cur <= 0) return // 已是最早
+    if (histIdx === null) draftRef.current = value // 进入历史前存草稿
+    const idx = cur - 1
+    setHistIdx(idx)
+    replaceValue(h[idx])
+  }
+
+  // ↓:翻到更晚的已发送消息;翻过最后一条则回到草稿、退出历史。
+  const historyNext = (): void => {
+    const h = historyRef.current
+    if (histIdx === null) return // 不在历史里
+    const idx = histIdx + 1
+    if (idx >= h.length) {
+      setHistIdx(null)
+      replaceValue(draftRef.current)
+      return
+    }
+    setHistIdx(idx)
+    replaceValue(h[idx])
   }
 
   const pickFolder = async (): Promise<void> => {
@@ -248,6 +304,36 @@ export default function ChatInput({
             if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
               e.preventDefault()
               handleSend()
+              return
+            }
+            // Esc:像在 TUI 里一样打断当前对话(转发 ESC 给 agent)。
+            // 但有下拉菜单打开时,Esc 优先关菜单(由上面的全局监听处理),不打断。
+            if (
+              e.key === 'Escape' &&
+              !composingRef.current &&
+              !openMenu &&
+              !dirOpen
+            ) {
+              e.preventDefault()
+              onForward?.('\x1b')
+              return
+            }
+            // ↑/↓:多行优先光标移动,仅在首行↑/末行↓时翻已发送消息历史。合成中不处理。
+            if (e.key === 'ArrowUp' && !composingRef.current) {
+              const ta = e.currentTarget
+              if (atFirstLine(ta) && historyRef.current.length > 0) {
+                e.preventDefault()
+                historyPrev()
+              }
+              return
+            }
+            if (e.key === 'ArrowDown' && !composingRef.current) {
+              const ta = e.currentTarget
+              if (atLastLine(ta) && histIdx !== null) {
+                e.preventDefault()
+                historyNext()
+              }
+              return
             }
           }}
           rows={compact ? 1 : 2}

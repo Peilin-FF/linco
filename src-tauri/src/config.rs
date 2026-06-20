@@ -58,6 +58,9 @@ pub struct Connection {
     /// 该远程连接最近用过的目录(与本地的 recent_dirs 分开)
     #[serde(default, rename = "recentDirs")]
     pub recent_dirs: Vec<String>,
+    /// 该远程的 HTTP 代理(与本地的 http_proxy 分开;本地/远程代理常不同,不互相同步)
+    #[serde(default, rename = "httpProxy")]
+    pub http_proxy: String,
 }
 
 /// 全量应用配置。
@@ -100,6 +103,15 @@ pub struct AppConfig {
     /// 界面字号(px);0=默认 14。
     #[serde(default)]
     pub ui_font_size: u32,
+    /// GitHub 用户名(用于 git 凭据 ~/.git-credentials)。
+    #[serde(default)]
+    pub github_user: String,
+    /// GitHub token / 密码(写入 ~/.git-credentials,push/pull 鉴权用)。
+    #[serde(default)]
+    pub github_token: String,
+    /// HTTP 代理(http://host:port);非空则注入 git 的 http_proxy/https_proxy 环境变量。
+    #[serde(default)]
+    pub http_proxy: String,
 }
 
 impl Default for AppConfig {
@@ -117,6 +129,9 @@ impl Default for AppConfig {
             theme: String::new(),
             ui_font: String::new(),
             ui_font_size: 0,
+            github_user: String::new(),
+            github_token: String::new(),
+            http_proxy: String::new(),
         }
     }
 }
@@ -239,29 +254,6 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&path, text).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// 把本地 ~/.linco/config.json 整份(含明文 API Key)上传到远程 ~/.linco/config.json。
-/// **安全敏感**:前端必须先取得用户「信任此服务器」的明确确认才调用。
-/// 实现:读本地配置文本 → 解析远端 $HOME → mkdir -p → 经持久 SSH 通道写远端同路径。
-#[tauri::command]
-pub async fn sync_config_to_remote(host: String) -> Result<(), String> {
-    crate::blocking::run(move || {
-        let path = config_path()?;
-        let text = fs::read_to_string(&path).map_err(|e| format!("读取本地配置失败: {e}"))?;
-        // 远端 HOME
-        let home = crate::remote::run_remote(&host, "echo $HOME")
-            .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
-        if home.is_empty() {
-            return Err("无法解析远端 HOME".into());
-        }
-        let dir = format!("{}/.linco", home.trim_end_matches('/'));
-        crate::remote::run_remote(&host, &format!("mkdir -p {}", crate::remote::shq(&dir)))?;
-        let remote_path = format!("{dir}/config.json");
-        crate::remote::write_file(&host, &remote_path, &text)?;
-        Ok(())
-    })
-    .await
 }
 
 #[cfg(test)]

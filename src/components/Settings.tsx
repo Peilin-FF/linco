@@ -5,7 +5,9 @@ import {
   Server,
   BarChart3,
   Rocket,
-  Cloud
+  Cloud,
+  Puzzle,
+  GitBranch
 } from 'lucide-react'
 import type { AppConfig } from '@/lib/config'
 import { useI18n } from '@/lib/i18n'
@@ -13,16 +15,22 @@ import ModelSettings from './settings/ModelSettings'
 import Connections from './settings/Connections'
 import GeneralSettings from './settings/GeneralSettings'
 import UsageStats from './settings/UsageStats'
+import PluginSettings from './settings/PluginSettings'
+import GitSettings from './settings/GitSettings'
 
 type SectionId =
   | 'general'
   | 'model'
+  | 'plugins'
+  | 'git'
   | 'connections'
   | 'usage'
 
 const NAV: { id: SectionId; labelKey: string; icon: typeof SlidersHorizontal }[] = [
   { id: 'general', labelKey: 'settings.nav.general', icon: SlidersHorizontal },
   { id: 'model', labelKey: 'settings.nav.model', icon: Server },
+  { id: 'plugins', labelKey: 'settings.nav.plugins', icon: Puzzle },
+  { id: 'git', labelKey: 'settings.nav.git', icon: GitBranch },
   { id: 'connections', labelKey: 'settings.nav.connections', icon: Cloud },
   { id: 'usage', labelKey: 'settings.nav.usage', icon: BarChart3 }
 ]
@@ -82,6 +90,10 @@ export default function Settings({
         <div className="h-full w-full overflow-y-auto rounded-2xl bg-canvas p-8 shadow-card">
           {section === 'model' ? (
             <ModelSettings config={config} onChange={onChange} />
+          ) : section === 'plugins' ? (
+            <PluginSettings config={config} />
+          ) : section === 'git' ? (
+            <GitSettings config={config} onChange={onChange} />
           ) : section === 'connections' ? (
             <Connections config={config} onChange={onChange} />
           ) : section === 'usage' ? (

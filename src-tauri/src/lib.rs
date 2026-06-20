@@ -33,6 +33,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
@@ -52,10 +53,11 @@ pub fn run() {
             usage::usage_ingest_terminal_output,
             config::load_config,
             config::save_config,
-            config::sync_config_to_remote,
             model_test::test_model_connection,
             plugins::set_language,
             plugins::install_remote_plugins,
+            plugins::plugin_status,
+            plugins::plugin_set,
             preview::preview_start,
             preview::preview_set_target,
             preview::preview_default_target,
@@ -92,6 +94,10 @@ pub fn run() {
             git::git_pull,
             git::git_push,
             git::git_fetch,
+            git::git_remote_url,
+            git::git_test_connection,
+            git::git_apply_credentials,
+            git::sync_git_to_remote,
             git::git_branches,
             git::git_checkout,
             git::git_create_branch,

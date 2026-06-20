@@ -1,0 +1,42 @@
+{
+  "name": "linco-codex-marketplace",
+  "interface": { "displayName": "Linco" },
+  "plugins": [
+    {
+      "name": "html-kit",
+      "source": { "source": "local", "path": "./codex/zh" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "task-monitor",
+      "source": { "source": "local", "path": "./codex/zh-task-monitor" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "shadow-diff",
+      "source": { "source": "local", "path": "./codex/zh-shadow-diff" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "html-kit-en",
+      "source": { "source": "local", "path": "./codex/en" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "task-monitor-en",
+      "source": { "source": "local", "path": "./codex/en-task-monitor" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    },
+    {
+      "name": "shadow-diff-en",
+      "source": { "source": "local", "path": "./codex/en-shadow-diff" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

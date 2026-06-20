@@ -66,17 +66,15 @@ export default function ScreenView({
   // 提交给 Agent 的条件:有要看的 HTML 文件 + 父层提供了发送通道。
   const canSubmit = !!currentRel && !!onSubmitToAgent
 
-  // 「提交给 Agent」:让 agent 用 diff 看 HTML 里**新增**的需求,把回复写在各需求下方。
-  // 中英文 prompt 不同(跟随界面语言)。需求写在 HTML notebook 的 md cell 里。
+  // 「提交给 Agent」:让 agent 查看当前 HTML Notebook 里新增的需求,把回复直接写在各需求下方。
+  // 简短一句话(不带具体路径,agent 在当前预览上下文里知道是哪个文件)。中英文跟随界面语言。
   // 注意:整条作为单行发送——PTY 里 \n 可能被 TUI 当作提前回车,故用句子串联不换行。
   const submitToAgent = (): void => {
     if (!canSubmit) return
-    const abs =
-      cwd && currentRel ? `${cwd.replace(/\/+$/, '')}/${currentRel}` : currentRel
     const prompt =
       lang === 'en'
-        ? `Use git diff (e.g. \`git diff ${abs}\`, or diff against the last commit/stash) to see what I just ADDED to the HTML notebook file \`${abs}\` — do NOT re-read the whole file from scratch, only look at the newly added content. It is a notebook of numbered cells and my new requirements live in the added Markdown cells. For each newly added requirement, address it as needed and write your reply directly BELOW that requirement inside the same HTML file (append the response right under the corresponding requirement so it stays paired with it), then save the file. Keep each answer next to its own requirement — do not collect them at the end. Cells are numbered; refer to them by number when helpful.`
-        : `请用 git diff(例如 \`git diff ${abs}\`,或与上一次提交/暂存对比)查看我刚刚在 HTML notebook 文件 \`${abs}\` 里**新增**的内容——不要从头重读整个文件,只看新增的部分。它是一个按序号编号的 cell 笔记本,我的新需求写在新增的 Markdown cell 里。对每一条新增需求:按需完成它,并把回复直接写在该需求的下方(就在 HTML 文件里,把回应追加到对应需求正下方,保持一一对应),然后保存文件。每条回答都紧跟它自己的需求,不要堆在最后。cell 有序号,必要时按序号指代。`
+        ? `Check the new requirements I added in the current HTML Notebook and write each answer directly below its requirement.`
+        : `查看我在当前 HTML Notebook 中新增的需求,把答案直接回复在每条需求的下方。`
     onSubmitToAgent?.(prompt)
   }
 
@@ -173,13 +171,28 @@ export default function ScreenView({
     return () => un?.()
   }, [])
 
-  // 监听产物首页里点链接 → 压入历史(这样工具条后退能回到列表页)
+  // 监听:① 产物首页点链接(__lincoNav)② 任意页面加载后上报自身路径(__lincoPath)。
+  // 后者是关键兜底:跨源读不了 iframe location,靠子页面主动上报真实路径,
+  // 让地址栏 / currentRel /「提交给 Agent」按钮跟上(点链接/热刷新/直接导航都覆盖)。
   useEffect(() => {
     const onMsg = (e: MessageEvent): void => {
-      const href = (e.data as { __lincoNav?: string })?.__lincoNav
-      if (typeof href !== 'string' || !port) return
+      if (!port) return
       const base = `http://127.0.0.1:${port}/`
-      pushUrl(base + href.replace(/^\/+/, ''))
+      const data = e.data as { __lincoNav?: string; __lincoPath?: string }
+      if (typeof data?.__lincoNav === 'string') {
+        pushUrl(base + data.__lincoNav.replace(/^\/+/, ''))
+        return
+      }
+      // 子页面上报真实路径 → 校正 React url(不堆历史,只对齐当前条目)
+      if (typeof data?.__lincoPath === 'string') {
+        const real = base + data.__lincoPath.replace(/^\/+/, '')
+        setNav((n) => {
+          if (n.stack[n.idx] === real) return n // 已一致
+          const stack = [...n.stack.slice(0, n.idx + 1)]
+          stack[n.idx < 0 ? 0 : n.idx] = real
+          return { stack, idx: Math.max(0, n.idx) }
+        })
+      }
     }
     window.addEventListener('message', onMsg)
     return () => window.removeEventListener('message', onMsg)

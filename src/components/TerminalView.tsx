@@ -8,6 +8,10 @@ import {
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { RotateCw } from 'lucide-react'
+import {
+  readText as clipReadText,
+  writeText as clipWriteText
+} from '@tauri-apps/plugin-clipboard-manager'
 import '@xterm/xterm/css/xterm.css'
 import {
   onTermExit,
@@ -201,7 +205,28 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 复制/粘贴键处理(尤其 Windows:Ctrl+C/V 默认不是复制粘贴)。
       // 平台区分:macOS 用 Cmd(metaKey),Ctrl+C 保持 SIGINT 中断不动;
       // Windows/Linux 用 Ctrl,且仅在「有选中」时 Ctrl+C 才复制(无选中=中断)。
+      // 剪贴板走 Tauri 原生插件(WebView2 里 navigator.clipboard 常因安全上下文失效),
+      // 失败再退回浏览器 API。
       const isMac = navigator.platform.toLowerCase().includes('mac')
+      const copyText = (text: string): void => {
+        clipWriteText(text).catch(() => {
+          void navigator.clipboard?.writeText(text).catch(() => {})
+        })
+      }
+      const pasteText = (): void => {
+        clipReadText()
+          .then((txt) => {
+            if (txt) termWrite(id, txt)
+          })
+          .catch(() => {
+            void navigator.clipboard
+              ?.readText()
+              .then((txt) => {
+                if (txt) termWrite(id, txt)
+              })
+              .catch(() => {})
+          })
+      }
       term.attachCustomKeyEventHandler((e): boolean => {
         if (e.type !== 'keydown') return true
         // 复制/粘贴的修饰键:mac=Cmd,其它=Ctrl
@@ -211,19 +236,14 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         if (key === 'c') {
           const sel = term.getSelection()
           if (sel && sel.length > 0) {
-            void navigator.clipboard.writeText(sel).catch(() => {})
+            copyText(sel)
             term.clearSelection()
             return false // 已复制,不再发 \x03
           }
           return true // 无选中:放行(Ctrl+C=中断)
         }
         if (key === 'v') {
-          void navigator.clipboard
-            .readText()
-            .then((txt) => {
-              if (txt) termWrite(id, txt)
-            })
-            .catch(() => {})
+          pasteText()
           return false // 拦截默认,避免重复
         }
         return true

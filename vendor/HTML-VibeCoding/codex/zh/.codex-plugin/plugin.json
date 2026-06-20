@@ -1,0 +1,12 @@
+{
+  "name": "html-kit",
+  "version": "1.0.0",
+  "description": "产出自包含 HTML 产物/报告/对比/图表/讲解/原型/编辑器,或做 Linco notebook,或使用 HTML 设计组件时使用。提供设计套件、notebook 模板、组件清单与就地答复工作流。Linco 预览引擎资源也在本插件下。",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco HTML Kit",
+    "shortDescription": "自包含 HTML 产物设计套件 + Linco notebook 工作流。",
+    "category": "Productivity"
+  }
+}

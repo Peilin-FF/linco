@@ -4,7 +4,6 @@ import {
   AGENT_PRESETS,
   agentLaunchCommand,
   agentExecutable,
-  syncConfigToRemote,
   testModelConnection,
   type AgentConfig,
   type AppConfig,
@@ -39,29 +38,8 @@ export default function ModelSettings({
   const selected = config.agents.find((a) => a.id === selectedId)
   const isOpenAI = selected?.provider === 'openai'
 
-  // 同步配置到远程的状态
-  const [syncing, setSyncing] = useState<string | null>(null)
-  const [syncMsg, setSyncMsg] = useState<string>('')
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, StoredModelTestResult>>({})
-
-  const syncTo = async (hostStr: string, label: string): Promise<void> => {
-    // 信任确认:WKWebView 支持 window.confirm。明确告知含密钥 + 风险。
-    const ok = window.confirm(
-      t('model.syncConfirm', { n: config.agents.length, label })
-    )
-    if (!ok) return
-    setSyncing(hostStr)
-    setSyncMsg('')
-    try {
-      await syncConfigToRemote(hostStr)
-      setSyncMsg(t('model.synced', { name: label }))
-    } catch (e) {
-      setSyncMsg(t('model.syncFailed', { error: String(e) }))
-    } finally {
-      setSyncing(null)
-    }
-  }
 
   const update = (next: Partial<AppConfig>): void =>
     onChange({ ...config, ...next })
@@ -139,33 +117,6 @@ export default function ModelSettings({
         />
         <span className="text-[14px] text-ink">{t('model.autoStart')}</span>
       </label>
-
-      {/* 同步配置到远程服务器(含密钥,需信任确认) */}
-      {config.connections.length > 0 && (
-        <div className="mt-4 rounded-xl bg-sidebar p-4">
-          <div className="text-[14px] font-medium text-ink">{t('model.syncToRemote')}</div>
-          <p className="mt-1 text-[12.5px] text-ink-faint">
-            {t('model.syncDescFull1')}<b className="text-amber-600">{t('model.syncDescFull2')}</b>
-            {t('model.syncDescFull3')}<code className="font-mono">~/.linco/config.json</code>
-            {t('model.syncDescFull4')}
-          </p>
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            {config.connections.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => syncTo(c.host, c.name || c.host)}
-                disabled={syncing === c.host}
-                className="rounded-lg border border-black/10 bg-canvas px-3 py-1.5 text-[12.5px] text-ink hover:border-black/25 disabled:opacity-50"
-              >
-                {syncing === c.host ? t('model.syncing') : t('model.syncTo', { name: c.name || c.host })}
-              </button>
-            ))}
-          </div>
-          {syncMsg && (
-            <div className="mt-2 text-[12px] text-ink-muted">{syncMsg}</div>
-          )}
-        </div>
-      )}
 
       {/* 添加预设 */}
       <div className="mt-6">
@@ -370,68 +321,73 @@ export default function ModelSettings({
               </Field>
             )}
 
-            <Field label={t('model.baseUrl')} hint={t('model.baseUrlHint')}>
-              <input
-                value={selected.baseUrl}
-                onChange={(e) =>
-                  updateAgent(selected.id, { baseUrl: e.target.value })
-                }
-                placeholder={
-                  isOpenAI
-                    ? 'https://api.openai.com/v1'
-                    : 'https://api.anthropic.com'
-                }
-                className={`${inputClass} font-mono`}
-              />
-            </Field>
-
-            <Field label={t('model.model')} hint={t('model.modelHint')}>
-              <input
-                value={selected.model}
-                onChange={(e) =>
-                  updateAgent(selected.id, { model: e.target.value })
-                }
-                placeholder={isOpenAI ? 'gpt-5' : 'claude-opus-4-8'}
-                className={`${inputClass} font-mono`}
-              />
-            </Field>
-
-            <Field label={t('model.switchableModels')} hint={t('model.switchableModelsHint')}>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {(selected.models ?? []).map((m) => (
-                  <span
-                    key={m}
-                    className="flex items-center gap-1 rounded-md bg-canvas px-2 py-1 font-mono text-[12px] text-ink ring-1 ring-black/10"
-                  >
-                    {m}
-                    <button
-                      onClick={() =>
-                        updateAgent(selected.id, {
-                          models: (selected.models ?? []).filter((x) => x !== m)
-                        })
-                      }
-                      className="text-ink-faint hover:text-red-500"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  </span>
-                ))}
-                <input
-                  placeholder={t('model.addModelPlaceholder')}
-                  className="min-w-[140px] flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-black/25"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const v = e.currentTarget.value.trim()
-                      const cur = selected.models ?? []
-                      if (v && !cur.includes(v)) {
-                        updateAgent(selected.id, { models: [...cur, v] })
-                      }
-                      e.currentTarget.value = ''
+            {/* 订阅模式:CLI 自己的订阅凭据登录,无需 base url / 模型名 / API key,全部隐藏 */}
+            {selected.authMode !== 'subscription' && (
+              <>
+                <Field label={t('model.baseUrl')} hint={t('model.baseUrlHint')}>
+                  <input
+                    value={selected.baseUrl}
+                    onChange={(e) =>
+                      updateAgent(selected.id, { baseUrl: e.target.value })
                     }
-                  }}
-                />
-              </div>
-            </Field>
+                    placeholder={
+                      isOpenAI
+                        ? 'https://api.openai.com/v1'
+                        : 'https://api.anthropic.com'
+                    }
+                    className={`${inputClass} font-mono`}
+                  />
+                </Field>
+
+                <Field label={t('model.model')} hint={t('model.modelHint')}>
+                  <input
+                    value={selected.model}
+                    onChange={(e) =>
+                      updateAgent(selected.id, { model: e.target.value })
+                    }
+                    placeholder={isOpenAI ? 'gpt-5' : 'claude-opus-4-8'}
+                    className={`${inputClass} font-mono`}
+                  />
+                </Field>
+
+                <Field label={t('model.switchableModels')} hint={t('model.switchableModelsHint')}>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {(selected.models ?? []).map((m) => (
+                      <span
+                        key={m}
+                        className="flex items-center gap-1 rounded-md bg-canvas px-2 py-1 font-mono text-[12px] text-ink ring-1 ring-black/10"
+                      >
+                        {m}
+                        <button
+                          onClick={() =>
+                            updateAgent(selected.id, {
+                              models: (selected.models ?? []).filter((x) => x !== m)
+                            })
+                          }
+                          className="text-ink-faint hover:text-red-500"
+                        >
+                          <Trash2 size={11} />
+                        </button>
+                      </span>
+                    ))}
+                    <input
+                      placeholder={t('model.addModelPlaceholder')}
+                      className="min-w-[140px] flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-black/25"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const v = e.currentTarget.value.trim()
+                          const cur = selected.models ?? []
+                          if (v && !cur.includes(v)) {
+                            updateAgent(selected.id, { models: [...cur, v] })
+                          }
+                          e.currentTarget.value = ''
+                        }
+                      }}
+                    />
+                  </div>
+                </Field>
+              </>
+            )}
           </div>
         </div>
       )}

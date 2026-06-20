@@ -1,0 +1,12 @@
+{
+  "name": "task-monitor-en",
+  "version": "1.0.0",
+  "description": "Background long-task monitoring: redirect training/eval/long-processing output to an in-project .log file so Linco's terminal task panel shows it live.",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco Task Monitor",
+    "shortDescription": "Start background tasks with -u + .log + & so Linco's terminal panel sees them live.",
+    "category": "Productivity"
+  }
+}

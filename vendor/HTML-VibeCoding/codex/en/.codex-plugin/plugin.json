@@ -1,0 +1,12 @@
+{
+  "name": "html-kit-en",
+  "version": "1.0.0",
+  "description": "Use when producing self-contained HTML artifacts/reports/comparisons/charts/explainers/prototypes/editors, making a Linco notebook, or using HTML design components. Ships a design kit, notebook templates, a component catalog, and an in-place reply workflow. Linco's preview engine assets live here too.",
+  "author": { "name": "fengpeilin" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linco HTML Kit",
+    "shortDescription": "Self-contained HTML artifact design kit + Linco notebook workflow.",
+    "category": "Productivity"
+  }
+}

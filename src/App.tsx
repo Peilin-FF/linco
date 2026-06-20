@@ -751,15 +751,17 @@ export default function App(): JSX.Element {
   }
 
   // 从预览页「提交给 Agent」:把一段指令发给当前对话会话(等价于在对话框输入并回车)。
-  // 走 handleSend 记基线/用量,再把 Ctrl-U + 文本 + 回车写进 PTY 放行 agent。
-  // 不切到对话视图——用户多在预览/终端分栏里看,左侧对话栏会实时显示 agent 动作。
+  // 走 handleSend 记基线/用量,再把整段文本 + 单独回车写进 PTY 放行 agent。
+  // 此路径没有逐字转发(文本来自按钮),所以要整段送入;但不 Ctrl-U(claude/codex 不认),
+  // 且 \r 单独发(下一帧),避免混进文本 burst 被当 paste 换行。
   const submitToAgent = (text: string): void => {
     const t = text.trim()
     if (!t) return
     const handle = chatRefs.current.get(activeChatId)
     if (!handle) return
     handleSend(t)
-    handle.write('\x15' + t + '\r')
+    handle.write(t)
+    window.setTimeout(() => handle.write('\r'), 16)
     handle.focus()
   }
 
@@ -1131,7 +1133,14 @@ export default function App(): JSX.Element {
                   : 'pointer-events-none opacity-0'
               }`}
             >
-              <GitView repo={cwd} onPickRoot={pickRoot} host={host} />
+              <GitView
+                repo={cwd}
+                onPickRoot={pickRoot}
+                host={host}
+                githubUser={config.githubUser}
+                config={config}
+                onChange={handleConfigChange}
+              />
             </div>
           )}
         </div>

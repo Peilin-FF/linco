@@ -8,6 +8,7 @@ export interface Connection {
   cwd: string // 远端默认工作目录
   identity: string // 可选私钥路径
   recentDirs?: string[] // 该远程最近用过的目录(与本地分开)
+  httpProxy?: string // 该远程的 HTTP 代理(本地/远程代理常不同,不同步)
 }
 
 /** 读取 ~/.ssh/config 里的 Host 别名(供选择主机)。 */
