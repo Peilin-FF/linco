@@ -195,9 +195,10 @@ fn test_cli_health(agent: &AgentConfig) -> Result<ModelTestResult, String> {
         vec!["--version"]
     };
     let start = Instant::now();
-    let output = Command::new(&exe)
-        .args(&args)
-        .stdin(Stdio::null())
+    let mut c = Command::new(&exe);
+    c.args(&args).stdin(Stdio::null());
+    crate::proc_ext::no_window(&mut c);
+    let output = c
         .output()
         .map_err(|e| format!("无法运行 {exe}: {e}"))?;
     let message = command_output_summary(&output.stdout, &output.stderr);

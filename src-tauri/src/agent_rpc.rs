@@ -264,6 +264,7 @@ fn spawn_session(host: &str) -> Result<AgentSession, String> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
+    crate::proc_ext::no_window(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("agent 启动失败: {e}"))?;
     let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("无 stdin")?));
     let stdout = BufReader::new(child.stdout.take().ok_or("无 stdout")?);

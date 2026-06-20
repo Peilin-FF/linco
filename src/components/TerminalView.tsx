@@ -198,6 +198,37 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 用户在终端里键入 → 写回 PTY
       const dataSub = term.onData((d) => termWrite(id, d))
 
+      // 复制/粘贴键处理(尤其 Windows:Ctrl+C/V 默认不是复制粘贴)。
+      // 平台区分:macOS 用 Cmd(metaKey),Ctrl+C 保持 SIGINT 中断不动;
+      // Windows/Linux 用 Ctrl,且仅在「有选中」时 Ctrl+C 才复制(无选中=中断)。
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      term.attachCustomKeyEventHandler((e): boolean => {
+        if (e.type !== 'keydown') return true
+        // 复制/粘贴的修饰键:mac=Cmd,其它=Ctrl
+        const mod = isMac ? e.metaKey : e.ctrlKey
+        if (!mod) return true
+        const key = e.key.toLowerCase()
+        if (key === 'c') {
+          const sel = term.getSelection()
+          if (sel && sel.length > 0) {
+            void navigator.clipboard.writeText(sel).catch(() => {})
+            term.clearSelection()
+            return false // 已复制,不再发 \x03
+          }
+          return true // 无选中:放行(Ctrl+C=中断)
+        }
+        if (key === 'v') {
+          void navigator.clipboard
+            .readText()
+            .then((txt) => {
+              if (txt) termWrite(id, txt)
+            })
+            .catch(() => {})
+          return false // 拦截默认,避免重复
+        }
+        return true
+      })
+
       // 启动(或重启)PTY 会话:重连时复用同一函数。
       let started = false // 会话建好前不发 resize(减少无谓调用)
       const start = (): void => {

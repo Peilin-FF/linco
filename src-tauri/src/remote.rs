@@ -135,6 +135,7 @@ fn spawn_session(host: &str) -> Result<ShellSession, String> {
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null()); // stderr 由协议在远端重定向到文件,这里丢弃噪声
+    crate::proc_ext::no_window(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| format!("ssh 启动失败: {e}"))?;
     let stdin = child.stdin.take().ok_or("无 stdin")?;
     let stdout = BufReader::new(child.stdout.take().ok_or("无 stdout")?);
@@ -303,9 +304,10 @@ fn kill_pid(pid: u32) {
 #[cfg(windows)]
 fn kill_pid(pid: u32) {
     use std::process::Command;
-    let _ = Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .output();
+    let mut c = Command::new("taskkill");
+    c.args(["/PID", &pid.to_string(), "/T", "/F"]);
+    crate::proc_ext::no_window(&mut c);
+    let _ = c.output();
 }
 
 /// 持久会话执行:锁定 host 会话,懒建,断线重试一次。
@@ -428,6 +430,7 @@ fn run_remote_oneshot(
     });
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    crate::proc_ext::no_window(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("ssh 启动失败: {e}"))?;
     if let Some(data) = stdin_data {
@@ -499,6 +502,7 @@ pub async fn ssh_connect(host: String, identity: Option<String>) -> Result<(), S
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
+        crate::proc_ext::no_window(&mut cmd);
         let out = cmd.output().map_err(|e| format!("ssh 启动失败: {e}"))?;
         if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("__linco_ok__") {
             crate::agent_rpc::warmup(&host)
@@ -519,6 +523,7 @@ pub async fn ssh_check(host: String) -> bool {
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
+        crate::proc_ext::no_window(&mut cmd);
         Ok(cmd.status().map(|s| s.success()).unwrap_or(false))
     })
     .await
@@ -534,6 +539,7 @@ pub async fn ssh_disconnect(host: String) -> Result<(), String> {
         let mut cmd = Command::new("ssh");
         cmd.args(ssh_opts());
         cmd.arg("-O").arg("exit").arg(&host);
+        crate::proc_ext::no_window(&mut cmd);
         let _ = cmd.output();
         Ok(())
     })

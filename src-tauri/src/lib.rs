@@ -13,6 +13,7 @@ mod git;
 mod model_test;
 mod plugins;
 mod preview;
+mod proc_ext;
 mod procs;
 mod remote;
 mod search;

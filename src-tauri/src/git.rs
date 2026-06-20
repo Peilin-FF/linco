@@ -69,9 +69,10 @@ fn git_lane(
         let cmd = format!("cd {} && git {}", shq(repo), joined);
         return run_remote(h, &cmd).map(|b| String::from_utf8_lossy(&b).to_string());
     }
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(Path::new(repo))
+    let mut c = Command::new("git");
+    c.args(args).current_dir(Path::new(repo));
+    crate::proc_ext::no_window(&mut c);
+    let out = c
         .output()
         .map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
@@ -223,11 +224,11 @@ pub async fn git_diff_file(
                     run_remote(h, &cmd).map(|b| String::from_utf8_lossy(&b).to_string())
                 });
             }
-            let out = Command::new("git")
-                .args(["diff", "--no-index", "--", "/dev/null", &path])
-                .current_dir(Path::new(&repo))
-                .output()
-                .map_err(|e| e.to_string())?;
+            let mut c = Command::new("git");
+            c.args(["diff", "--no-index", "--", "/dev/null", &path])
+                .current_dir(Path::new(&repo));
+            crate::proc_ext::no_window(&mut c);
+            let out = c.output().map_err(|e| e.to_string())?;
             return Ok(String::from_utf8_lossy(&out.stdout).to_string());
         }
         let mut args = vec!["diff"];

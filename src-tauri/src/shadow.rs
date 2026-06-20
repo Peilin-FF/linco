@@ -204,8 +204,10 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
         "commit.gpgsign=false".into(),
     ];
     full.extend(args.iter().map(|a| a.to_string()));
-    let out = Command::new("git")
-        .args(&full)
+    let mut c = Command::new("git");
+    c.args(&full);
+    crate::proc_ext::no_window(&mut c);
+    let out = c
         .output()
         .map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
