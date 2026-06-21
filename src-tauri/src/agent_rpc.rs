@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "16";
+const AGENT_VERSION: &str = "17";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -222,6 +222,20 @@ fn reader_loop(host: String, mut stdout: BufReader<ChildStdout>, pending: Pendin
                         },
                     );
                 }
+            } else if ev == "searchMatch" || ev == "searchDone" {
+                // 流式搜索:把整条 payload(含 sid/rows/count/hitLimit)转发给前端,附上 host。
+                if let Some(app) = APP.get() {
+                    let mut payload = v.clone();
+                    if let Some(obj) = payload.as_object_mut() {
+                        obj.insert("host".into(), Value::String(host.clone()));
+                    }
+                    let topic = if ev == "searchMatch" {
+                        "remote-search-match"
+                    } else {
+                        "remote-search-done"
+                    };
+                    let _ = app.emit(topic, payload);
+                }
             }
             continue;
         }
@@ -380,11 +394,25 @@ fn call_on_lane_timeout(
     args: Value,
     timeout: Duration,
 ) -> Result<Value, String> {
+    call_on_lane_opts(host, lane, op, args, timeout, true)
+}
+
+/// 同上,但可关闭"会话错误后重连重试"。搜索这类**只读且可能很慢**的查询应关掉重试:
+/// 超时重跑同一个慢 grep 只会雪上加霜(~2 倍耗时 + 远端孤儿进程),应直接返回让前端结束 loading。
+fn call_on_lane_opts(
+    host: &str,
+    lane: RpcLane,
+    op: &str,
+    args: Value,
+    timeout: Duration,
+    retry: bool,
+) -> Result<Value, String> {
     if !agent_enabled() {
         return Err("agent disabled".into());
     }
     let handle = host_handle_for(host, lane);
-    for attempt in 0..2 {
+    let max_attempts = if retry { 2 } else { 1 };
+    for attempt in 0..max_attempts {
         let endpoint = {
             let mut guard = handle.lock().unwrap_or_else(|e| e.into_inner());
             if guard.is_none() {
@@ -401,9 +429,9 @@ fn call_on_lane_timeout(
             Err(e) => {
                 // 会话级失败(EOF/超时/IO)→ 丢弃重连;业务错(ok:false)→ 直接返回
                 if is_session_error(&e) {
-                    eprintln!("[agent] session dropped on '{op}' ({host}): {e} — will respawn");
+                    eprintln!("[agent] session dropped on '{op}' ({host}): {e}");
                     clear_session_if_current(&handle, endpoint.gen);
-                    if attempt == 1 {
+                    if attempt + 1 >= max_attempts {
                         return Err("agent 会话不可用".into());
                     }
                     continue;
@@ -413,6 +441,36 @@ fn call_on_lane_timeout(
         }
     }
     unreachable!()
+}
+
+/// 后台 RPC,超时后**不重连重试**。给搜索等只读慢查询用。
+pub fn call_background_no_retry(
+    host: &str,
+    op: &str,
+    args: Value,
+    timeout: Duration,
+) -> Result<Value, String> {
+    call_on_lane_opts(host, RpcLane::Background, op, args, timeout, false)
+}
+
+/// 发起一次**流式搜索**(grep_stream):立即返回,结果经 remote-search-match/done 事件流式回前端。
+/// 在后台线程跑那条会阻塞到 searchDone(~≤20s)的 RPC,所以这里 fire-and-forget。
+pub fn grep_stream_start(host: &str, args: Value) {
+    let host = host.to_string();
+    std::thread::spawn(move || {
+        // 用不重试 + 略大于 helper 内部 20s 的超时;结果已通过事件推送,这里只为驱动/收尾。
+        let _ = call_background_no_retry(&host, "grep_stream", args, Duration::from_secs(25));
+    });
+}
+
+/// 取消进行中的流式搜索(kill 远端子进程)。短超时,失败忽略。
+pub fn search_cancel(host: &str, sid: &str) {
+    let _ = call_background_no_retry(
+        host,
+        "search_cancel",
+        json!({ "sid": sid }),
+        Duration::from_secs(5),
+    );
 }
 
 /// 预热某 host 的 RPC agent。成功返回时,远端 Python agent 已部署、启动并握手完成。

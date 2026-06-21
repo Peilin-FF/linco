@@ -31,8 +31,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde_json::json;
 use tauri::{AppHandle, Emitter};
 
-/// 并发 worker 数(同时进行的 scp 路数)。FileZilla 默认也在 2~10 之间。
-const WORKERS: usize = 4;
+/// 并发 worker 数(同时进行的 scp 路数)。FileZilla 风格的多路并行,默认 8。
+const WORKERS: usize = 8;
 /// 一次 mkdir -p 批量创建的远端目录上限(避免命令行过长)。
 const MKDIR_CHUNK: usize = 80;
 
@@ -438,10 +438,12 @@ fn scp_one(dir: Direction, host: &str, item: &Item) -> Result<(), String> {
     match dir {
         Direction::Upload => {
             c.arg(&item.src);
-            c.arg(format!("{host}:{}", shq(&item.dst)));
+            // 远端路径作为单个 argv 传给 scp,不能 shell 引号:
+            // OpenSSH 9+ 默认走 SFTP 协议,远端路径不经 shell 解析,加引号会变字面字符 → No such file。
+            c.arg(format!("{host}:{}", item.dst));
         }
         Direction::Download => {
-            c.arg(format!("{host}:{}", shq(&item.src)));
+            c.arg(format!("{host}:{}", item.src));
             c.arg(&item.dst);
         }
     }

@@ -359,3 +359,53 @@ fn replace_in_file_blocking(
     fs::write(Path::new(&path), replaced.as_ref()).map_err(|e| e.to_string())?;
     Ok(count)
 }
+
+// ============ 流式搜索(远程,借鉴 VS Code 边搜边返回)============
+//
+// 远程大仓库用一问一答的 search_content 会"搜完才返回"→ 卡死。改为:
+// 前端生成 sid,调 search_content_stream 立即返回;结果经 remote-search-match/done 事件
+// 分批流式到达。行内匹配区间(ranges)由前端用同一正则即时计算(减少往返)。
+// 仅远程走流式;本地搜索秒出,继续用 search_content。
+
+/// 发起一次远程流式搜索。立即返回;匹配经事件流式回前端。
+#[tauri::command]
+pub async fn search_content_stream(
+    sid: String,
+    root: String,
+    query: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    is_regex: bool,
+    host: String,
+) -> Result<(), String> {
+    if host.is_empty() {
+        return Err("流式搜索仅用于远程".into());
+    }
+    // whole_word 在远端用正则边界实现(grep -E),与现有远程语义一致:regex||whole_word
+    let use_regex = is_regex || whole_word;
+    let pattern = if whole_word && !is_regex {
+        format!("\\b{}\\b", regex::escape(&query))
+    } else {
+        query
+    };
+    crate::agent_rpc::grep_stream_start(
+        &host,
+        serde_json::json!({
+            "sid": sid,
+            "root": root,
+            "pattern": pattern,
+            "case_sensitive": case_sensitive,
+            "is_regex": use_regex,
+        }),
+    );
+    Ok(())
+}
+
+/// 取消进行中的远程流式搜索。
+#[tauri::command]
+pub async fn search_cancel(sid: String, host: String) -> Result<(), String> {
+    if !host.is_empty() {
+        crate::agent_rpc::search_cancel(&host, &sid);
+    }
+    Ok(())
+}

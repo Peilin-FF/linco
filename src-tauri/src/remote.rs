@@ -946,10 +946,13 @@ pub fn grep_content(
     case_sensitive: bool,
     is_regex: bool,
 ) -> Result<Vec<(String, usize, String)>, String> {
-    if let Ok(v) = crate::agent_rpc::call_background(
+    // 搜索是只读慢查询:用不重试的调用 + 略大于 helper 内部 20s 的超时(让 Python 先返回部分结果),
+    // 超时也直接返回、不重连重跑(重跑只会更慢、更堆远端孤儿进程)。
+    if let Ok(v) = crate::agent_rpc::call_background_no_retry(
         host,
         "grep",
         serde_json::json!({ "root": root, "pattern": pattern, "case_sensitive": case_sensitive, "is_regex": is_regex }),
+        std::time::Duration::from_secs(25),
     ) {
         if let Some(arr) = v.get("matches").and_then(|x| x.as_array()) {
             return Ok(arr

@@ -17,6 +17,11 @@ import { startDragOut, markInternalDrag, clearInternalDrag } from '@/lib/transfe
 import {
   replaceInFile,
   searchContent,
+  searchContentStream,
+  searchCancel,
+  listenSearch,
+  buildMatchRegex,
+  rangesFor,
   type FileMatches,
   type SearchOptions
 } from '@/lib/search'
@@ -364,6 +369,10 @@ export default function FileTree({
   const [results, setResults] = useState<FileMatches[] | null>(null)
   const [searching, setSearching] = useState(false)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // 流式搜索:当前搜索 ID(每次新搜索自增,旧 sid 的事件直接丢弃防串台)
+  const searchSid = useRef(0)
+  // 手动重跑搜索的触发器(替换后刷新结果);变化即重新执行搜索 effect
+  const [searchNonce, setSearchNonce] = useState(0)
 
   const totalMatches = results?.reduce((n, f) => n + f.matches.length, 0) ?? 0
 
@@ -393,7 +402,8 @@ export default function FileTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
 
-  // 内容搜索:防抖 300ms + 竞态保护
+  // 内容搜索:防抖 300ms + 竞态保护。
+  // 本地:一问一答 searchContent(秒出)。远程:流式 searchContentStream(边搜边返回)。
   useEffect(() => {
     const q = query
     if (!q) {
@@ -403,18 +413,76 @@ export default function FileTree({
     }
     let canceled = false
     setSearching(true)
-    const t = setTimeout(() => {
-      searchContent(root, q, opts, host)
-        .then((r) => !canceled && setResults(r))
-        .catch(() => !canceled && setResults([]))
-        .finally(() => !canceled && setSearching(false))
-    }, 300)
+
+    // —— 本地:维持原有一问一答 ——
+    if (!host) {
+      const t = setTimeout(() => {
+        searchContent(root, q, opts, host)
+          .then((r) => !canceled && setResults(r))
+          .catch(() => !canceled && setResults([]))
+          .finally(() => !canceled && setSearching(false))
+      }, 300)
+      return () => {
+        canceled = true
+        clearTimeout(t)
+      }
+    }
+
+    // —— 远程:流式 ——
+    const mySid = String(++searchSid.current)
+    const re = buildMatchRegex(q, opts)
+    if (!re) {
+      // 非法正则:不发起,清空
+      setResults([])
+      setSearching(false)
+      return
+    }
+    setResults([]) // 新搜索从空开始,逐批 append
+    // 按文件聚合的可变索引(path -> FileMatches),逐批合并后整体 setResults
+    const byPath = new Map<string, FileMatches>()
+    let un: (() => void) | undefined
+    let timer: number | undefined
+
+    const start = async (): Promise<void> => {
+      un = await listenSearch(
+        (e) => {
+          if (canceled || e.sid !== mySid) return // 串台/过期 丢弃
+          let changed = false
+          for (const [path, line, text] of e.rows) {
+            const ranges = rangesFor(text, re)
+            if (ranges.length === 0) continue
+            const ml = { line, text: text.slice(0, 400), ranges }
+            const f = byPath.get(path)
+            if (f) f.matches.push(ml)
+            else byPath.set(path, { path, matches: [ml] })
+            changed = true
+          }
+          if (changed) setResults(Array.from(byPath.values()))
+        },
+        (e) => {
+          if (canceled || e.sid !== mySid) return
+          setSearching(false)
+        }
+      )
+      if (canceled) {
+        un?.()
+        return
+      }
+      searchContentStream(mySid, root, q, opts, host).catch(
+        () => !canceled && setSearching(false)
+      )
+    }
+
+    timer = window.setTimeout(() => void start(), 300)
     return () => {
       canceled = true
-      clearTimeout(t)
+      if (timer) clearTimeout(timer)
+      un?.()
+      // 通知远端 kill 这次搜索的子进程(防大仓库孤儿 grep)
+      void searchCancel(mySid, host).catch(() => {})
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, opts, root, host])
+  }, [query, opts, root, host, searchNonce])
 
   const toggleCollapse = (path: string): void => {
     setCollapsed((prev) => {
@@ -427,12 +495,8 @@ export default function FileTree({
 
   const rerun = async (): Promise<void> => {
     if (!query) return
-    setSearching(true)
-    try {
-      setResults(await searchContent(root, query, opts, host))
-    } finally {
-      setSearching(false)
-    }
+    // 重新触发搜索 effect(本地一问一答 / 远程流式 都走同一路径)
+    setSearchNonce((n) => n + 1)
   }
 
   const replaceFile = async (path: string): Promise<void> => {
@@ -617,6 +681,7 @@ export default function FileTree({
             <>
               <div className="px-3 py-1 text-[11px] text-ink-faint">
                 {t('tree.resultSummary', { files: results.length, matches: totalMatches })}
+                {searching ? ' · …' : ''}
               </div>
               {results.map((f) => {
                 const isCol = collapsed.has(f.path)

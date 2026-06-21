@@ -181,29 +181,191 @@ def op_search_files(a):
     return {"entries": out}
 
 
-def op_grep(a):
-    # 复用系统 grep(快、稳),结构化解析 path:lineno:text
-    root = a["root"]
-    pattern = a["pattern"]
+def _is_git_repo(root):
+    try:
+        p = subprocess.run(["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return p.returncode == 0 and p.stdout.strip() == b"true"
+    except Exception:
+        return False
+
+
+def _search_proc(root, pattern, case_sensitive, is_regex):
+    # 决定用什么命令搜内容,返回已 spawn 的 Popen(stdout=PIPE,输出 path:lineno:text)。
+    # 策略(借鉴 VS Code,优先快且少噪声):
+    #   1) git 仓库 → `git ls-files -z | xargs -0 grep`,只搜【被 git 跟踪的文件】。
+    #      跳过 .gitignore 的产物/数据/日志(MAS 实测 33s→1s)。与 VS Code 默认一致。
+    #   2) 有 ripgrep → rg(自动遵守 .gitignore、跳二进制/隐藏)。
+    #   3) 否则 → grep -r 全量(排除几个重目录),最后兜底。
+    # 所有路径输出统一为【绝对路径】的 path:lineno:text(与本地搜索一致,前端按绝对路径打开)。
+    if _is_git_repo(root):
+        # git ls-files 出相对路径 → 用 sed 补 root 前缀使绝对;grep -nI 出 path:lineno:text
+        gi = "i" if not case_sensitive else ""
+        gx = "E" if is_regex else "F"
+        # 在 root 内执行:列跟踪文件 → xargs 分批 grep。--no-messages 静默无权限/不存在。
+        sh = (
+            "cd %s && git ls-files -z | "
+            "xargs -0 -r grep -nI%s%s --no-messages -e %s -- 2>/dev/null"
+            % (_shq(root), gi, gx, _shq(pattern))
+        )
+        return subprocess.Popen(["sh", "-c", sh], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, cwd=root), True
+
+    rg = shutil.which("rg")
+    if rg:
+        cmd = [rg, "--line-number", "--no-heading", "--color", "never",
+               "--max-filesize", "1M", "--max-columns", "2000"]
+        if not case_sensitive:
+            cmd.append("-i")
+        if not is_regex:
+            cmd.append("-F")
+        for d in (".git", "node_modules", "target", "__pycache__", ".venv"):
+            cmd += ["-g", "!%s" % d]
+        cmd += ["-e", pattern, root]
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL), False
+
     flags = "-rnI"
-    if not a.get("case_sensitive"):
+    if not case_sensitive:
         flags += "i"
-    flags += "E" if a.get("is_regex") else "F"
+    flags += "E" if is_regex else "F"
     cmd = ["grep", flags,
            "--exclude-dir=.git", "--exclude-dir=node_modules",
            "--exclude-dir=target", "--exclude-dir=__pycache__", "--exclude-dir=.venv",
            "-e", pattern, root]
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL), False
+
+
+def _shq(s):
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def _parse_grep_line(line, root, relative):
+    # "path:lineno:text" → [abs_path, lineno, text];relative 时给 path 补 root 前缀
+    parts = line.split(":", 2)
+    if len(parts) == 3 and parts[1].isdigit():
+        path = parts[0]
+        if relative:
+            path = root.rstrip("/") + "/" + path
+        return [path, int(parts[1]), parts[2]]
+    return None
+
+
+def op_grep(a):
+    # 非流式内容搜索(保留:兼容旧调用)。一次性返回 matches 数组。
+    root = a["root"]; pattern = a["pattern"]
+    cs = bool(a.get("case_sensitive")); rx = bool(a.get("is_regex"))
+    limit = int(a.get("limit") or 3000); timeout_s = float(a.get("timeout") or 20)
+    results = []
+    deadline = time.time() + timeout_s
+    p = None
+    relative = False
     try:
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        text = p.stdout.decode("utf-8", "replace")
+        p, relative = _search_proc(root, pattern, cs, rx)
+        for raw in iter(p.stdout.readline, b""):
+            if time.time() > deadline:
+                break
+            row = _parse_grep_line(raw.decode("utf-8", "replace").rstrip("\n"), root, relative)
+            if row is not None:
+                results.append(row)
+                if len(results) >= limit:
+                    break
     except Exception as e:
         raise ValueError("grep 失败: %s" % e)
-    results = []
-    for line in text.splitlines()[:3000]:
-        parts = line.split(":", 2)
-        if len(parts) == 3 and parts[1].isdigit():
-            results.append([parts[0], int(parts[1]), parts[2]])
+    finally:
+        _reap(p)
     return {"matches": results}
+
+
+# 进行中的流式搜索:sid -> Popen(供取消)
+_search_procs = {}
+_search_lock = threading.Lock()
+
+
+def _reap(p):
+    if p is None:
+        return
+    for fn in (lambda: p.kill(), lambda: p.stdout.close(), lambda: p.wait(timeout=2)):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+def op_grep_stream(a, rid):
+    # 流式内容搜索(借鉴 VS Code 边搜边返回)。自开线程跑,不占 RPC worker 池;
+    # 边读子进程输出边按批 emit,结束用 rid 回 RPC 响应关闭这次调用。
+    t = threading.Thread(target=_grep_stream_run, args=(a, rid),
+                         name="linco-search", daemon=True)
+    t.start()
+
+
+def _grep_stream_run(a, rid):
+    #   - event "searchMatch" {sid, rows:[[path,lineno,text],...]}  分批推
+    #   - event "searchDone"  {sid, count, hitLimit}                结束
+    #   - 最后用 rid 回一个 RPC 响应(ok)关闭这次调用
+    # 提前停止:达 limit 立即 kill;到 timeout 也停。sid 用于前端关联 + 取消。
+    root = a["root"]; pattern = a["pattern"]
+    cs = bool(a.get("case_sensitive")); rx = bool(a.get("is_regex"))
+    limit = int(a.get("limit") or 3000); timeout_s = float(a.get("timeout") or 20)
+    sid = a.get("sid")
+    if not pattern:
+        _send({"event": "searchDone", "sid": sid, "count": 0, "hitLimit": False})
+        _send({"id": rid, "ok": True, "result": {"sid": sid}})
+        return
+
+    count = 0
+    hit_limit = False
+    deadline = time.time() + timeout_s
+    batch = []
+    last_flush = time.time()
+    p = None
+    relative = False
+    try:
+        p, relative = _search_proc(root, pattern, cs, rx)
+        with _search_lock:
+            _search_procs[sid] = p
+        for raw in iter(p.stdout.readline, b""):
+            now = time.time()
+            if now > deadline:
+                break
+            row = _parse_grep_line(raw.decode("utf-8", "replace").rstrip("\n"), root, relative)
+            if row is None:
+                continue
+            batch.append(row)
+            count += 1
+            # 攒够 50 条 或 距上次推 >120ms 就 flush 一批(避免每条一个 event)
+            if len(batch) >= 50 or (now - last_flush) > 0.12:
+                _send({"event": "searchMatch", "sid": sid, "rows": batch})
+                batch = []
+                last_flush = now
+            if count >= limit:
+                hit_limit = True
+                break
+    except Exception:
+        pass  # 流式搜索不抛错:已推的结果有效,末尾照常发 searchDone
+    finally:
+        if batch:
+            _send({"event": "searchMatch", "sid": sid, "rows": batch})
+        with _search_lock:
+            _search_procs.pop(sid, None)
+        _reap(p)
+    _send({"event": "searchDone", "sid": sid, "count": count, "hitLimit": hit_limit})
+    _send({"id": rid, "ok": True, "result": {"sid": sid, "count": count}})
+
+
+def op_search_cancel(a):
+    # 取消进行中的流式搜索(kill 其子进程)
+    sid = a.get("sid")
+    with _search_lock:
+        p = _search_procs.get(sid)
+    if p is not None:
+        try:
+            p.kill()
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 def op_git(a):
@@ -986,6 +1148,7 @@ OPS = {
     "rename": op_rename, "delete": op_delete,
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
+    "search_cancel": op_search_cancel,
     "git": op_git, "shell": op_shell, "ps": op_ps,
     "shadow_begin": op_shadow_begin,
     "shadow_changed": op_shadow_changed,
@@ -1007,6 +1170,10 @@ def _handle(req):
         return
     if op == "unwatch":
         op_unwatch(args, rid)
+        return
+    if op == "grep_stream":
+        # 流式搜索:自行用 rid 在结束时回 RPC 响应,中途用 event 推批次
+        op_grep_stream(args, rid)
         return
     fn = OPS.get(op)
     if fn is None:

@@ -83,6 +83,8 @@ pub fn run() {
             fs::fs_move,
             fs::fs_search,
             search::search_content,
+            search::search_content_stream,
+            search::search_cancel,
             search::replace_in_file,
             git::git_is_repo,
             git::git_status,
