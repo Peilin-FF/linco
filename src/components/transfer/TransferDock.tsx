@@ -15,6 +15,7 @@
 //      否则忽略本次 drop —— 杜绝“文件视图没激活也把文件塞进某目录”。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { X, ArrowUp, ArrowDown, Loader2, Check, AlertCircle } from 'lucide-react'
 import {
   listenTransfer,
@@ -47,20 +48,37 @@ function isVisiblyInteractable(el: Element): boolean {
   return true
 }
 
+// 平台判定(沿用 TerminalView 的方式,零依赖)。
+const IS_WINDOWS = navigator.platform.toLowerCase().includes('win')
+
+// 窗口真实缩放系数(getCurrentWindow().scaleFactor())。Windows 上 onDragDropEvent
+// 的坐标是【物理设备像素】,需 ÷scaleFactor 转 CSS 像素;mac 给的已是逻辑像素无需转。
+// 缓存它,并在窗口可能跨屏移动后刷新。
+let cachedScaleFactor = window.devicePixelRatio || 1
+function refreshScaleFactor(): void {
+  getCurrentWindow()
+    .scaleFactor()
+    .then((sf) => {
+      if (sf > 0) cachedScaleFactor = sf
+    })
+    .catch(() => {})
+}
+
 /**
  * 把 Tauri onDragDropEvent 的坐标转成 elementFromPoint/getBoundingClientRect 用的 CSS 像素。
  *
- * 实测(macOS, DPR=2):Tauri v2 在本环境给的就是 **CSS 逻辑像素**(phys.y=501 直接落在
- * 视口 0..832 内、正确命中空白处=根)。之前 ÷DPR 反而把 501 变成 250,误命中顶部文件夹行——
- * 这正是"拖到空白却进 src/docs"的根因。
- * 因此默认**不除以 DPR**;仅当坐标超出逻辑视口(说明该环境给的是物理像素)才回退 ÷DPR。
+ * 依据 wry 0.55 源码,坐标来源因平台而异:
+ *   - macOS(wkwebview/drag_drop.rs):position 来自 NSPoint draggingLocation(),是 **逻辑** AppKit 点 → 直接用。
+ *     (实测印证:DPR=2 时 phys.y=501 落在窗口逻辑高 832 内,而非物理的 ~1002。)
+ *   - Windows(webview2/drag_drop.rs):position 来自 ScreenToClient,是 **物理** 设备像素 → ÷scaleFactor。
+ * 用 Tauri 官方 scaleFactor(权威)而非猜 devicePixelRatio,确保 125%/150% 缩放、外接屏也准。
  */
 function toCssPoint(physX: number, physY: number): { x: number; y: number } {
-  const dpr = window.devicePixelRatio || 1
-  if (physX > window.innerWidth || physY > window.innerHeight) {
-    return { x: physX / dpr, y: physY / dpr } // 超出逻辑视口 → 判定为物理像素
+  if (IS_WINDOWS) {
+    const sf = cachedScaleFactor || 1
+    return { x: physX / sf, y: physY / sf }
   }
-  return { x: physX, y: physY } // 已是逻辑像素(本环境)
+  return { x: physX, y: physY } // macOS/Linux:已是逻辑像素
 }
 /**
  * 命中文件树的投放目标(FileZilla / VSCode 规则,rect 命中而非 elementFromPoint)。
@@ -226,6 +244,7 @@ export function useTransfers(): UseTransfers {
   // 全局拖入处理(OS 文件 → 文件树目标目录)
   useEffect(() => {
     prewarmDrag() // 预热拖出插件,首次本地拖出更跟手
+    if (IS_WINDOWS) refreshScaleFactor() // Windows 需用真实 scaleFactor 换算拖放坐标
     let un: (() => void) | undefined
     let dead = false
     getCurrentWebview()
