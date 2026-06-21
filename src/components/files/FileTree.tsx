@@ -596,6 +596,7 @@ export default function FileTree({
       {/* 结果(有 query)/ 文件树(无 query) */}
       <div
         className="min-h-0 flex-1 overflow-auto pb-1"
+        data-drop-root=""
         data-drop-dir={root}
         data-drop-host={host || ''}
         onContextMenu={(e) => {

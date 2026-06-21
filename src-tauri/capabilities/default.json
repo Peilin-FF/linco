@@ -8,6 +8,8 @@
     "core:window:allow-start-dragging",
     "shell:default",
     "dialog:default",
+    "dialog:allow-confirm",
+    "dialog:allow-ask",
     "updater:default",
     "process:default",
     "clipboard-manager:allow-read-text",

@@ -47,22 +47,60 @@ function isVisiblyInteractable(el: Element): boolean {
   return true
 }
 
-/** 从物理坐标命中文件树里的目标目录(FileZilla 规则 + 可见性校验)。 */
-function hitTest(physX: number, physY: number): DropTarget | null {
+/**
+ * 把 Tauri onDragDropEvent 的坐标转成 elementFromPoint/getBoundingClientRect 用的 CSS 像素。
+ *
+ * 实测(macOS, DPR=2):Tauri v2 在本环境给的就是 **CSS 逻辑像素**(phys.y=501 直接落在
+ * 视口 0..832 内、正确命中空白处=根)。之前 ÷DPR 反而把 501 变成 250,误命中顶部文件夹行——
+ * 这正是"拖到空白却进 src/docs"的根因。
+ * 因此默认**不除以 DPR**;仅当坐标超出逻辑视口(说明该环境给的是物理像素)才回退 ÷DPR。
+ */
+function toCssPoint(physX: number, physY: number): { x: number; y: number } {
   const dpr = window.devicePixelRatio || 1
-  const x = physX / dpr
-  const y = physY / dpr
-  const el = document.elementFromPoint(x, y)
-  if (!el) return null
-  // 命中点必须属于当前可见的视图,否则不处理(防止塞进隐藏的文件树)
-  if (!isVisiblyInteractable(el)) return null
-  const node = el.closest('[data-drop-dir]') as HTMLElement | null
-  if (!node) return null
-  // 命中的 drop 容器本身也必须可见
-  if (!isVisiblyInteractable(node)) return null
-  const dir = node.getAttribute('data-drop-dir') || ''
-  if (!dir) return null
-  return { dir, host: node.getAttribute('data-drop-host') || '' }
+  if (physX > window.innerWidth || physY > window.innerHeight) {
+    return { x: physX / dpr, y: physY / dpr } // 超出逻辑视口 → 判定为物理像素
+  }
+  return { x: physX, y: physY } // 已是逻辑像素(本环境)
+}
+/**
+ * 命中文件树的投放目标(FileZilla / VSCode 规则,rect 命中而非 elementFromPoint)。
+ * 坐标用 toCssPoint 归一化(本环境 Tauri 给的就是 CSS 像素,不再误除 DPR)。
+ *   1) 找当前【可见】的文件树根容器(data-drop-root);光标不在其内 → 返回 null(不误塞)。
+ *   2) 在文件夹行中找 rect 真正包含光标的 → 进该文件夹。
+ *   3) 否则(空白/文件行/表头)→ 进根目录。
+ */
+function hitTest(physX: number, physY: number): DropTarget | null {
+  const { x, y } = toCssPoint(physX, physY)
+
+  // 1) 可见的文件树根容器(兜底=根目录)
+  const roots = Array.from(
+    document.querySelectorAll('[data-drop-root]')
+  ) as HTMLElement[]
+  const root = roots.find((r) => {
+    if (!isVisiblyInteractable(r)) return false
+    const b = r.getBoundingClientRect()
+    return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom
+  })
+  if (!root) return null // 光标不在任何可见文件树内 → 不处理(不会误塞)
+  const host = root.getAttribute('data-drop-host') || ''
+  const rootDir = root.getAttribute('data-drop-dir') || ''
+
+  // 2) 在该根容器内的文件夹行中,找 rect 真正包含光标的
+  const rows = Array.from(
+    root.querySelectorAll('[data-drop-dir]')
+  ) as HTMLElement[]
+  for (const row of rows) {
+    if (row === root) continue
+    const b = row.getBoundingClientRect()
+    if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) {
+      const dir = row.getAttribute('data-drop-dir') || ''
+      if (dir) return { dir, host: row.getAttribute('data-drop-host') || host }
+    }
+  }
+
+  // 3) 没命中任何文件夹行 → 根目录(FileZilla:拖到非文件夹处=当前目录)
+  if (!rootDir) return null
+  return { dir: rootDir, host }
 }
 
 export interface UseTransfers {

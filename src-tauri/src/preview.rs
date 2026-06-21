@@ -197,9 +197,9 @@ fn preview_default_target_blocking(host: Option<String>, root: String) -> Result
                 return Ok(c.to_string());
             }
         }
-        // 最新 *.html(GNU find,集群是 Linux)
+        // 最新 *.html(GNU find,集群是 Linux)。-L 跟随软链(artifacts 常是软链目录)。
         let cmd = format!(
-            "find {} -maxdepth 3 -name '*.html' -not -path '*/node_modules/*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -1",
+            "find -L {} -maxdepth 3 -name '*.html' -not -path '*/node_modules/*' -printf '%T@ %p\\n' 2>/dev/null | sort -rn | head -1",
             crate::remote::shq(&root)
         );
         let out = crate::remote::preview_run_remote(h, &cmd)
@@ -372,9 +372,11 @@ if(a){{e.preventDefault();try{{parent.postMessage({{__lincoNav:a.getAttribute('h
 fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(h) = host.as_deref() {
-        // 远程:find(经持久会话);跳过噪声目录
+        // 远程:find(经持久会话);跳过噪声目录。
+        // -L:跟随符号链接 —— 产物目录常是 `artifacts -> ../artifacts` 这类软链,
+        // 不加 -L 的 find 不会进入软链目录,会导致产物列表为空。
         let cmd = format!(
-            "find {} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500",
+            "find -L {} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500",
             crate::remote::shq(base)
         );
         if let Ok(b) = crate::remote::preview_run_remote(h, &cmd) {
@@ -408,7 +410,9 @@ fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
             };
             for e in rd.flatten() {
                 let p = e.path();
-                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                // 用 p.is_dir()(跟随软链)而非 file_type()(软链报 false),
+                // 这样 `artifacts -> ../artifacts` 这类软链目录也会被进入扫描。
+                if p.is_dir() {
                     let n = e.file_name().to_string_lossy().to_string();
                     if !SKIP.contains(&n.as_str()) {
                         stack.push((p, depth + 1));
@@ -549,7 +553,6 @@ fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
         Some(p) => p,
         None => return err("path escapes root"),
     };
-    eprintln!("[__save] root={root:?} rel={rel:?} abs={abs:?} host={host:?}");
 
     // 算出要写入的内容
     let out: String = if let Some(seed) = payload.get("seed") {
@@ -809,17 +812,14 @@ fn newest_local_html(root: &str) -> Option<String> {
         };
         for e in rd.flatten() {
             let p = e.path();
-            let ft = match e.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            if ft.is_dir() {
+            // p.is_dir() 跟随软链,使 `artifacts -> ../artifacts` 这类软链目录也被遍历。
+            if p.is_dir() {
                 let name = e.file_name().to_string_lossy().to_string();
                 if !SKIP.contains(&name.as_str()) {
                     stack.push((p, depth + 1));
                 }
             } else if p.extension().and_then(|x| x.to_str()) == Some("html") {
-                if let Ok(m) = e.metadata().and_then(|md| md.modified()) {
+                if let Ok(m) = std::fs::metadata(&p).and_then(|md| md.modified()) {
                     if best.as_ref().map(|(t, _)| m > *t).unwrap_or(true) {
                         best = Some((m, p));
                     }
