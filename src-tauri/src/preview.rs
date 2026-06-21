@@ -75,9 +75,9 @@ pub fn preview_start(app: AppHandle) -> Result<u16, String> {
 
     let server =
         tiny_http::Server::http("127.0.0.1:0").map_err(|e| format!("启动预览服务器失败: {e}"))?;
-    let port = match server.server_addr() {
-        tiny_http::ListenAddr::IP(a) => a.port(),
-        _ => return Err("无法获取预览端口".into()),
+    let port = match server.server_addr().to_ip() {
+        Some(a) => a.port(),
+        None => return Err("无法获取预览端口".into()),
     };
     {
         let mut inner = cell.lock().map_err(|e| e.to_string())?;

@@ -11,6 +11,8 @@
 // ps 字段 `pid,ppid,etime,pcpu,pmem,stat,args` 在 macOS BSD 与 Linux GNU 输出列一致。
 
 use std::collections::HashMap;
+// Command 仅在非 Windows 用到(ps/lsof);Windows 走 sysinfo,不起子进程。
+#[cfg(not(windows))]
 use std::process::Command;
 
 use base64::engine::general_purpose::STANDARD as B64;
