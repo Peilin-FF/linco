@@ -200,19 +200,17 @@ pub async fn fs_rename(
     .await
 }
 
-/// 删除文件或文件夹(文件夹递归删除)。
+/// 删除文件或文件夹。
+/// 本地:移入**系统垃圾篓**(macOS 废纸篓 / Windows 回收站),误删可还原,绝不永久抹除。
+/// 远程:无垃圾篓,仍走 rm -rf(远端 Linux)。
 #[tauri::command]
 pub async fn fs_delete(path: String, host: Option<String>) -> Result<(), String> {
     crate::blocking::run(move || {
         if let Some(h) = host.filter(|s| !s.is_empty()) {
             return crate::remote::delete(&h, &path);
         }
-        let p = Path::new(&path);
-        if p.is_dir() {
-            fs::remove_dir_all(p).map_err(|e| e.to_string())
-        } else {
-            fs::remove_file(p).map_err(|e| e.to_string())
-        }
+        // 移入系统垃圾篓而非永久删除——一次失误也能从废纸篓/回收站还原。
+        trash::delete(&path).map_err(|e| format!("移入垃圾篓失败: {e}"))
     })
     .await
 }

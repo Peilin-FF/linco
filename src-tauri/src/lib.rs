@@ -20,6 +20,7 @@ mod search;
 mod sessions;
 mod shadow;
 mod terminal;
+mod transfer;
 mod usage;
 mod watch;
 
@@ -36,6 +37,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
@@ -121,6 +123,9 @@ pub fn run() {
             procs::tail_file,
             sessions::agent_sessions,
             sessions::agent_session_delete,
+            transfer::transfer_upload,
+            transfer::transfer_download,
+            transfer::transfer_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Linco");

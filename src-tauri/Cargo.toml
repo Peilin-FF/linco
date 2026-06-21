@@ -29,3 +29,7 @@ reqwest = { version = "0.13.4", features = ["json", "blocking"] }
 # 避免 ps/lsof 不存在 + 每次轮询闪黑窗。Mac/Linux 仍走原 ps/lsof 路径。
 sysinfo = "0.39"
 tauri-plugin-clipboard-manager = "2.3.2"
+# 拖出(从 app 拖文件到 Finder/资源管理器):本地文件原生拖拽。Mac/Windows 都支持。
+tauri-plugin-drag = "2"
+# 删除走系统垃圾篓(macOS 废纸篓 / Windows 回收站),误删可还原,不永久抹除。
+trash = "5"

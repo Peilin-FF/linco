@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件传输功能 · 完成报告</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成并保存 · Ctrl+S 保存 · 拖 ⠿ 重排</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<script id="seed" type="application/json">
+[
+  {
+    "html": "<div class=\"eyebrow\">完成报告 · FILE TRANSFER + WINDOWS FIXES</div><h1>文件拖拽互传 · 已实现(Dev)</h1><p class=\"lede\">跨平台并行 SFTP 拖拽互传已落地并通过全部检查:<b>tsc 0 错 · vite 构建通过 · cargo 构建通过 · 71 项测试全绿</b>(含 5 项新传输测试)。另按你的新需求,把 Windows 上坏掉的 rsync 插件同步改成了跨平台实现。下面是改了什么、怎么测、边界在哪。</p><div class=\"summary-band\"><div><span class=\"k\">新增功能</span>拖入 / 拖出 / 并行引擎 / 进度坞</div><div><span class=\"k\">新需求</span>rsync→tar 管道(Win 可用)</div><div><span class=\"k\">附带</span>Shift+Enter 自动保存</div><div><span class=\"k\">状态</span>仅 Dev,未发布</div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>① 你的新需求:Windows 没有 rsync</h2><div class=\"callout rec\"><div class=\"callout-h\">已修复</div><code>plugins.rs</code> 里 3 处 <code>rsync -a --delete</code>(插件/skill 同步到远端)在 Windows 上根本跑不起来。改成跨平台 <b>tar 管道</b>:远端先 <code>rm -rf &amp;&amp; mkdir -p</code>(等价 --delete 镜像),再本地 <code>tar -C 目录 -cf - .</code> 通过 ssh stdin 灌到远端 <code>tar -xf -</code>。只用 tar+ssh,Mac/Windows 都自带,镜像语义与原 rsync 一致。统一收敛到一个 <code>tar_pipe_to_remote()</code> helper,三处复用。</div><div class=\"callout olive\"><b>git 配置已审计,无需改</b>:<code>git.rs</code> 本就跨平台 —— 本地探测用纯 Rust 的 reqwest(带代理),远端探测用 ssh 上的 curl;凭据写入用 git CLI + <code>home_dir()</code>(认 USERPROFILE),chmod 600 已 <code>#[cfg(unix)]</code> 正确门控(Windows 跳过不影响写入)。三处本地 Command 都已 <code>no_window</code> 包裹,不闪黑窗。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>② 拖入:桌面 → app 文件夹</h2><div class=\"grid col-2\"><div class=\"card\"><b>机制</b><p>Tauri2 原生 <code>onDragDropEvent</code> 拿到真实绝对路径 + 落点坐标。落点物理坐标 ÷ devicePixelRatio → <code>elementFromPoint</code> 命中带 <code>data-drop-dir/-host</code> 的目录行,得到目标 (目录, host)。</p></div><div class=\"card\"><b>四种落地</b><p>本地目标 → 本地复制(<code>fs_copy</code>);远程目标 → 并行上传(<code>transfer_upload</code>)。拖动时目标行高亮;落地后本地由 fs 监听自动刷新文件树,远程由上传完成事件驱动。</p></div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>③ 拖出:app → 桌面</h2><div class=\"grid col-2\"><div class=\"card\"><b>本地文件 = 真·拖拽</b><p><code>onDragStart</code> 调 <code>tauri-plugin-drag</code> 的 <code>startDrag</code>,直接拖到 Finder/资源管理器(已预热模块,首次也跟手)。Mac/Windows 都原生支持。</p></div><div class=\"card\"><b>远程文件 = 下载到本机</b><p>右键「下载到本机」→ 系统文件夹选择器 → 并行 SFTP 下载到所选目录 → 进度坞。跨平台、可靠。</p></div></div><div class=\"callout\"><b>智能区分落点(你选的方案)</b>:本地文件拖拽会同时发起原生拖出;若拖回 app 内某文件夹,用「内部拖拽标志」识别为<b>移动</b>(而非从外部导入复制),拖到桌面则原生拖出。远程内部移动仍走原有 HTML5 拖拽路径,互不冲突。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>④ 并行引擎 + 进度坞</h2><div class=\"grid col-2\"><div class=\"card\"><b>FileZilla 式并行</b><p><code>transfer.rs</code>:一次传输=一个 job,先扫描展开成文件清单(本地递归 / 远程 <code>find -printf</code>),再用 <b>4 个 worker 并发</b> scp 取文件传。类 Unix 复用 ControlMaster socket(瞬时);Windows 各自密钥认证(同 FileZilla)。认证全靠 ~/.ssh/config 别名 + 密钥,<code>BatchMode=yes</code> 非交互。</p></div><div class=\"card\"><b>进度坞</b><p>聊天框下方,沿用底部终端坞外观:每个 job 一行(方向图标 + 目标 + 进度条 + 文件/字节计数 + 当前文件),× 可取消。传输开始自动弹出,全部完成后自动收起(成功 2.5s / 有错 8s)。事件:<code>transfer-progress</code> / <code>transfer-done</code>。</p></div></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>⑤ 附带:Shift+Enter 自动保存</h2><div class=\"callout\">按你的要求,notebook 里对 cell 按 <b>Shift+Enter</b> 现在「完成编辑并保存到文件」(之前只渲染不保存)。已改 5 个 notebook.js 副本(被 serve 的 + 4 个 vendor 源),node 语法校验全过。<b>注意</b>:被 serve 的那份是预览服务器进程内缓存,需重启 dev app(或预览服务器)才生效。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>怎么测(Dev)</h2><ol><li>从 Finder 拖文件/文件夹到 app <b>本地</b>目录 → 命中正确目标 → 复制成功(树自动刷新)。</li><li>连远程后,从 Finder 拖到 app <b>远程</b>目录 → 进度坞逐文件推进 → 完成自动关 → 远端 ls 校验。</li><li>从 app 拖<b>本地</b>文件到 Finder → 真·拖拽落地。</li><li>右键 app 内<b>远程</b>文件「下载到本机」→ 选文件夹 → 并行下载 → 进度坞 → 本地校验。</li><li>app 内拖<b>本地</b>文件到另一文件夹 → 应为<b>移动</b>(不是复制)。</li><li>大目录看多路并发是否明显快;× 能中途取消。</li><li>(Windows)插件同步:设置里同步插件到远端,确认不再因无 rsync 失败。</li></ol>",
+    "type": "html"
+  },
+  {
+    "html": "<h2>诚实边界</h2><div class=\"procon\"><div class=\"pros\"><b>已保证</b><ul><li>Mac + Windows 双平台:只用 ssh/scp/sftp/tar,无 rsync 依赖</li><li>不碰你的 SSH/模型/密钥配置,不编译进包、不落盘明文凭据,读 ~/.ssh 而非 ~/.linco</li><li>构建/测试全绿(71 tests),tsc/clippy 无新增告警</li></ul></div><div class=\"cons\"><b>待实测 / 限制</b><ul><li><span class=\"risk-dot med\"></span>原生拖出与拖入的手势交互需在真机实测(你选的智能区分方案)</li><li><span class=\"risk-dot low\"></span>跨主机(远程A→远程B)首版未做</li><li><span class=\"risk-dot med\"></span>需密钥认证(BatchMode);密码型连接无法非交互并行</li><li><span class=\"risk-dot low\"></span>Shift+Enter 自动保存:被 serve 的 notebook.js 需重启 dev/预览才生效</li></ul></div></div><div class=\"callout rec\"><div class=\"callout-h\">下一步</div>在 Dev 里跑一遍上面的测试清单。满意后再发 release(届时会一并带上之前 dev-only 的 paste-twice、plugin PATH 修复)。</div>",
+    "type": "html"
+  }
+]
+</script>
+
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

@@ -11,7 +11,8 @@ import {
   CornerUpLeft,
   Pencil,
   Trash2,
-  Eye
+  Eye,
+  Download
 } from 'lucide-react'
 import { useI18n } from '@/lib/i18n'
 
@@ -26,6 +27,7 @@ export type ContextAction =
   | 'paste'
   | 'copy-path'
   | 'copy-relative-path'
+  | 'download'
   | 'rename'
   | 'delete'
 
@@ -35,6 +37,8 @@ interface ContextMenuProps {
   isDir: boolean
   /** 被右键的条目名(用于按扩展名决定是否显示「预览」) */
   fileName?: string
+  /** 是否远程条目:决定显示「下载到本机」、隐藏「在 Finder 显示」 */
+  remote?: boolean
   canPaste: boolean
   onAction: (action: ContextAction) => void
   onClose: () => void
@@ -49,6 +53,10 @@ interface Item {
   dirOnly?: boolean
   /** 仅对 .html/.htm 文件显示 */
   htmlOnly?: boolean
+  /** 仅远程显示 */
+  remoteOnly?: boolean
+  /** 仅本地显示 */
+  localOnly?: boolean
   disabled?: boolean
   group: number
 }
@@ -58,6 +66,7 @@ export default function ContextMenu({
   y,
   isDir,
   fileName,
+  remote,
   canPaste,
   onAction,
   onClose
@@ -89,7 +98,14 @@ export default function ContextMenu({
       dirOnly: true,
       group: 0
     },
-    { action: 'reveal', labelKey: 'ctx.reveal', icon: FolderSearch, shortcut: '⌥⌘R', group: 1 },
+    { action: 'reveal', labelKey: 'ctx.reveal', icon: FolderSearch, shortcut: '⌥⌘R', localOnly: true, group: 1 },
+    {
+      action: 'download',
+      labelKey: 'ctx.download',
+      icon: Download,
+      remoteOnly: true,
+      group: 1
+    },
     {
       action: 'preview',
       labelKey: 'ctx.preview',
@@ -145,6 +161,8 @@ export default function ContextMenu({
   const visible = items.filter((it) => {
     if (it.dirOnly && !isDir) return false
     if (it.htmlOnly && !isHtml) return false
+    if (it.remoteOnly && !remote) return false
+    if (it.localOnly && remote) return false
     return true
   })
 

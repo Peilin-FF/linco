@@ -13,6 +13,7 @@ import {
   Replace
 } from 'lucide-react'
 import { listDir, prefetchFile, prefetchBytes, type DirEntry } from '@/lib/fs'
+import { startDragOut, markInternalDrag, clearInternalDrag } from '@/lib/transfer'
 import {
   replaceInFile,
   searchContent,
@@ -188,6 +189,16 @@ const Node = memo(function Node({
   const onDragStart = (e: React.DragEvent): void => {
     e.dataTransfer.setData('text/linco-path', entry.path)
     e.dataTransfer.effectAllowed = 'move'
+    // 标记「本轮拖拽源自 app 内」:若拖回 app 内文件夹应当移动,而非当作外部导入。
+    markInternalDrag([entry.path], host || '')
+    if (!host) {
+      // 本地:同步发起原生拖出(可拖到 Finder/资源管理器;失败静默)
+      startDragOut([entry.path])
+    }
+  }
+  const onDragEnd = (): void => {
+    // 拖拽结束(无论落在 app 内还是 Finder)清除内部标志,避免影响下次外部拖入
+    clearInternalDrag()
   }
 
   // 文件夹作为放置目标
@@ -214,7 +225,11 @@ const Node = memo(function Node({
       <div
         ref={rowRef}
         draggable
+        {...(entry.isDir
+          ? { 'data-drop-dir': entry.path, 'data-drop-host': host || '' }
+          : {})}
         onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
         onDragOver={onDragOver}
         onDragLeave={() => dragOver && setDragOver(false)}
         onDrop={onDrop}
@@ -581,6 +596,8 @@ export default function FileTree({
       {/* 结果(有 query)/ 文件树(无 query) */}
       <div
         className="min-h-0 flex-1 overflow-auto pb-1"
+        data-drop-dir={root}
+        data-drop-host={host || ''}
         onContextMenu={(e) => {
           if (e.target === e.currentTarget) {
             e.preventDefault()

@@ -29,6 +29,7 @@ import LanguagePicker from './components/LanguagePicker'
 import UpdatePanel from './components/UpdatePanel'
 import CodeMirrorWarmup from './components/CodeMirrorWarmup'
 import ResizeHandle from './components/ResizeHandle'
+import TransferDock, { useTransfers } from './components/transfer/TransferDock'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import {
   agentExecutable,
@@ -144,6 +145,8 @@ export default function App(): JSX.Element {
   const [dockOpened, setDockOpened] = useState(false)
   const [dockTerminalOpen, setDockTerminalOpen] = useState(false)
   const [dockHeight, setDockHeight] = useState(110) // 可拖拽调整(默认矮)
+  // 文件传输:进度坞 + 拖入(OS 文件拖进文件树目标目录)。jobs 全局,坞在对话框下方。
+  const transfers = useTransfers()
   // 已开过的 dock 终端(每个 连接+项目 一个独立 PTY,常驻挂载、互不干扰)。
   // 修复:固定 id="dock" 只会在首次挂载时读 cwd/host,切到远程后仍停在本机路径。
   const [dockKeys, setDockKeys] = useState<
@@ -1122,6 +1125,7 @@ export default function App(): JSX.Element {
                 onOpenInTerminal={(dir) => newShell(dir)}
                 onPreview={openInPreview}
                 host={host}
+                onDownload={transfers.trackDownload}
               />
             </div>
           )}
@@ -1261,6 +1265,17 @@ export default function App(): JSX.Element {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* 文件传输进度坞:聊天框下方,传输时出现,全部完成后自动收起(借鉴底部终端外观)。 */}
+      {transfers.open && transfers.jobs.length > 0 && (
+        <div className="shrink-0 px-1.5 pb-1.5">
+          <TransferDock
+            jobs={transfers.jobs}
+            onCancel={transfers.cancel}
+            onClose={() => transfers.setOpen(false)}
+          />
         </div>
       )}
 

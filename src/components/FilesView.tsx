@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, X } from 'lucide-react'
 import { writeText as clipWriteText } from '@tauri-apps/plugin-clipboard-manager'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import FileTree, { type TreeContextTarget } from './files/FileTree'
 import FileViewer from './files/FileViewer'
 import ContextMenu, { type ContextAction } from './files/ContextMenu'
@@ -15,6 +16,7 @@ import {
   revealInFinder,
   type DirEntry
 } from '@/lib/fs'
+import { transferDownload, onFsTouched } from '@/lib/transfer'
 import { onRemoteFsChange } from '@/lib/watch'
 import { shadowChanged } from '@/lib/shadow'
 import { useI18n } from '@/lib/i18n'
@@ -31,6 +33,8 @@ interface FilesViewProps {
   openPath?: string
   /** 远程主机(空=本地) */
   host?: string
+  /** 远程文件「下载到本机」发起后,登记一个传输 job(jobId, 标签, 本地目标目录) */
+  onDownload?: (jobId: number, label: string, destDir: string) => void
 }
 
 interface Clipboard {
@@ -44,7 +48,8 @@ export default function FilesView({
   onOpenInTerminal,
   onPreview,
   openPath,
-  host
+  host,
+  onDownload
 }: FilesViewProps): JSX.Element {
   const { t } = useI18n()
   // 多标签:已打开的文件列表 + 当前激活的文件
@@ -207,6 +212,17 @@ export default function FilesView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host])
 
+  // 传输落盘(拖入复制/移动/上传/下载)后主动刷新对应目录,不等 fs 轮询。
+  useEffect(() => {
+    const off = onFsTouched((e) => {
+      // 只刷新与当前连接一致的(本地都是空串)
+      if ((e.host || undefined) !== (host || undefined)) return
+      if (e.dirs.length) refresh(...e.dirs)
+    })
+    return off
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host])
+
   // 取某 entry 的“所在目录”:文件夹用自身,文件用其父目录
   const dirOf = (entry: DirEntry): string =>
     entry.isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
@@ -255,6 +271,19 @@ export default function FilesView({
         case 'reveal':
           await revealInFinder(target.path)
           break
+        case 'download': {
+          // 远程文件「下载到本机」:选目标文件夹 → 并行 SFTP 下载 → 进度坞
+          if (!host) return
+          const dest = await openDialog({
+            directory: true,
+            multiple: false,
+            title: t('files.chooseDownloadDir')
+          })
+          if (!dest || typeof dest !== 'string') return
+          const id = await transferDownload(host, [target.path], dest)
+          onDownload?.(id, t('files.downloadingTo', { dir: dest }), dest)
+          break
+        }
         case 'preview':
           onPreview?.(target.path)
           break
@@ -302,7 +331,11 @@ export default function FilesView({
           break
         }
         case 'delete': {
-          const ok = window.confirm(t('files.confirmDelete', { name: target.name }))
+          // 文件夹给更明确的确认(删的是整个文件夹及其内容);删除走系统垃圾篓,可还原。
+          const msg = target.isDir
+            ? t('files.confirmDeleteFolder', { name: target.name })
+            : t('files.confirmDelete', { name: target.name })
+          const ok = window.confirm(msg)
           if (!ok) return
           await deletePath(target.path, host)
           if (tabs.includes(target.path)) closeTab(target.path)
@@ -345,7 +378,9 @@ export default function FilesView({
           if (e.key === 'F2') {
             e.preventDefault()
             void handleAction('rename', treeSel)
-          } else if (e.key === 'Delete' || e.key === 'Backspace') {
+          } else if (e.key === 'Delete') {
+            // 只用 Delete 键删除;不用 Backspace —— Backspace 太易误触,
+            // 曾导致选中文件夹被整删。删除会走系统垃圾篓(可还原),但仍以最小惊讶为准。
             e.preventDefault()
             void handleAction('delete', treeSel)
           } else if (meta && (e.key === 'c' || e.key === 'C')) {
@@ -453,6 +488,7 @@ export default function FilesView({
           y={menu.y}
           isDir={menu.entry.isDir}
           fileName={menu.entry.name}
+          remote={!!host}
           canPaste={!!clipboard}
           onAction={(a) => handleAction(a, menu.entry)}
           onClose={() => setMenu(null)}

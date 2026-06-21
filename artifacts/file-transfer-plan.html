@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件传输功能 · 实现计划</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">cell 双击编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖 ⠿ 重排 · cell 间双击插入</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<script id="seed" type="application/json">
+[
+  {
+    "html": "<div class=\"eyebrow\">实现计划 · FILE TRANSFER (DRAG &amp; DROP)</div><h1>文件拖拽互传 · 跨平台并行 SFTP</h1><p class=\"lede\">在文件界面与桌面(Finder / 资源管理器)之间直接拖拽互传。支持本地与远程两种目标,传输时聊天框下方弹出进度窗(借鉴小终端坞设计),完成自动关闭。<b>Mac 与 Windows 同时支持</b>,采用 FileZilla 式并行多路 SFTP。</p><div class=\"toc\"><a href=\"#why\">关键发现</a><a href=\"#arch\">总体架构</a><a href=\"#in\">拖入</a><a href=\"#out\">拖出</a><a href=\"#engine\">并行引擎</a><a href=\"#ui\">进度窗</a><a href=\"#files\">改动清单</a><a href=\"#risk\">风险与边界</a><a href=\"#verify\">验证</a></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"why\">关键发现(决定了设计)</h2><div class=\"grid col-3\"><div class=\"card\"><b>认证 = SSH 别名 + 密钥</b><p><code>host</code> 是 <code>~/.ssh/config</code> 里的 Host 别名,<code>IdentityFile</code> 已写入配置,全程 <code>BatchMode=yes</code> 非交互。<span class=\"win\">scp/sftp worker 只传别名,SSH 自动认密钥 —— Mac/Windows 一致。</span></p></div><div class=\"card\"><b>ControlMaster 仅是 Mac/Linux 提速</b><p>共享 socket 在类 Unix 上让 N 个 worker 复用一次认证。<span class=\"bad\">Windows OpenSSH 不支持</span>(需 unix socket),会被忽略 —— 每个 worker 各自认证,和 FileZilla 在 Windows 上一样。设计上当成<b>可选优化</b>,不是前提。</p></div><div class=\"card\"><b>只用 scp/sftp,绝不用 rsync</b><p>Windows 自带 OpenSSH 有 ssh/scp/sftp,<span class=\"bad\">没有 rsync</span>。传输引擎统一走 scp(目录递归)/ sftp(批处理),保证两端可用。</p></div></div><div class=\"callout\">已实测:<code>~/.ssh/config</code> 别名 + 密钥的连接模型在两平台都成立;Tauri2 默认已开 OS 拖放(<code>onDragDropEvent</code> 给真实绝对路径+落点坐标);<code>tauri-plugin-dialog</code> 已装(远程拖出的文件夹选择器)。当前 <code>onDragDropEvent</code> 尚未接线,<code>tauri-plugin-drag</code>(拖出)尚未安装。</div>",
+    "type": "html"
+  },
+  {
+    "text": "windows没有rsync吗？那windows的rsync传输插件和git配置之类的也需要修改下。",
+    "type": "md"
+  },
+  {
+    "html": "<h2 id=\"arch\">总体架构:4 个能力 + 1 套引擎</h2><div class=\"summary-band\"><div><span class=\"k\">拖入</span>Tauri onDragDropEvent</div><div><span class=\"k\">拖出</span>tauri-plugin-drag + 远程文件夹选择器</div><div><span class=\"k\">引擎</span>并行 scp/sftp worker 池</div><div><span class=\"k\">进度</span>app.emit → 坞式进度窗</div></div><div class=\"callout olive\">四种组合都要通:<b>本地→本地</b>、<b>本地→远程</b>(上传)、<b>远程→本地</b>(下载)、<b>远程→远程</b>(同主机直接 cp,跨主机暂经本地中转或后续支持)。前两类拖入,后两类拖出。所有跨网络传输统一走同一个<b>并行传输引擎</b> + 同一个<b>进度事件协议</b>。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"in\">① 拖入:Mac/Windows 桌面 → app 内文件夹</h2><p>Tauri2 默认拦截 OS 文件拖放,通过 <code>onDragDropEvent</code> 投递<b>真实绝对路径 + 光标坐标</b>(这同时会屏蔽 OS 文件的 HTML5 拖放事件,所以必须用这条原生通道,不能用 <code>onDrop</code> 读 OS 文件)。</p><div class=\"grid col-2\"><div class=\"card\"><b>命中测试</b><p>拖放落点是屏幕坐标。给文件树每个目录行加 <code>data-drop-dir=\"&lt;path&gt;\"</code> + <code>data-drop-host=\"&lt;host&gt;\"</code>,<code>onDragDropEvent</code> 的 drop 阶段用 <code>document.elementFromPoint(x,y)</code> 命中最近的可投放目录,拿到目标 <code>(path, host)</code>。</p></div><div class=\"card\"><b>悬停高亮</b><p>drag 的 <code>over</code> 阶段同样命中,给目标行加高亮类,松手时清除 —— 复用文件树现有内部拖拽的视觉。</p></div></div><div class=\"callout\">与现有 <b>FileTree 内部拖拽</b>(<code>text/linco-path</code> + <code>onMove</code>,DOM→DOM 移动文件)<b>互不冲突</b>:内部移动走 HTML5 dataTransfer,OS 拖入走原生 onDragDropEvent,两条独立通道。落点目标即 app 当前的 <code>host</code>(本地 null / 远程别名):本地→本地用现成 <code>fs_copy</code>;本地→远程触发上传引擎。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"out\">② 拖出:app 内文件 → Mac/Windows 桌面</h2><div class=\"grid col-2\"><div class=\"card\"><b>本地文件 = 真·拖拽(两平台)</b><p>用 <code>tauri-plugin-drag</code> 的 <code>startDrag({ item:[绝对路径] })</code>,在文件行 <code>onDragStart</code></p></div><div class=\"card\"><code><b>远程文件 = 选择文件夹下载(两平台,已选定)</b><p>原生拖拽 API 需要本地已存在路径,远程文件还在服务器。所以拖出远程文件(或右键\"下载到本机\")<b>弹出系统文件夹选择器</b>(<code>tauri-plugin-dialog</code>,Mac/Windows 都有)→ 并行 SFTP 下载到所选目录 → 进度窗 → 完成后高亮/打开。</p></code></div></div><div class=\"callout rec\"><div class=\"callout-h\"><code>为何远程不做\"落在 Finder\"</code></div><code>macOS 的 file-promise 仅 Mac 专属、需私有 API,<b>Windows 无对应能力</b>。你要求两平台都支持,所以远程统一走\"选择文件夹\"路径:100% 可靠、Mac/Windows 一致、复用同一并行引擎。本地文件仍是真·拖拽,日常最常用的体验不打折。</code></div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"engine\">③ 并行传输引擎(FileZilla 式)</h2><p>新建 <code>src-tauri/src/transfer.rs</code>。一次传输 = 一个 <b>job</b>(唯一 id),job 下若干 <b>文件项</b>,由 <b>worker 池</b>并发处理。</p><div class=\"grid col-2\"><div class=\"card\"><b>展开 + 分发</b><p>目录先递归展开成文件清单(本地用 walkdir;远程用一条 <code>find -type f -printf</code> 列举 + 大小)。文件项进队列,<code>N</code> 个 worker(默认 4,可配)并发取项传输。</p></div><div class=\"card\"><b>每个 worker</b><p>上传:<code>scp -o BatchMode=yes [ssh_opts] 本地 host:远程</code>。下载:<code>scp host:远程 本地</code>。类 Unix 上自动复用 ControlMaster socket(瞬时);Windows 上各自密钥认证。worker 之间天然并行 = 多路并发。</p></div></div><div class=\"card\"><b>进度采集</b><p>scp 自带进度输出不易解析、跨平台不稳。改为<b>按\"已完成文件数 / 总数 + 已传字节 / 总字节\"</b>聚合:每个文件项完成即 <code>+1</code> 并累加其大小,job 维度算百分比 —— 简单、跨平台稳定、够用。大单文件可选解析 scp 的 stderr 百分比作二级进度(增强项,非必须)。</p></div><div class=\"callout\">复用现有 <code>remote::ssh_opts()</code> 拼 <code>-e/-o</code> 透传;命令一律过 <code>proc_ext::no_window</code>(Windows 不闪窗)+ <code>resolve_exe</code> 思路定位 scp(Windows 在 <code>C:\\Windows\\System32\\OpenSSH\\</code>)。整个 job 在 <code>blocking::run</code> 线程跑,通过 <code>AppHandle.emit</code> 推进度,<b>不阻塞 UI</b>。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"ui\">④ 进度窗(借鉴小终端坞)</h2><p>聊天框下方插入一个<b>传输进度坞</b>,完全沿用 dock-terminal 的结构:<code>transferOpen</code> 条件渲染、<code>ResizeHandle</code>、圆角卡片 + ring、右上角 × 关闭。传输开始自动弹出,job 全部完成后<b>自动关闭</b>(可手动 × 提前关)。</p><pre><code>聊天框 (ChatInput)\n────────────────────────────────────\n▌传输中  ↑ 上传到 cluster-A          ×\n  src/  ▓▓▓▓▓▓▓░░░  7/12 文件 · 3.4/5.1 MB\n  └ build.rs        ✓\n  └ main.rs         ▓▓▓▓░ 62%\n  └ assets/…        待传\n────────────────────────────────────</code></pre><div class=\"callout olive\">每个 job 一行汇总(方向图标 + 目标 host + 总进度条 + 文件计数/字节),可展开看逐文件状态。多 job 并存时纵向堆叠。事件协议:<code>transfer-progress {jobId, done, total, bytesDone, bytesTotal, current, phase}</code> 与 <code>transfer-done {jobId, ok, error?}</code>。前端用 <code>listen</code> 订阅,维护一个 jobs map 驱动渲染。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"files\">改动清单(按层)</h2>",
+    "type": "html"
+  },
+  {
+    "head": [
+      "层",
+      "文件",
+      "改动"
+    ],
+    "rows": [
+      [
+        "Rust 新增",
+        "src-tauri/src/transfer.rs",
+        "新建:job/worker 池、展开目录、scp 上传/下载、字节/文件聚合、emit 进度。命令 transfer_upload / transfer_download / transfer_cancel。"
+      ],
+      [
+        "Rust 注册",
+        "src-tauri/src/lib.rs",
+        "mod transfer; 在 generate_handler! 注册 3 个命令;注册 tauri-plugin-drag 插件 init。"
+      ],
+      [
+        "Rust 依赖",
+        "src-tauri/Cargo.toml",
+        "加 tauri-plugin-drag = \"2\";(walkdir 若未有则加,用于本地递归展开)。"
+      ],
+      [
+        "Rust 复用",
+        "src-tauri/src/remote.rs",
+        "复用 ssh_opts();可能加 list_files_recursive(host,path)→(路径,大小) 列举,供远程目录展开。"
+      ],
+      [
+        "权限",
+        "src-tauri/capabilities/default.json",
+        "加 drag 插件所需 permission(及 dialog 若未放行)。"
+      ],
+      [
+        "前端绑定",
+        "src/lib/transfer.ts",
+        "新建:uploadPaths/downloadPaths/cancel 封装 invoke;listen 订阅 transfer-progress/done;jobs 状态。"
+      ],
+      [
+        "前端拖入",
+        "src/components/files/FileTree.tsx",
+        "目录行加 data-drop-dir/-host;不破坏现有内部拖拽。"
+      ],
+      [
+        "前端拖入",
+        "src/components/FilesView.tsx 或 App.tsx",
+        "接 getCurrentWebview().onDragDropEvent:over 高亮、drop 用 elementFromPoint 命中目标 → 调上传/本地复制。"
+      ],
+      [
+        "前端拖出",
+        "src/components/files/FileTree.tsx",
+        "本地文件 onDragStart 调 startDrag;远程文件走\"下载到本机\"(拖出或右键)→ dialog 选目录 → download。"
+      ],
+      [
+        "前端进度窗",
+        "src/App.tsx",
+        "聊天框下方加传输进度坞(transferOpen/ResizeHandle/×),沿用 dock-terminal 样式;订阅 jobs 渲染;全完成自动关。"
+      ],
+      [
+        "前端组件",
+        "src/components/transfer/TransferDock.tsx",
+        "新建:job 列表 + 逐文件进度行(汇总/展开)。"
+      ],
+      [
+        "i18n",
+        "src/i18n/*",
+        "传输中/完成/失败/取消/下载到本机/选择保存位置 等文案。"
+      ]
+    ],
+    "type": "table"
+  },
+  {
+    "html": "<h2 id=\"risk\">风险与诚实边界</h2><div class=\"procon\"><div class=\"pros\"><b>稳妥之处</b><ul><li>认证全靠 ~/.ssh/config 别名+密钥,两平台一致,不触碰你的 SSH/模型配置(不编译进包)</li><li>只用 ssh/scp/sftp,Windows 自带,无需额外装 rsync</li><li>本地拖出真·拖拽;远程统一文件夹选择器,可靠跨平台</li><li>进度按文件/字节聚合,稳、跨平台不依赖 scp 输出格式</li><li>进度窗复用成熟的坞组件,改动可控</li></ul></div><div class=\"cons\"><b>风险点</b><ul><li><span class=\"risk-dot med\"></span>onDragDropEvent 落点命中需 elementFromPoint 与文件树滚动/虚拟化配合,需实测</li><li><span class=\"risk-dot med\"></span>tauri-plugin-drag 在 Windows 的图标/路径行为需验证</li><li><span class=\"risk-dot low\"></span>Windows 无 ControlMaster → 多 worker 各自认证,首包稍慢(功能不受影响)</li><li><span class=\"risk-dot low\"></span>跨主机(远程A→远程B)首版经本地中转或暂不支持,UI 明示</li><li><span class=\"risk-dot med\"></span>密码型(非密钥)连接无法非交互并行;首版要求密钥认证,否则提示</li></ul></div></div><div class=\"callout rec\"><div class=\"callout-h\">不做的事</div>不把你的 SSH/模型/密钥配置编译进包;不传输或落盘任何明文凭据;读 <code>~/.ssh</code> 而非 <code>~/.linco</code> 的连接信息。先做 <b>Dev 验证</b>,满意后再发 release。</div>",
+    "type": "html"
+  },
+  {
+    "html": "<h2 id=\"verify\">验证清单(Dev)</h2><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">①</div><div class=\"stat-label\">本地↔本地</div></div><div class=\"stat-card\"><div class=\"stat-num\">②</div><div class=\"stat-label\">本地→远程上传</div></div><div class=\"stat-card\"><div class=\"stat-num\">③</div><div class=\"stat-label\">远程→本地下载</div></div><div class=\"stat-card\"><div class=\"stat-num\">④</div><div class=\"stat-label\">进度窗弹/关</div></div></div><ol><li>从 Finder 拖文件夹到 app 本地目录 → 命中正确目标 → 复制成功。</li><li>从 Finder 拖到 app 远程目录 → 并行上传 → 进度窗逐文件推进 → 完成自动关 → 远程 ls 校验。</li><li>从 app 拖本地文件到 Finder → 真·拖拽落地。</li><li>从 app 拖/右键远程文件 → 文件夹选择器 → 并行下载 → 进度窗 → 本地校验。</li><li>大目录(多文件)观察多路并发明显快于串行;× 可中途取消。</li><li><code>cargo build</code> + <code>cargo test</code> + <code>tsc</code> 全绿;Windows 端单独验证 scp 定位与拖出。</li></ol><div class=\"callout\">实现顺序建议:<b>引擎(transfer.rs)+ 进度协议</b> → <b>进度窗</b> → <b>拖入</b> → <b>拖出(本地)</b> → <b>拖出(远程,文件夹选择器)</b> → 两平台联调。每步独立可验证。</div>",
+    "type": "html"
+  }
+]
+</script>
+
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

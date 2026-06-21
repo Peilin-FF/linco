@@ -6,7 +6,7 @@
 // 避免两套 HTML 设计规范混淆。连远程集群时,把同语言三件套 rsync 到远端 ~/.claude/plugins/。
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -91,9 +91,24 @@ const CLAUDE_MARKETPLACE: &str = "linco-plugins-marketplace";
 /// codex marketplace 名(与 vendor/.agents/plugins/marketplace.json 的 name 一致)。
 const CODEX_MARKETPLACE: &str = "linco-codex-marketplace";
 
+/// 解析 claude/codex 真实路径并缓存(GUI app 的精简 PATH 找不到 homebrew/nvm 里的它们)。
+fn cli_exe(name: &str) -> String {
+    use std::sync::{Mutex, OnceLock};
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, String>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(p) = cache.lock().ok().and_then(|m| m.get(name).cloned()) {
+        return p;
+    }
+    let resolved = crate::proc_ext::resolve_exe(name);
+    if let Ok(mut m) = cache.lock() {
+        m.insert(name.to_string(), resolved.clone());
+    }
+    resolved
+}
+
 /// 探测某 CLI 是否有 `plugin` 子命令(老版本没有 → 回退拷文件)。
 fn cli_has_plugin(exe: &str) -> bool {
-    let mut c = Command::new(exe);
+    let mut c = Command::new(cli_exe(exe));
     c.arg("plugin").arg("--help");
     crate::proc_ext::no_window(&mut c);
     c.output().map(|o| o.status.success()).unwrap_or(false)
@@ -101,7 +116,7 @@ fn cli_has_plugin(exe: &str) -> bool {
 
 /// 跑一条本地 CLI 命令(no_window 包裹),返回 (成功, stderr)。
 fn run_cli(exe: &str, args: &[&str]) -> (bool, String) {
-    let mut c = Command::new(exe);
+    let mut c = Command::new(cli_exe(exe));
     c.args(args);
     crate::proc_ext::no_window(&mut c);
     match c.output() {
@@ -268,12 +283,13 @@ fn install_remote(app: &AppHandle, host: &str, lang: &str) -> Result<(), String>
     install_remote_copy(app, host, lang, &ssh_e)
 }
 
-/// 回退:rsync 同语言三件套到远端 ~/.claude/plugins/,并删另一语言(老 claude 无 plugin CLI)。
+/// 回退:镜像同语言三件套到远端 ~/.claude/plugins/,并删另一语言(老 claude 无 plugin CLI)。
+/// `_ssh_e` 保留以兼容调用方,内部改用跨平台 tar 管道(见 [`tar_pipe_to_remote`])。
 fn install_remote_copy(
     app: &AppHandle,
     host: &str,
     lang: &str,
-    ssh_e: &str,
+    _ssh_e: &str,
 ) -> Result<(), String> {
     let src = plugins_source(app)?;
     let mut cleanup = String::from("mkdir -p ~/.claude/plugins");
@@ -286,38 +302,90 @@ fn install_remote_copy(
         if !from.exists() {
             continue;
         }
-        let from_arg = format!("{}/", from.to_string_lossy());
-        let dst_arg = format!("{host}:.claude/plugins/{n}/");
-        let mut c = Command::new("rsync");
-        c.args(["-a", "--delete", "-e", ssh_e, &from_arg, &dst_arg]);
-        crate::proc_ext::no_window(&mut c);
-        let out = c.output().map_err(|e| format!("rsync 失败: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).to_string());
-        }
+        // 镜像到远端 ~/.claude/plugins/<n>/(跨平台 tar 管道,替代 rsync)
+        tar_pipe_to_remote(&from, host, &format!("~/.claude/plugins/{n}"))?;
     }
     Ok(())
 }
 
-/// rsync 一个本地目录到远端相对 $HOME 的子路径(尾随 / 拷内容)。
+/// 把本地目录的**内容**镜像到远端目录(等价于 `rsync -a --delete 本地/ host:远端/`)。
+///
+/// 跨平台:只用 tar + ssh(Windows 10 1803+ 自带 bsdtar 与 OpenSSH;macOS 自带),
+/// **不用 rsync**(Windows 没有)。镜像语义靠远端先 `rm -rf && mkdir -p` 实现 --delete,
+/// 再用 tar 管道把本地内容灌过去:
+///   local: `tar -C <本地> -cf - .`  →(stdout 接 ssh stdin)→  remote: `tar -C <远端> -xf -`
+///
+/// `remote_dir` 是远端目标目录(可含 ~,由远端 shell 展开)。local 不存在则报错。
+fn tar_pipe_to_remote(local: &Path, host: &str, remote_dir: &str) -> Result<(), String> {
+    if !local.exists() {
+        return Err(format!("本地目录不存在: {}", local.display()));
+    }
+    // 1) 远端镜像准备:删旧 + 建新(实现 --delete 的「目标只剩本次内容」语义)
+    crate::remote::run_remote(
+        host,
+        &format!("rm -rf {d} && mkdir -p {d}", d = crate::remote::shq(remote_dir)),
+    )
+    .map_err(|e| format!("远端准备目录失败: {e}"))?;
+
+    // 2) 本地 tar 打包目录内容到 stdout
+    let mut tar = Command::new(crate::proc_ext::resolve_exe("tar"));
+    tar.arg("-C")
+        .arg(local)
+        .arg("-cf")
+        .arg("-")
+        .arg(".")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::proc_ext::no_window(&mut tar);
+    let mut tar_child = tar.spawn().map_err(|e| format!("tar 启动失败: {e}"))?;
+    let tar_out = tar_child
+        .stdout
+        .take()
+        .ok_or("无法获取 tar 输出管道")?;
+
+    // 3) ssh 远端解包,stdin 接 tar 的 stdout(进程直连,不经内存中转)
+    let mut ssh = Command::new(crate::proc_ext::resolve_exe("ssh"));
+    ssh.arg("-o").arg("BatchMode=yes");
+    for o in crate::remote::ssh_opts() {
+        ssh.arg(o);
+    }
+    ssh.arg(host)
+        .arg(format!("tar -C {} -xf -", crate::remote::shq(remote_dir)))
+        .stdin(Stdio::from(tar_out))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::proc_ext::no_window(&mut ssh);
+    let ssh_out = ssh.spawn().map_err(|e| format!("ssh 启动失败: {e}"))?;
+
+    // 4) 等两端结束并校验
+    let ssh_res = ssh_out
+        .wait_with_output()
+        .map_err(|e| format!("ssh 等待失败: {e}"))?;
+    let tar_status = tar_child.wait().map_err(|e| format!("tar 等待失败: {e}"))?;
+    if !tar_status.success() {
+        return Err("tar 打包失败".into());
+    }
+    if !ssh_res.status.success() {
+        let err = String::from_utf8_lossy(&ssh_res.stderr).trim().to_string();
+        return Err(if err.is_empty() {
+            "远端 tar 解包失败".into()
+        } else {
+            format!("远端解包失败: {err}")
+        });
+    }
+    Ok(())
+}
+
+
+/// 把本地目录镜像到远端相对 $HOME 的子路径(内容镜像,等价旧 `rsync -a --delete 本地/ host:rel/`)。
+/// 跨平台实现见 [`tar_pipe_to_remote`]。`_ssh_e` 保留以兼容调用方,内部不再使用。
 fn rsync_dir_to_remote(
     local: &Path,
     host: &str,
     remote_rel: &str,
-    ssh_e: &str,
+    _ssh_e: &str,
 ) -> Result<(), String> {
-    let _ = crate::remote::run_remote(host, &format!("mkdir -p ~/{remote_rel}"));
-    let from_arg = format!("{}/", local.to_string_lossy());
-    let dst_arg = format!("{host}:{remote_rel}/");
-    let mut c = Command::new("rsync");
-    c.args(["-a", "--delete", "-e", ssh_e, &from_arg, &dst_arg]);
-    crate::proc_ext::no_window(&mut c);
-    let out = c.output().map_err(|e| format!("rsync 失败: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).to_string())
-    }
+    tar_pipe_to_remote(local, host, &format!("~/{remote_rel}"))
 }
 
 // ============ Codex(~/.codex)============
@@ -492,7 +560,7 @@ fn claude_variant(base: &str, lang: &str) -> String {
 /// `--available` 时则是 {installed:[...], available:[...]}。两种都兼容。
 fn claude_installed_ids() -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    let mut c = Command::new("claude");
+    let mut c = Command::new(cli_exe("claude"));
     c.args(["plugin", "list", "--json"]);
     crate::proc_ext::no_window(&mut c);
     let Ok(o) = c.output() else { return set };
@@ -523,7 +591,7 @@ fn claude_installed_ids() -> std::collections::HashSet<String> {
 /// 查 codex 已安装启用的插件名集合(name,如 "html-kit")。
 fn codex_installed_names() -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    let mut c = Command::new("codex");
+    let mut c = Command::new(cli_exe("codex"));
     c.args(["plugin", "list", "--json"]);
     crate::proc_ext::no_window(&mut c);
     if let Ok(o) = c.output() {
@@ -686,19 +754,10 @@ pub async fn install_remote_plugins(app: AppHandle, host: String) -> Result<(), 
 fn install_codex_remote(app: &AppHandle, host: &str, lang: &str) -> Result<(), String> {
     let src = codex_source(app)?.join(lang);
     let ssh_e = format!("ssh {}", crate::remote::ssh_opts().join(" "));
-    // 1) rsync skill 目录
+    // 1) 镜像 skill 目录到远端 ~/.codex/skills/html-kit(跨平台 tar 管道,替代 rsync)
     let skill_src = src.join("skills").join("html-kit");
     if skill_src.exists() {
-        let _ = crate::remote::run_remote(host, "mkdir -p ~/.codex/skills/html-kit");
-        let from_arg = format!("{}/", skill_src.to_string_lossy());
-        let dst_arg = format!("{host}:.codex/skills/html-kit/");
-        let mut c = Command::new("rsync");
-        c.args(["-a", "--delete", "-e", &ssh_e, &from_arg, &dst_arg]);
-        crate::proc_ext::no_window(&mut c);
-        let out = c.output().map_err(|e| format!("rsync 失败: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).to_string());
-        }
+        tar_pipe_to_remote(&skill_src, host, "~/.codex/skills/html-kit")?;
     }
     // 2) AGENTS.md:把本地 block 经 stdin 传到远端,用 awk 替换 LINCO 区块(保留用户其余内容)
     let block = std::fs::read_to_string(src.join("AGENTS.md")).map_err(|e| e.to_string())?;
