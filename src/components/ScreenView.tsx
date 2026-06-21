@@ -45,12 +45,25 @@ export default function ScreenView({
   const [empty, setEmpty] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
+  // 某 url 是否「产物列表(index)」页(/__index__ 或服务器根 /)。
+  const isIndexUrl = (u: string): boolean => {
+    if (port <= 0) return false
+    const base = `http://127.0.0.1:${port}/`
+    if (!u.startsWith(base)) return false
+    const rel = u.slice(base.length).split('?')[0].split('#')[0]
+    return rel === '' || rel === '__index__'
+  }
+
   const url = nav.idx >= 0 ? nav.stack[nav.idx] : ''
-  const canBack = nav.idx > 0
   const canForward = nav.idx < nav.stack.length - 1
   // served = 走我们的本地服务器;manual = 用户手填的外部地址(dev server 等)
   const mode: 'served' | 'manual' =
     !url || (port > 0 && url.startsWith(`http://127.0.0.1:${port}`)) ? 'served' : 'manual'
+  // 后退可用:① 历史栈里有上一条;或 ② 当前在某个具体 HTML 文件页(后退=回 index,
+  // 不依赖栈深)。后者保证远程下即使栈没建起来,文件页上的后退键也可点、能回列表。
+  const onFilePage =
+    mode === 'served' && !!url && port > 0 && !isIndexUrl(url)
+  const canBack = nav.idx > 0 || onFilePage
   const modeRef = useRef(mode)
   modeRef.current = mode
 
@@ -91,7 +104,14 @@ export default function ScreenView({
     setNonce((x) => x + 1)
   }
 
+  // 后退:在【具体 HTML 文件页】上后退 → 直接回产物列表(index),不依赖历史栈。
+  // 这是确定性行为(不受 effect 重跑 / __lincoPath 校正影响),永远一致。
+  // 已经在 index(或其它非文件页)时,走普通历史后退。
   const back = (): void => {
+    if (mode === 'served' && url && !isIndexUrl(url) && port > 0) {
+      pushUrl(`http://127.0.0.1:${port}/__index__`)
+      return
+    }
     setNav((n) => (n.idx > 0 ? { ...n, idx: n.idx - 1 } : n))
     setNonce((x) => x + 1)
   }
