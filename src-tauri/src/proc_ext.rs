@@ -147,3 +147,56 @@ fn resolve_exe_in(
     }
     name.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Windows 路径解析的纯逻辑(在任意平台可跑)。
+    const PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";
+
+    #[test]
+    fn resolves_npm_cmd_shim() {
+        // codex 是 npm 全局装的 .cmd shim:只有 codex.cmd 存在,裸名/.exe 都不存在。
+        // 必须解析到 .cmd 全路径(这正是修复前裸名找不到、导致误判"无 plugin"的场景)。
+        // 闭包用大小写不敏感比较,模拟 Windows 文件系统(PATHEXT 是大写,真实 FS 不区分大小写)。
+        let path = r"C:\Users\me\AppData\Roaming\npm;C:\Windows\System32";
+        let exists =
+            |p: &str| p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex.cmd");
+        assert_eq!(
+            resolve_exe_in("codex", path, PATHEXT, exists).to_ascii_lowercase(),
+            r"c:\users\me\appdata\roaming\npm\codex.cmd"
+        );
+    }
+
+    #[test]
+    fn prefers_earlier_path_dir_and_exe_over_cmd() {
+        // PATH 顺序优先;同目录下扩展名顺序按 PATHEXT(.EXE 在 .CMD 前)。
+        let path = r"C:\a;C:\b";
+        let exists = |p: &str| {
+            p.eq_ignore_ascii_case(r"C:\a\git.exe") || p.eq_ignore_ascii_case(r"C:\b\git.cmd")
+        };
+        assert_eq!(
+            resolve_exe_in("git", path, PATHEXT, exists).to_ascii_lowercase(),
+            r"c:\a\git.exe"
+        );
+    }
+
+    #[test]
+    fn passthrough_when_name_has_separator() {
+        // 调用方已给出带分隔符的路径 → 原样返回,不再搜 PATH。
+        let never = |_: &str| true;
+        assert_eq!(
+            resolve_exe_in(r"C:\tools\codex.cmd", "", PATHEXT, never),
+            r"C:\tools\codex.cmd"
+        );
+        assert_eq!(resolve_exe_in("/usr/bin/git", "", PATHEXT, never), "/usr/bin/git");
+    }
+
+    #[test]
+    fn falls_back_to_bare_name_when_not_found() {
+        // PATH 里找不到 → 回退裸名(交给系统,不比现状差)。
+        let none = |_: &str| false;
+        assert_eq!(resolve_exe_in("codex", r"C:\x;C:\y", PATHEXT, none), "codex");
+    }
+}
