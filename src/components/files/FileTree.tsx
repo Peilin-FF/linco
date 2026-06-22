@@ -89,6 +89,10 @@ interface FileTreeProps {
   onContext: (t: TreeContextTarget) => void
   /** 拖拽移动:把 src 移动到 destDir 下 */
   onMove: (src: string, destDir: string) => void
+  /** 多选集合(Ctrl/Cmd+点击切换)。命中的节点高亮。空集=无多选。 */
+  multiSel?: Set<string>
+  /** Ctrl/Cmd+点击某节点 → 切换它在多选集合中的状态(不打开文件)。 */
+  onToggleMulti?: (entry: DirEntry) => void
   refreshKey: number
   refreshPaths: string[]
   /** 远程主机(空=本地) */
@@ -115,6 +119,8 @@ const Node = memo(function Node({
   onSelect,
   onContext,
   onMove,
+  multiSel,
+  onToggleMulti,
   refreshKey,
   refreshPaths,
   revealPath,
@@ -163,7 +169,13 @@ const Node = memo(function Node({
     }
   }
 
-  const toggle = (): void => {
+  const toggle = (e?: React.MouseEvent): void => {
+    // Ctrl/Cmd+点击:切换多选(不打开文件、不展开目录),用于批量删除/复制。
+    if (e && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      onToggleMulti?.(entry)
+      return
+    }
     onSelect?.(entry) // 记录树选中节点(文件或文件夹),供键盘快捷键作用
     if (!entry.isDir) {
       onSelectFile(entry.path)
@@ -205,6 +217,7 @@ const Node = memo(function Node({
 
   const FileIcon = entry.isDir ? null : iconForFile(entry.name)
   const isSelected = entry.path === selectedPath
+  const isMulti = multiSel ? multiSel.has(entry.path) : false
   const gitSt = nodeGitStatus(entry, gitMap)
 
   // 拖拽源
@@ -266,9 +279,11 @@ const Node = memo(function Node({
         className={`flex cursor-pointer items-center gap-1 rounded py-[3px] pr-2 text-[13px] ${
           dragOver
             ? 'bg-[#5c8bd6]/15 ring-1 ring-[#5c8bd6]/40'
-            : isSelected
-              ? 'bg-[#5c8bd6]/15 text-ink'
-              : 'text-ink hover:bg-black/[0.07]'
+            : isMulti
+              ? 'bg-[#5c8bd6]/25 text-ink ring-1 ring-[#5c8bd6]/40'
+              : isSelected
+                ? 'bg-[#5c8bd6]/15 text-ink'
+                : 'text-ink hover:bg-black/[0.07]'
         }`}
         style={{ paddingLeft: depth * 12 + 6 }}
       >
@@ -331,6 +346,8 @@ const Node = memo(function Node({
                 onSelect={onSelect}
                 onContext={onContext}
                 onMove={onMove}
+                multiSel={multiSel}
+                onToggleMulti={onToggleMulti}
                 refreshKey={refreshKey}
                 refreshPaths={refreshPaths}
                 revealPath={revealPath}
@@ -352,6 +369,8 @@ export default function FileTree({
   onSelect,
   onContext,
   onMove,
+  multiSel,
+  onToggleMulti,
   refreshKey,
   refreshPaths,
   host,
@@ -766,6 +785,8 @@ export default function FileTree({
               onSelect={onSelect}
               onContext={onContext}
               onMove={onMove}
+              multiSel={multiSel}
+              onToggleMulti={onToggleMulti}
               refreshKey={refreshKey}
               refreshPaths={refreshPaths}
               revealPath={revealPath}

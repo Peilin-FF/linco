@@ -40,9 +40,15 @@ interface FilesViewProps {
 }
 
 interface Clipboard {
-  path: string
+  // 多项剪贴板:支持 Ctrl 多选后一起复制/剪切(VS Code 式)。单选时即长度为 1。
+  paths: string[]
   mode: 'cut' | 'copy'
 }
+
+// 文件树栏宽度的模块级记忆:组件重挂载(切 tab/换连接)后保留用户拖出来的宽度。
+const treeWidthMem = { value: 260 }
+const TREE_MIN_W = 160
+const TREE_MAX_W = 640
 
 export default function FilesView({
   root,
@@ -69,6 +75,11 @@ export default function FilesView({
   const [revealReq, setRevealReq] = useState('')
   const revealSeq = useRef(0)
   const treePanelRef = useRef<HTMLDivElement | null>(null)
+  // 左侧文件树栏宽度(可拖拽分隔条调整),供查看长文件名时拉宽。模块级持有,跨重挂载保留。
+  const [treeWidth, setTreeWidth] = useState(treeWidthMem.value)
+  // 多选(Ctrl/Cmd+点击):VS Code 式。普通点击=单选+打开;Ctrl/Cmd+点击=切换选中(不打开)。
+  // 主要服务批量删除/复制。空集表示无多选,回退到单选(active/treeSel)语义。
+  const [multiSel, setMultiSel] = useState<Set<string>>(new Set())
   // 应用内输入弹窗(替代 WKWebView 不支持的 window.prompt)
   const { prompt, dialog } = usePrompt()
 
@@ -82,9 +93,30 @@ export default function FilesView({
 
   // 打开文件:加入标签(已存在则不重复)并激活
   const openFile = (path: string): void => {
+    setMultiSel(new Set()) // 普通点击=单选语义,清掉之前的多选
     setTabs((prev) => (prev.includes(path) ? prev : [...prev, path]))
     setActive(path)
   }
+
+  // Ctrl/Cmd+点击:切换该节点在多选集合中的状态(不打开/不展开)。
+  // 同时把它设为 treeSel,这样键盘快捷键(⌘C/⌘X/⌘V/Delete)有锚点、且 actionTargets
+  // 能识别出"当前操作的项在多选里" → 对整组生效(VS Code 行为)。
+  const toggleMulti = (entry: DirEntry): void => {
+    setTreeSel(entry)
+    setMultiSel((prev) => {
+      const next = new Set(prev)
+      if (next.has(entry.path)) next.delete(entry.path)
+      else next.add(entry.path)
+      return next
+    })
+  }
+
+  // 一个右键/快捷键操作实际作用的目标集合:若 target 落在多选里 → 整组;否则只它自己。
+  // 这是 VS Code 行为——多选后对组内任一项执行复制/剪切/删除,作用于整个选择。
+  const actionTargets = (target: DirEntry): string[] =>
+    multiSel.size > 0 && multiSel.has(target.path)
+      ? Array.from(multiSel)
+      : [target.path]
 
   // 新建后定位:文件→作为标签打开(并触发树展开+定位);文件夹→仅请求树定位展开。
   // 关键:这会让新建项所在目录被展开,否则在未展开的目录里新建会"看不见"。
@@ -120,6 +152,30 @@ export default function FilesView({
   const refresh = (...dirs: string[]): void => {
     setRefreshPaths(dirs)
     setRefreshKey((k) => k + 1)
+  }
+
+  // 拖拽分隔条调整左栏宽度。鼠标按下后全局监听 move/up,直到松手;夹在 [MIN, MAX]。
+  // 写回 treeWidthMem,组件重挂载后保留。
+  const startResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = treeWidth
+    const onMove = (ev: MouseEvent): void => {
+      const w = Math.min(TREE_MAX_W, Math.max(TREE_MIN_W, startW + (ev.clientX - startX)))
+      treeWidthMem.value = w
+      setTreeWidth(w)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    // 拖拽期间锁定光标/禁选,避免选中文本或光标闪烁
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   // 拉取「本轮 agent 改动」逐文件状态,建 绝对路径→状态字符 的 map(供文件树显标)。
@@ -234,10 +290,6 @@ export default function FilesView({
   const dirOf = (entry: DirEntry): string =>
     entry.isDir ? entry.path : parentDir(entry.path)
 
-  // 某条目所在的「父目录」(不论它是文件还是文件夹)。删除后要刷新父目录,
-  // 否则删文件夹时 dirOf 返回文件夹自身(已删),父级树里残留空节点。
-  const parentOf = (entry: DirEntry): string => parentDir(entry.path) || '/'
-
   // 拖拽移动:把 src 移到 destDir 下,刷新两端
   const handleMove = async (src: string, destDir: string): Promise<void> => {
     const srcDir = parentDir(src)
@@ -297,23 +349,29 @@ export default function FilesView({
           onOpenInTerminal?.(target.path)
           break
         case 'cut':
-          setClipboard({ path: target.path, mode: 'cut' })
+          setClipboard({ paths: actionTargets(target), mode: 'cut' })
           break
         case 'copy':
-          setClipboard({ path: target.path, mode: 'copy' })
+          setClipboard({ paths: actionTargets(target), mode: 'copy' })
           break
         case 'paste': {
           if (!clipboard) return
-          if (clipboard.mode === 'copy') {
-            await fsCopy(clipboard.path, target.path, host)
-          } else {
-            await movePath(clipboard.path, target.path, host)
-            // 剪切后清空源目录刷新
-            const srcDir = parentDir(clipboard.path)
-            refresh(srcDir)
-            setClipboard(null)
+          // 目标目录:target 是文件夹则进其内,是文件则进其父目录(与键盘粘贴一致)。
+          const destDir = target.isDir ? target.path : parentDir(target.path)
+          const srcDirs = new Set<string>()
+          for (const src of clipboard.paths) {
+            if (clipboard.mode === 'copy') {
+              await fsCopy(src, destDir, host)
+            } else {
+              await movePath(src, destDir, host)
+              srcDirs.add(parentDir(src)) // 剪切:源目录也要刷新
+            }
           }
-          refresh(target.path)
+          if (clipboard.mode === 'cut') {
+            setClipboard(null)
+            refresh(...srcDirs)
+          }
+          refresh(destDir)
           break
         }
         case 'copy-path':
@@ -334,15 +392,24 @@ export default function FilesView({
           break
         }
         case 'delete': {
-          // 文件夹给更明确的确认(删的是整个文件夹及其内容);删除走系统垃圾篓,可还原。
-          const msg = target.isDir
-            ? t('files.confirmDeleteFolder', { name: target.name })
-            : t('files.confirmDelete', { name: target.name })
+          // 多选且 target 在其中 → 批量删除整组;否则只删 target(actionTargets 统一判定)。
+          const batch = actionTargets(target)
+          const msg =
+            batch.length > 1
+              ? t('files.confirmDeleteMany', { count: String(batch.length) })
+              : target.isDir
+                ? t('files.confirmDeleteFolder', { name: target.name })
+                : t('files.confirmDelete', { name: target.name })
           const ok = window.confirm(msg)
           if (!ok) return
-          await deletePath(target.path, host)
-          if (tabs.includes(target.path)) closeTab(target.path)
-          refresh(parentOf(target)) // 刷新父目录,删除的文件/文件夹节点才会消失
+          // 先收集要刷新的父目录(删除前算,删后路径还在)
+          const dirs = new Set(batch.map((p) => parentDir(p) || '/'))
+          for (const p of batch) {
+            await deletePath(p, host)
+            if (tabs.includes(p)) closeTab(p)
+          }
+          setMultiSel(new Set())
+          refresh(...dirs) // 刷新所有受影响父目录,删除的节点才会消失
           break
         }
       }
@@ -369,7 +436,8 @@ export default function FilesView({
     <div className="flex h-full w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
       {/* 左:文件树 */}
       <div
-        className="flex w-[260px] shrink-0 flex-col border-r border-black/8 outline-none"
+        className="flex shrink-0 flex-col border-r border-black/8 outline-none"
+        style={{ width: treeWidth }}
         tabIndex={-1}
         ref={(el) => {
           treePanelRef.current = el
@@ -408,9 +476,16 @@ export default function FilesView({
             root={root}
             selectedPath={active}
             onSelectFile={openFile}
-            onSelect={setTreeSel}
+            onSelect={(entry) => {
+              // 普通(非 Ctrl/Cmd)点击任意节点 → 清除多选,回到单选语义。
+              // Ctrl/Cmd+点击在 FileTree 内已提前返回,不会走到这里。
+              setMultiSel(new Set())
+              setTreeSel(entry)
+            }}
             onContext={setMenu}
             onMove={handleMove}
+            multiSel={multiSel}
+            onToggleMulti={toggleMulti}
             refreshKey={refreshKey}
             refreshPaths={refreshPaths}
             host={host}
@@ -418,6 +493,16 @@ export default function FilesView({
             gitMap={gitMap}
           />
         </div>
+      </div>
+
+      {/* 可拖拽分隔条:拉宽左栏以查看长文件名。视觉上是细线,hover/拖拽时高亮。 */}
+      <div
+        onMouseDown={startResize}
+        className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-[#5c8bd6]/50"
+        title={t('files.resizeHint')}
+      >
+        {/* 加宽命中区(左右各 3px),让细线更好点中,但不占布局宽度 */}
+        <div className="absolute inset-y-0 -left-[3px] -right-[3px]" />
       </div>
 
       {/* 右:多标签编辑器 */}
