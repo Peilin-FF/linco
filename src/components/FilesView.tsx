@@ -127,10 +127,14 @@ export default function FilesView({
     try {
       const changed = await shadowChanged(root, host)
       const m = new Map<string, string>()
-      const base = root.replace(/\/+$/, '')
+      // 归一成 `/`:与 FileTree 的节点路径归一保持一致(Windows 本地项目 entry.path 是 `\`)。
+      const base = root.replace(/\\/g, '/').replace(/\/+$/, '')
       for (const [rel, ch] of Object.entries(changed)) {
-        // shadowChanged 已返回绝对路径(repo/rel);兜底:相对路径补全为绝对
-        const abs = rel.startsWith('/') ? rel : `${base}/${rel}`
+        // shadowChanged 已返回绝对路径(repo/rel,后端已归一为 `/`)。
+        // 兜底相对路径补全:用「是否已以 base 开头」判断绝对,而非 startsWith('/')——
+        // 后者在 Windows 盘符路径(C:/...)上误判为相对,会把 base 重复拼一遍。
+        const k = rel.replace(/\\/g, '/')
+        const abs = k === base || k.startsWith(base + '/') ? k : `${base}/${k}`
         m.set(abs, ch)
       }
       setGitMap(m)

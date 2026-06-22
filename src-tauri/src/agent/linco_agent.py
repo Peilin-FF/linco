@@ -454,6 +454,11 @@ def _shadow_git(repo, gitdir, args, index_file=None):
         "--work-tree=" + repo,
         "-c", "core.hooksPath=/dev/null",
         "-c", "commit.gpgsign=false",
+        # core.quotePath=false:默认 git 会把非 ASCII 路径(中文文件名/目录)八进制转义并加双引号
+        # 输出(如 "\346\265\...")。diff --name-status 一旦被转义,文件树用它当 map key 就匹配不上
+        # 真实 entry.path → 文件树不标 M/A/D(而 diff 走 `-- <path>` 传真实路径,不受影响,所以
+        # 「远端右侧 diff 正常、左侧文件树无标记」)。关掉它,name-status 才输出原始 UTF-8 路径。
+        "-c", "core.quotePath=false",
     ] + list(args)
     env = dict(os.environ)
     if index_file is not None:

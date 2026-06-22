@@ -606,9 +606,16 @@ const NOISE_CMDS: &[&str] = &[
     "node", "npm", "npx", "yarn", "pnpm", "bun", "deno", "vite", "tauri", "esbuild", "rollup",
     "webpack", "tsc", "tsserver", "next", "nuxt", "nodemon", "ts-node", "cargo", "rustc",
     "go", "gradle", "mvn", "make", "cmake", "ninja", "linco",
+    // Windows 外壳 / 终端宿主 / REPL:agent 每跑一条命令就会起一批这些壳进程,
+    // 不是用户想盯的长任务,全部过滤(exe_name 已剥 .exe 后缀,故这里写裸名)。
+    "powershell", "pwsh", "cmd", "conhost", "node_repl", "windowsterminal", "wt",
+    "openconsole", "csrss", "where", "findstr", "more", "type", "cscript", "wscript",
 ];
 
 /// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
+/// 归一化处理 Windows:basename 同时按 `/` 和 `\` 切,并剥掉 `.exe`/`.cmd`/`.bat` 等后缀,
+/// 这样 `C:\...\powershell.exe` / `node_repl.exe` 都能正确取到 `powershell` / `node_repl`,
+/// 与 NOISE_CMDS 里不带后缀的名字比对得上(否则 Windows 上 shell/外壳全都漏过滤)。
 fn exe_name(args: &str) -> String {
     let toks: Vec<&str> = args.split_whitespace().collect();
     let mut i = 0;
@@ -618,12 +625,22 @@ fn exe_name(args: &str) -> String {
         i += 1;
     }
     let t = toks.get(i).or_else(|| toks.first()).copied().unwrap_or("");
-    t.rsplit('/').next().unwrap_or(t).to_string()
+    // basename:Windows 路径用 `\`,POSIX 用 `/`,两者都切。
+    let base = t.rsplit(['/', '\\']).next().unwrap_or(t);
+    // 剥掉 Windows 可执行后缀(大小写不敏感),归一成裸名。
+    let lower = base.to_ascii_lowercase();
+    for suf in [".exe", ".cmd", ".bat", ".com"] {
+        if let Some(stripped) = lower.strip_suffix(suf) {
+            return stripped.to_string();
+        }
+    }
+    lower
 }
 
-/// shell 调用是否在"跑一个脚本文件"(如 `bash deploy.sh`),而非临时壳。
-/// 判据:跳过 env/nohup 前缀 + shell 名后,首个非选项 token 是脚本文件
-/// (含 `.sh`/`.bash` 后缀,或带路径分隔符的文件名)。`-c "cmd"` 内联命令不算。
+/// shell 调用是否在"跑一个脚本文件"(如 `bash deploy.sh` / `powershell -File run.ps1`),
+/// 而非临时壳。判据:跳过 env/nohup 前缀 + shell 名后,首个非选项 token 是脚本文件
+/// (`.sh`/`.bash`/`.ps1`/`.bat`/`.cmd` 后缀,或带路径分隔符的文件名)。
+/// 内联命令壳不算:POSIX 的 `-c`、PowerShell 的 `-Command`/`-EncodedCommand`、cmd 的 `/c`/`/k`。
 fn shell_runs_script(args: &str) -> bool {
     let toks: Vec<&str> = args.split_whitespace().collect();
     let mut i = 0;
@@ -637,23 +654,43 @@ fn shell_runs_script(args: &str) -> bool {
     if i < toks.len() {
         i += 1;
     }
-    // 看后续 token:遇到 -c 即临时壳(非脚本);遇到脚本文件即 true
+    // 看后续 token:遇到内联命令开关即临时壳(非脚本);遇到脚本文件即 true
     while i < toks.len() {
         let t = toks[i];
-        if t == "-c" {
-            return false; // 内联命令壳
+        let tl = t.to_ascii_lowercase();
+        // 内联命令壳:POSIX -c;PowerShell -Command/-EncodedCommand;cmd /c /k
+        if tl == "-c"
+            || tl == "-command"
+            || tl == "-encodedcommand"
+            || tl == "/c"
+            || tl == "/k"
+        {
+            return false;
         }
-        if t.starts_with('-') {
-            i += 1; // 其它选项(-l/-e/-x 等)跳过
+        // PowerShell 显式脚本开关:-File <script> → 是脚本
+        if tl == "-file" || tl == "-f" {
+            return true;
+        }
+        // 跳过选项:POSIX/PowerShell 的 `-x`,以及 cmd 的单字母开关 `/q`、`/s` 等。
+        // 注意:不能笼统跳过所有 `/` 前缀 token —— POSIX 绝对路径脚本 `/opt/run.sh` 也以 `/` 开头,
+        // 那是位置参数不是选项。只把「/ + 单字母」视作 cmd 开关跳过。
+        let is_cmd_switch = t.len() == 2 && t.starts_with('/');
+        if t.starts_with('-') || is_cmd_switch {
+            i += 1;
             continue;
         }
-        // 第一个非选项位置参数:是脚本文件吗?
-        let name = t.rsplit('/').next().unwrap_or(t);
-        return name.ends_with(".sh")
-            || name.ends_with(".bash")
-            || t.contains('/'); // 带路径的可执行脚本
+        // 第一个非选项位置参数:是脚本文件吗?(basename 同时按 / 和 \ 切)
+        let name = t.rsplit(['/', '\\']).next().unwrap_or(t);
+        let nl = name.to_ascii_lowercase();
+        return nl.ends_with(".sh")
+            || nl.ends_with(".bash")
+            || nl.ends_with(".ps1")
+            || nl.ends_with(".bat")
+            || nl.ends_with(".cmd")
+            || t.contains('/')
+            || t.contains('\\'); // 带路径的可执行脚本
     }
-    false // 裸 bash / 交互壳
+    false // 裸 shell / 交互壳
 }
 
 
@@ -671,8 +708,12 @@ fn is_noise(p: &ProcInfo) -> bool {
         return true;
     }
     let exe = exe_name(&p.args);
-    // shell 类:只有"带脚本文件参数"时才放行(不算噪声),其余仍过滤。
-    if matches!(exe.as_str(), "sh" | "bash" | "zsh" | "dash" | "fish" | "ksh") {
+    // shell 类(含 Windows 的 powershell/pwsh/cmd):只有"带脚本文件参数"时才放行,
+    // 其余(裸壳 / 内联命令壳)仍过滤。这是 Windows 上挡住 powershell.exe 刷屏的关键。
+    if matches!(
+        exe.as_str(),
+        "sh" | "bash" | "zsh" | "dash" | "fish" | "ksh" | "powershell" | "pwsh" | "cmd"
+    ) {
         return !shell_runs_script(&p.args);
     }
     NOISE_CMDS.contains(&exe.as_str())
@@ -1031,5 +1072,38 @@ mod tests {
         }
         // 但带脚本的 bash 仍显示(不受 dev 名单影响)
         assert!(!noise("bash deploy.sh"));
+    }
+
+    #[test]
+    fn windows_shells_and_hosts_are_noise() {
+        // Windows 上 agent 每跑一条命令就刷一批这些壳/宿主进程 → 全部过滤。
+        // 覆盖:带完整路径、带 .exe 后缀、大小写混合。
+        for c in [
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile -Command \"ls\"",
+            "pwsh.exe -Command \"Get-ChildItem\"",
+            r"C:\Windows\System32\cmd.exe /c dir",
+            "cmd.exe /k",
+            r"C:\Windows\System32\conhost.exe 0x4",
+            "node_repl.exe",
+            "WindowsTerminal.exe",
+            "OpenConsole.exe",
+            "where.exe python",
+            "findstr /i foo",
+        ] {
+            assert!(noise(c), "Windows 壳/宿主应被过滤: {c}");
+        }
+    }
+
+    #[test]
+    fn windows_shell_running_script_still_shows() {
+        // PowerShell/cmd 跑脚本文件 = 用户的真实长任务 → 显示(不过滤)。
+        assert!(!noise("powershell.exe -File train.ps1"));
+        assert!(!noise(r"powershell -File C:\work\run.ps1 -Fast"));
+        assert!(noise("cmd.exe /c quickcmd")); // /c 是内联壳 → 仍过滤
+        assert!(!noise("cmd.exe deploy.bat"));
+        // 真实程序(python.exe 训练)在 Windows 上也照常显示
+        assert!(!noise("python.exe -u train.py"));
+        assert!(!noise(r"C:\Python311\python.exe eval.py"));
     }
 }

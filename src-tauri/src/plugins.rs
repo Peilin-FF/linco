@@ -91,34 +91,17 @@ const CLAUDE_MARKETPLACE: &str = "linco-plugins-marketplace";
 /// codex marketplace 名(与 vendor/.agents/plugins/marketplace.json 的 name 一致)。
 const CODEX_MARKETPLACE: &str = "linco-codex-marketplace";
 
-/// 解析 claude/codex 真实路径并缓存(GUI app 的精简 PATH 找不到 homebrew/nvm 里的它们)。
-fn cli_exe(name: &str) -> String {
-    use std::sync::{Mutex, OnceLock};
-    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, String>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    if let Some(p) = cache.lock().ok().and_then(|m| m.get(name).cloned()) {
-        return p;
-    }
-    let resolved = crate::proc_ext::resolve_exe(name);
-    if let Ok(mut m) = cache.lock() {
-        m.insert(name.to_string(), resolved.clone());
-    }
-    resolved
-}
-
 /// 探测某 CLI 是否有 `plugin` 子命令(老版本没有 → 回退拷文件)。
 fn cli_has_plugin(exe: &str) -> bool {
-    let mut c = Command::new(cli_exe(exe));
-    c.arg("plugin").arg("--help");
-    crate::proc_ext::no_window(&mut c);
+    // 经 cli_command:Windows 上正确解析 .cmd/.exe shim 并按需走 cmd.exe /c,
+    // 否则 npm 全局装的 codex.cmd 启动失败 → 被误判成"无 plugin 子命令"。
+    let mut c = crate::proc_ext::cli_command(exe, &["plugin", "--help"]);
     c.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// 跑一条本地 CLI 命令(no_window 包裹),返回 (成功, stderr)。
 fn run_cli(exe: &str, args: &[&str]) -> (bool, String) {
-    let mut c = Command::new(cli_exe(exe));
-    c.args(args);
-    crate::proc_ext::no_window(&mut c);
+    let mut c = crate::proc_ext::cli_command(exe, args);
     match c.output() {
         Ok(o) => (
             o.status.success(),
@@ -560,9 +543,7 @@ fn claude_variant(base: &str, lang: &str) -> String {
 /// `--available` 时则是 {installed:[...], available:[...]}。两种都兼容。
 fn claude_installed_ids() -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    let mut c = Command::new(cli_exe("claude"));
-    c.args(["plugin", "list", "--json"]);
-    crate::proc_ext::no_window(&mut c);
+    let mut c = crate::proc_ext::cli_command("claude", &["plugin", "list", "--json"]);
     let Ok(o) = c.output() else { return set };
     if !o.status.success() {
         return set;
@@ -591,9 +572,7 @@ fn claude_installed_ids() -> std::collections::HashSet<String> {
 /// 查 codex 已安装启用的插件名集合(name,如 "html-kit")。
 fn codex_installed_names() -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
-    let mut c = Command::new(cli_exe("codex"));
-    c.args(["plugin", "list", "--json"]);
-    crate::proc_ext::no_window(&mut c);
+    let mut c = crate::proc_ext::cli_command("codex", &["plugin", "list", "--json"]);
     if let Ok(o) = c.output() {
         if o.status.success() {
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {

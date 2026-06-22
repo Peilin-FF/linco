@@ -71,6 +71,16 @@ fn stable_hash(s: &str) -> u64 {
     hash
 }
 
+/// 路径分隔符归一化:把反斜杠统一成正斜杠。
+/// git 内部一律用 `/`(name-status 输出、pathspec 都是),但 Windows 的文件 API 给的是 `\`。
+/// shadow 的所有「路径比较 / 拼 git pathspec / 拼 map key」都先过这一层,
+/// 否则 Windows 本地项目:`C:\proj\src\a.py`(文件树) ≠ `C:\proj/src/a.py`(git 拼出来)
+/// → 文件树标记 miss(全不标)、rel 前缀剥离失败 → diff pathspec 也匹配不到(全空白)。
+/// 在 macOS/Linux 上路径本就无 `\`,此函数是无操作,安全。
+fn norm_slashes(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
 /// 单文件纳入快照的大小上限:超过则不纳入(不标记、不 diff)。
 /// 训练产物里动辄上 GB 的模型权重必须挡在外面,否则影子 git 会被撑爆/卡死。
 const MAX_SNAPSHOT_FILE: u64 = 1024 * 1024; // 1MB
@@ -202,6 +212,12 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
         "core.hooksPath=/dev/null".into(),
         "-c".into(),
         "commit.gpgsign=false".into(),
+        // core.quotePath=false:默认 git 会把非 ASCII 路径(中文文件名/目录)八进制转义并加双引号
+        // 输出(如 "\346\265\...")。diff --name-status 一旦被转义,文件树用它当 map key 就匹配不上
+        // 真实 entry.path → 文件树不标 M/A/D(而 diff 走 `-- <path>` 传真实路径,不受影响,所以
+        // 「右侧 diff 正常、左侧文件树无标记」)。关掉它,name-status 才输出原始 UTF-8 路径。
+        "-c".into(),
+        "core.quotePath=false".into(),
     ];
     full.extend(args.iter().map(|a| a.to_string()));
     // 用 resolve_exe 定位 git 绝对路径:GUI 启动(Finder/launchd)的 app PATH 精简,
@@ -267,7 +283,9 @@ fn collect_files(repo: &str) -> Vec<String> {
                     continue;
                 }
                 if let Ok(rel) = p.strip_prefix(root) {
-                    out.push(rel.to_string_lossy().to_string());
+                    // 归一成 `/`:喂给 git 的 pathspec 必须用正斜杠,Windows 的 rel 是反斜杠,
+                    // 否则 `add --pathspec-from-file` 匹配不到文件 → 基线/快照漏收这些文件。
+                    out.push(norm_slashes(&rel.to_string_lossy()));
                 }
             }
         }
@@ -355,10 +373,10 @@ fn rel_of(repo: &str, path: &str) -> String {
     // 去掉首尾空白:path 偶尔带尾随 \r/空格(前端拼接/读取残留),
     // 否则 pathspec "README.md\r" 匹配不到 "README.md" → diff --cached -- <rel> 返回空,
     // 导致文件树标了 M、右侧 diff 却空白。git pathspec 对尾随字符零容忍,必须 trim。
-    let repo = repo.trim();
-    let path = path.trim();
+    let repo = norm_slashes(repo.trim());
+    let path = norm_slashes(path.trim());
     path.strip_prefix(&format!("{}/", repo.trim_end_matches('/')))
-        .unwrap_or(path)
+        .unwrap_or(&path)
         .to_string()
 }
 
@@ -487,7 +505,9 @@ pub async fn shadow_changed(
 
 /// 解析 `git diff --name-status` 输出为 绝对路径 → 状态字符(M/A/D)。
 fn parse_name_status(repo: &str, out: &str) -> HashMap<String, String> {
-    let base_dir = repo.trim_end_matches('/');
+    // 归一成 `/`:git 的 `p` 本就是正斜杠,base 也归一,拼出的 key 才能与前端归一后的
+    // 文件树节点路径精确相等(Windows 本地项目的标记匹配靠这个)。
+    let base_dir = norm_slashes(repo.trim_end_matches('/'));
     let mut map = HashMap::new();
     for line in out.lines() {
         let mut it = line.split('\t');
@@ -557,5 +577,61 @@ mod tests {
         assert!(changed.is_empty());
         let d = run(shadow_diff(None, repo, "x".into())).unwrap();
         assert!(d.is_empty());
+    }
+
+    // 回归:含中文(非 ASCII)路径的改动,changed 的 map key 必须是原始 UTF-8 绝对路径,
+    // 不能是 git 默认 quotePath 的八进制转义("\346\265\..."),否则文件树匹配不上 → 不标记。
+    // 这正是「远端 diff 正常、左侧文件树无标记」的根因。
+    #[test]
+    fn non_ascii_paths_are_not_quoted() {
+        let tmp = std::env::temp_dir().join(format!("linco_shadow_test_{}", stable_hash("cjk")));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("测试目录")).unwrap();
+        let repo = tmp.to_string_lossy().to_string();
+
+        run(shadow_begin_turn(None, repo.clone())).unwrap();
+
+        // 新建一个中文路径文件
+        std::fs::write(tmp.join("测试目录").join("主程序.py"), "print(1)\n").unwrap();
+
+        let changed = run(shadow_changed(None, repo.clone())).unwrap();
+        let key = format!("{repo}/测试目录/主程序.py");
+        assert_eq!(
+            changed.get(&key).map(String::as_str),
+            Some("A"),
+            "中文路径应以原始 UTF-8 绝对路径为 key(quotePath 须关闭),实际 changed={changed:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(shadow_dir(&repo));
+    }
+
+    // 回归(Windows 本地项目):前端给的是反斜杠绝对路径,后端必须把它归一后再剥前缀,
+    // 否则 strip_prefix 失败 → rel 退化成整条绝对路径 → diff pathspec 匹配不到(diff 空白)。
+    #[test]
+    fn rel_of_handles_windows_backslashes() {
+        let repo = r"C:\Users\me\proj";
+        let path = r"C:\Users\me\proj\src\main.py";
+        assert_eq!(rel_of(repo, path), "src/main.py");
+        // 混用 / 与 \(前端/git 拼接残留)也应正确剥离
+        assert_eq!(rel_of("C:/Users/me/proj", r"C:\Users\me\proj\a.py"), "a.py");
+    }
+
+    // 回归(Windows 本地项目):name-status 的 map key 必须是归一后的正斜杠绝对路径,
+    // 才能与前端归一后的文件树 entry.path 精确相等 → 否则 Windows 上文件全不标记。
+    #[test]
+    fn parse_name_status_normalizes_windows_base() {
+        let out = "M\tsrc/main.py\nA\tdocs/readme.md\n";
+        let m = parse_name_status(r"C:\Users\me\proj", out);
+        assert_eq!(m.get("C:/Users/me/proj/src/main.py").map(String::as_str), Some("M"));
+        assert_eq!(m.get("C:/Users/me/proj/docs/readme.md").map(String::as_str), Some("A"));
+        // 不应残留任何反斜杠 key
+        assert!(m.keys().all(|k| !k.contains('\\')), "key 不应含反斜杠: {m:?}");
+    }
+
+    #[test]
+    fn norm_slashes_is_noop_on_posix_paths() {
+        assert_eq!(norm_slashes("/home/me/proj/a.py"), "/home/me/proj/a.py");
+        assert_eq!(norm_slashes(r"a\b\c"), "a/b/c");
     }
 }

@@ -55,9 +55,12 @@ function nodeGitStatus(
   gitMap?: Map<string, string>
 ): string | null {
   if (!gitMap || gitMap.size === 0) return null
-  if (!entry.isDir) return gitMap.get(entry.path) ?? null
+  // 归一成 `/`:gitMap 的 key 是 shadow 后端归一后的正斜杠绝对路径,但 Windows 本地项目的
+  // entry.path 是反斜杠。不归一则两者永不相等 → Windows 上文件全不标记。Mac/Linux 无 `\`,无副作用。
+  const self = entry.path.replace(/\\/g, '/')
+  if (!entry.isDir) return gitMap.get(self) ?? null
   // 文件夹:看是否有改动落在其下;有则返回聚合标记(优先级 M>A>D>?,统一显点)
-  const prefix = entry.path.replace(/\/+$/, '') + '/'
+  const prefix = self.replace(/\/+$/, '') + '/'
   for (const k of gitMap.keys()) {
     if (k.startsWith(prefix)) return '•' // 文件夹只显改动点
   }
