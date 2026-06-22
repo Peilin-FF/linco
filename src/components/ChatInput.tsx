@@ -16,6 +16,29 @@ import {
 import { providerCaps, type AgentConfig } from '@/lib/config'
 import { useI18n } from '@/lib/i18n'
 
+/**
+ * 这次 keydown 是否发生在输入法(IME)合成态中 —— 用中文/日文等输入法打字、按回车
+ * 确认候选词那一下,就属于合成态。此时回车意在"确认选词",绝不能当成"提交消息"。
+ *
+ * 为什么不能只靠 React 的 onCompositionStart/End 维护的 composingRef:
+ * 在部分平台(尤其 Windows IME)上,compositionend 可能**先于**确认键的 keydown 触发,
+ * 于是 keydown 到达时 ref 已被置回 false,守卫失效 → 误提交。
+ * 而原生事件自带的 `isComposing` 是事件派发那一刻就定死的快照,不受跨事件时序竞争影响;
+ * keyCode === 229 是旧式 IME 占位码,作双保险。两者任一为真即视作合成中。
+ */
+function isImeComposing(
+  e: { nativeEvent?: { isComposing?: boolean; keyCode?: number }; keyCode?: number },
+  composingRef: { current: boolean }
+): boolean {
+  const native = e.nativeEvent
+  return (
+    composingRef.current ||
+    native?.isComposing === true ||
+    native?.keyCode === 229 ||
+    e.keyCode === 229
+  )
+}
+
 interface ChatInputProps {
   onSend?: (text: string) => void
   /** 实时转发原始按键到 PTY(用于 TUI 实时回显/命令提示) */
@@ -300,8 +323,11 @@ export default function ChatInput({
             forwardDiff(v)
           }}
           onKeyDown={(e) => {
+            // 合成态(IME 选词)中的所有按键都不触发提交/快捷键 —— 用 isImeComposing
+            // 同时检查原生事件的 isComposing/keyCode,避免 compositionend 早于 keydown 的竞态。
+            const composing = isImeComposing(e, composingRef)
             // 回车提交;Shift+Enter 换行
-            if (e.key === 'Enter' && !e.shiftKey && !composingRef.current) {
+            if (e.key === 'Enter' && !e.shiftKey && !composing) {
               e.preventDefault()
               handleSend()
               return
@@ -310,7 +336,7 @@ export default function ChatInput({
             // 但有下拉菜单打开时,Esc 优先关菜单(由上面的全局监听处理),不打断。
             if (
               e.key === 'Escape' &&
-              !composingRef.current &&
+              !composing &&
               !openMenu &&
               !dirOpen
             ) {
@@ -319,7 +345,7 @@ export default function ChatInput({
               return
             }
             // ↑/↓:多行优先光标移动,仅在首行↑/末行↓时翻已发送消息历史。合成中不处理。
-            if (e.key === 'ArrowUp' && !composingRef.current) {
+            if (e.key === 'ArrowUp' && !composing) {
               const ta = e.currentTarget
               if (atFirstLine(ta) && historyRef.current.length > 0) {
                 e.preventDefault()
@@ -327,7 +353,7 @@ export default function ChatInput({
               }
               return
             }
-            if (e.key === 'ArrowDown' && !composingRef.current) {
+            if (e.key === 'ArrowDown' && !composing) {
               const ta = e.currentTarget
               if (atLastLine(ta) && histIdx !== null) {
                 e.preventDefault()

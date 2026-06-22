@@ -14,6 +14,8 @@ import {
   movePath,
   renamePath,
   revealInFinder,
+  parentDir,
+  baseName,
   type DirEntry
 } from '@/lib/fs'
 import { transferDownload, onFsTouched } from '@/lib/transfer'
@@ -86,9 +88,10 @@ export default function FilesView({
 
   // 新建后定位:文件→作为标签打开(并触发树展开+定位);文件夹→仅请求树定位展开。
   // 关键:这会让新建项所在目录被展开,否则在未展开的目录里新建会"看不见"。
-  const revealAndOpen = (createdPath: string): void => {
-    if (/\.[^/]+$/.test(createdPath)) {
-      // 有扩展名,当作文件打开
+  // isDir 由调用方明确传入(new-file/new-folder 各自知道),不再靠扩展名猜——
+  // 否则无扩展名的文件、或带点的文件夹(如 my.dir)都会被误判。
+  const revealAndOpen = (createdPath: string, isDir: boolean): void => {
+    if (!isDir) {
       openFile(createdPath)
     } else {
       revealSeq.current += 1
@@ -196,7 +199,7 @@ export default function FilesView({
       // 只关心当前连接(host 一致;本地都为空串)
       if ((e.host || undefined) !== (host || undefined)) return
       for (const p of e.paths) {
-        const dir = p.slice(0, p.lastIndexOf('/'))
+        const dir = parentDir(p)
         if (dir) pendingDirs.add(dir)
       }
       const now = Date.now()
@@ -229,16 +232,15 @@ export default function FilesView({
 
   // 取某 entry 的“所在目录”:文件夹用自身,文件用其父目录
   const dirOf = (entry: DirEntry): string =>
-    entry.isDir ? entry.path : entry.path.slice(0, entry.path.lastIndexOf('/'))
+    entry.isDir ? entry.path : parentDir(entry.path)
 
   // 某条目所在的「父目录」(不论它是文件还是文件夹)。删除后要刷新父目录,
   // 否则删文件夹时 dirOf 返回文件夹自身(已删),父级树里残留空节点。
-  const parentOf = (entry: DirEntry): string =>
-    entry.path.slice(0, entry.path.lastIndexOf('/')) || '/'
+  const parentOf = (entry: DirEntry): string => parentDir(entry.path) || '/'
 
   // 拖拽移动:把 src 移到 destDir 下,刷新两端
   const handleMove = async (src: string, destDir: string): Promise<void> => {
-    const srcDir = src.slice(0, src.lastIndexOf('/'))
+    const srcDir = parentDir(src)
     if (srcDir === destDir) return // 已在目标目录
     try {
       await movePath(src, destDir, host)
@@ -261,7 +263,7 @@ export default function FilesView({
           const created = await createFile(target.path, name, host)
           refresh(target.path)
           // 展开目标目录并定位到新文件,顺手作为标签打开
-          revealAndOpen(created)
+          revealAndOpen(created, false)
           break
         }
         case 'new-folder': {
@@ -269,7 +271,7 @@ export default function FilesView({
           if (!name) return
           const created = await createDir(target.path, name, host)
           refresh(target.path)
-          revealAndOpen(created)
+          revealAndOpen(created, true)
           break
         }
         case 'reveal':
@@ -307,10 +309,7 @@ export default function FilesView({
           } else {
             await movePath(clipboard.path, target.path, host)
             // 剪切后清空源目录刷新
-            const srcDir = clipboard.path.slice(
-              0,
-              clipboard.path.lastIndexOf('/')
-            )
+            const srcDir = parentDir(clipboard.path)
             refresh(srcDir)
             setClipboard(null)
           }
@@ -396,15 +395,13 @@ export default function FilesView({
           } else if (meta && (e.key === 'v' || e.key === 'V')) {
             // 粘贴到:选中文件夹则进其内,选中文件则进其父目录
             e.preventDefault()
-            const destDir = treeSel.isDir
-              ? treeSel.path
-              : treeSel.path.slice(0, treeSel.path.lastIndexOf('/'))
+            const destDir = treeSel.isDir ? treeSel.path : parentDir(treeSel.path)
             void handleAction('paste', { name: '', path: destDir, isDir: true })
           }
         }}
       >
         <div className="flex shrink-0 items-center justify-between px-3 py-2 text-[12px] font-medium uppercase tracking-wide text-ink-faint">
-          <span className="truncate">{root.split('/').pop() || root}</span>
+          <span className="truncate">{baseName(root) || root}</span>
         </div>
         <div className="min-h-0 flex-1">
           <FileTree
@@ -452,7 +449,7 @@ export default function FilesView({
                   title={p}
                 >
                   <span className="max-w-[160px] truncate">
-                    {p.split('/').pop()}
+                    {baseName(p)}
                   </span>
                   <button
                     onClick={(e) => {

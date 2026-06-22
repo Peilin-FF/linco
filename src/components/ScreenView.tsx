@@ -79,15 +79,17 @@ export default function ScreenView({
   // 提交给 Agent 的条件:有要看的 HTML 文件 + 父层提供了发送通道。
   const canSubmit = !!currentRel && !!onSubmitToAgent
 
-  // 「提交给 Agent」:让 agent 查看当前 HTML Notebook 里新增的需求,把回复直接写在各需求下方。
-  // 简短一句话(不带具体路径,agent 在当前预览上下文里知道是哪个文件)。中英文跟随界面语言。
+  // 「提交给 Agent」:让 agent 查看当前 HTML Notebook 里新增的需求,把回答写在需求的下方。
+  // 带上当前 HTML 文件的相对路径:agent 仅靠"当前预览上下文"经常感应不到是哪个文件
+  // (Windows 上尤其不可靠),把相对路径直接写进指令,让 agent 明确知道要改哪个文件。
   // 注意:整条作为单行发送——PTY 里 \n 可能被 TUI 当作提前回车,故用句子串联不换行。
   const submitToAgent = (): void => {
     if (!canSubmit) return
+    const rel = currentRel
     const prompt =
       lang === 'en'
-        ? `Check the new requirements I added in the current HTML Notebook and write each answer directly below its requirement.`
-        : `查看我在当前 HTML Notebook 中新增的需求,把答案直接回复在每条需求的下方。`
+        ? `Open the HTML Notebook file "${rel}" and check the new requirements I added in it, then write each answer directly below its requirement.`
+        : `打开 HTML Notebook 文件「${rel}」,查看我在其中新增的需求,把回答写在需求的下方。`
     onSubmitToAgent?.(prompt)
   }
 

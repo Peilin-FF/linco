@@ -57,10 +57,14 @@ export function usePrompt(): {
           defaultValue={state.defaultValue}
           placeholder={state.placeholder}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') {
+            // 合成态(中文/日文输入法选词)中的回车意在"确认候选词",不应提交对话框。
+            // nativeEvent.isComposing / keyCode===229 是事件那一刻的快照,可靠避免误触发。
+            const composing =
+              e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229
+            if (e.key === 'Enter' && !composing) {
               e.preventDefault()
               close((e.target as HTMLInputElement).value.trim())
-            } else if (e.key === 'Escape') {
+            } else if (e.key === 'Escape' && !composing) {
               e.preventDefault()
               close(null)
             }

@@ -762,7 +762,11 @@ export default function App(): JSX.Element {
   // 从预览页「提交给 Agent」:把一段指令发给当前对话会话(等价于在对话框输入并回车)。
   // 走 handleSend 记基线/用量,再把整段文本 + 单独回车写进 PTY 放行 agent。
   // 此路径没有逐字转发(文本来自按钮),所以要整段送入;但不 Ctrl-U(claude/codex 不认),
-  // 且 \r 单独发(下一帧),避免混进文本 burst 被当 paste 换行。
+  // 且 \r 单独发(晚一帧),避免混进文本 burst 被当 paste 换行。
+  //
+  // Windows:ConPTY 下 TUI 吞这段多字节文本更慢,16ms 的 \r 常常赶在文本落定前到达、
+  // 被 TUI 吸收掉 → 文字进了输入框却没回车提交(就是 Windows 用户反馈的"只进框不发送")。
+  // 故 Windows 用更长的延时,且分两次补发 \r 兜底(第二次防第一次仍被吃掉)。
   const submitToAgent = (text: string): void => {
     const t = text.trim()
     if (!t) return
@@ -770,7 +774,13 @@ export default function App(): JSX.Element {
     if (!handle) return
     handleSend(t)
     handle.write(t)
-    window.setTimeout(() => handle.write('\r'), 16)
+    const isWindows = navigator.platform.toLowerCase().includes('win')
+    if (isWindows) {
+      window.setTimeout(() => handle.write('\r'), 120)
+      window.setTimeout(() => handle.write('\r'), 320)
+    } else {
+      window.setTimeout(() => handle.write('\r'), 16)
+    }
     handle.focus()
   }
 

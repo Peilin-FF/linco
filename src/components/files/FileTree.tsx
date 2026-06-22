@@ -12,7 +12,7 @@ import {
   ReplaceAll,
   Replace
 } from 'lucide-react'
-import { listDir, prefetchFile, prefetchBytes, type DirEntry } from '@/lib/fs'
+import { listDir, prefetchFile, prefetchBytes, baseName, type DirEntry } from '@/lib/fs'
 import { startDragOut, markInternalDrag, clearInternalDrag } from '@/lib/transfer'
 import {
   replaceInFile,
@@ -47,6 +47,19 @@ function gitColor(ch: string): string {
     default:
       return 'text-ink-faint' // ? 未跟踪
   }
+}
+
+// 路径分隔符归一(同时吃 `/` 与 `\`)→ 比较 Windows 反斜杠路径与正斜杠路径时不踩坑。
+function normPath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+/** 两个路径是否指向同一项(忽略分隔符差异 + 尾随分隔符)。 */
+function samePath(a: string, b: string): boolean {
+  return normPath(a).replace(/\/+$/, '') === normPath(b).replace(/\/+$/, '')
+}
+/** child 是否在 parent 目录之下(忽略分隔符差异)。 */
+function isUnder(child: string, parent: string): boolean {
+  return normPath(child).startsWith(normPath(parent).replace(/\/+$/, '') + '/')
 }
 
 // 计算节点的 git 状态:文件取自身;文件夹聚合(内部任意改动则取一个代表字符)。
@@ -161,7 +174,7 @@ const Node = memo(function Node({
   }
 
   useEffect(() => {
-    if (open && entry.isDir && refreshPaths.includes(entry.path))
+    if (open && entry.isDir && refreshPaths.some((p) => samePath(p, entry.path)))
       void loadChildren()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
@@ -171,12 +184,13 @@ const Node = memo(function Node({
   useEffect(() => {
     if (!revealPath) return
     if (entry.isDir) {
-      if (revealPath === entry.path || revealPath.startsWith(entry.path + '/')) {
-        if (children === null) void loadChildren()
+      if (samePath(revealPath, entry.path) || isUnder(revealPath, entry.path)) {
+        // 目标落在本目录或其后代:即便已展开过也强制重拉,确保新建项立即出现。
+        void loadChildren()
         setOpen(true)
       }
     }
-    if (revealPath === entry.path) {
+    if (samePath(revealPath, entry.path)) {
       // 等展开/布局完成后,仅当目标不在可视区域时才滚动(避免已可见时无谓跳动)
       setTimeout(() => {
         const el = rowRef.current
@@ -223,8 +237,8 @@ const Node = memo(function Node({
     setDragOver(false)
     const src = e.dataTransfer.getData('text/linco-path')
     // 不能拖到自身或自己的子目录;不能拖到自己所在目录(无意义)
-    if (!src || src === entry.path) return
-    if (entry.path.startsWith(src + '/')) return
+    if (!src || samePath(src, entry.path)) return
+    if (isUnder(entry.path, src)) return
     onMove(src, entry.path)
   }
 
@@ -401,7 +415,7 @@ export default function FileTree({
   }, [root, host])
 
   useEffect(() => {
-    if (refreshPaths.includes(root)) void load()
+    if (refreshPaths.some((p) => samePath(p, root))) void load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
 
@@ -688,7 +702,7 @@ export default function FileTree({
               </div>
               {results.map((f) => {
                 const isCol = collapsed.has(f.path)
-                const FileIcon = iconForFile(f.path.split('/').pop() || '')
+                const FileIcon = iconForFile(baseName(f.path))
                 return (
                   <div key={f.path}>
                     <div
@@ -702,7 +716,7 @@ export default function FileTree({
                       )}
                       <FileIcon size={13} className="shrink-0 text-ink-muted" />
                       <span className="truncate text-[12.5px] text-ink">
-                        {f.path.split('/').pop()}
+                        {baseName(f.path)}
                       </span>
                       <span className="ml-auto shrink-0 rounded-full bg-black/8 px-1.5 text-[10.5px] text-ink-muted">
                         {f.matches.length}

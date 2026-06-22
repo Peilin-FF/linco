@@ -16,6 +16,23 @@ interface RawEntry {
 
 const h = (host?: string): string | null => host || null
 
+/**
+ * 取路径的父目录。**同时识别 `/` 与 `\` 分隔符** —— Windows 本地的路径来自
+ * `PathBuf::to_string_lossy()`,是反斜杠;只按 `/` 切会返回 -1、截出垃圾串,
+ * 导致"新建/移动/删除后刷新对不上目录 → 文件树不更新"(就是 Windows 上的刷新 bug)。
+ * 无分隔符(纯盘符根之类)时返回空串,调用方自行兜底。
+ */
+export function parentDir(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return i > 0 ? path.slice(0, i) : ''
+}
+
+/** 取路径最后一段(文件/目录名)。同样兼容 `/` 与 `\`。 */
+export function baseName(path: string): string {
+  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return i >= 0 ? path.slice(i + 1) : path
+}
+
 export async function listDir(path: string, host?: string): Promise<DirEntry[]> {
   const raw = await invoke<RawEntry[]>('fs_list_dir', { path, host: h(host) })
   return raw.map((e) => ({ name: e.name, path: e.path, isDir: e.is_dir }))
