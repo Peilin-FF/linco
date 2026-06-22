@@ -96,6 +96,11 @@ pub fn term_start(
         if remote.is_some() {
             // 远程:无论是否有 base,都先 cd(+导出 env),再跑 base
             let mut prefix = String::new();
+            // 中文乱码修复:远端 locale 不是 UTF-8 时,中文路径/输出会乱码。仅在远端未设时兜底
+            // 一个 UTF-8 locale(${VAR:-default} 不覆盖远端已有的正确值),让会话按 UTF-8 输出。
+            prefix.push_str(
+                "export LANG=${LANG:-en_US.UTF-8} LC_ALL=${LC_ALL:-en_US.UTF-8}; ",
+            );
             // IS_SANDBOX=1 仅在要启动 agent(base 非空,如 claude)时注入:
             // Claude Code 在 root 容器里用 --dangerously-skip-permissions 会被拦,
             // 除非环境里有 IS_SANDBOX=1。普通终端(无 base)不需要,保持干净。
@@ -135,9 +140,18 @@ pub fn term_start(
         #[cfg(windows)]
         {
             // Windows:用 cmd.exe(ComSpec)。订阅登录、跑 claude/codex 都在 cmd 里进行。
+            // 中文乱码修复:cmd 默认用系统 OEM 代码页(简体中文 Windows 是 GBK/936),输出的中文
+            // 是 GBK 字节,而前端 xterm.js 固定按 UTF-8 解码 → 乱码。用 `/K "chcp 65001>nul"`
+            // 在进入交互前把控制台代码页切到 UTF-8(65001),`>nul` 静默不污染首屏。
+            // 另注入 PYTHONUTF8/PYTHONIOENCODING:chcp 管 cmd 自身与原生程序,但 Python 这类
+            // 按 locale 决定输出编码的运行时还需要这两个 env 才稳定吐 UTF-8。
             let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
             cmd = CommandBuilder::new(&shell);
+            cmd.arg("/K");
+            cmd.arg("chcp 65001>nul");
             cmd.env("TERM", "xterm-256color");
+            cmd.env("PYTHONUTF8", "1");
+            cmd.env("PYTHONIOENCODING", "utf-8");
             if let Some(vars) = &env {
                 for (k, v) in vars {
                     if !k.is_empty() {
@@ -158,6 +172,18 @@ pub fn term_start(
             cmd = CommandBuilder::new(&shell);
             cmd.arg("-l");
             cmd.env("TERM", "xterm-256color");
+            // 中文乱码兜底:若用户 LANG 缺失或不是 UTF-8(精简环境/容器常见),程序可能按非 UTF-8
+            // 输出 → xterm 当 UTF-8 解 → 乱码。仅在缺失/非 UTF-8 时补一个 UTF-8 locale,
+            // 不覆盖用户已正确设置的值(只动 LANG 这个回退键,不碰 LC_ALL 以免盖掉用户精细配置)。
+            let lang_ok = std::env::var("LANG")
+                .map(|l| {
+                    let l = l.to_ascii_lowercase();
+                    l.contains("utf-8") || l.contains("utf8")
+                })
+                .unwrap_or(false);
+            if !lang_ok {
+                cmd.env("LANG", "en_US.UTF-8");
+            }
             // 注入配置的环境变量(API Key / base url 等)
             if let Some(vars) = &env {
                 for (k, v) in vars {
