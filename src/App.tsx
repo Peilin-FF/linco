@@ -244,6 +244,13 @@ export default function App(): JSX.Element {
   )
   const host = activeConn?.host || undefined // undefined = 本地
 
+  // 目标 PTY 的 shell 类型:仅「本地 + Windows」是 cmd.exe(命令拼接的引号规则不同);
+  // 远程会话 ssh 到远端是 POSIX shell,本地 Mac/Linux 也是 POSIX。决定 agentLaunchCommand 的引用方式。
+  // —— 这是 Windows 上 codex 历史会话恢复失败的根因:POSIX 单引号 cmd.exe 不认,会把
+  //    'rollout-...' 整串(含引号)当字面量传给 codex → 匹配不到会话 ID → 进不去。
+  const targetShell: 'posix' | 'cmd' =
+    !host && navigator.platform.toLowerCase().includes('win') ? 'cmd' : 'posix'
+
   // 默认 agent:决定对话会话要自动启动的命令与注入的环境变量
   const defaultAgent = useMemo(
     () => config?.agents.find((a) => a.id === config.defaultAgent),
@@ -254,8 +261,11 @@ export default function App(): JSX.Element {
     [defaultAgent]
   )
   const agentCommand = useMemo(
-    () => (defaultAgent ? agentLaunchCommand(defaultAgent) : undefined),
-    [defaultAgent]
+    () =>
+      defaultAgent
+        ? agentLaunchCommand(defaultAgent, undefined, targetShell)
+        : undefined,
+    [defaultAgent, targetShell]
   )
   const agentCommandBase = useMemo(
     () => (defaultAgent ? agentExecutable(defaultAgent) : undefined),
@@ -590,7 +600,7 @@ export default function App(): JSX.Element {
   const resumeSession = (id: string): void => {
     if (!defaultAgent) return
     setView('chat')
-    const cmd = agentLaunchCommand(defaultAgent, id)
+    const cmd = agentLaunchCommand(defaultAgent, id, targetShell)
     // 活动会话的 TerminalView 可能要等懒挂载;轮询拿到句柄再重启(最多 ~2s)。
     let tries = 0
     const tryRestart = (): void => {

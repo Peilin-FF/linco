@@ -225,6 +225,11 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
     // (同 plugins.rs 早先踩过的坑,解法一致。)
     let mut c = Command::new(crate::proc_ext::resolve_exe("git"));
     c.args(&full);
+    // 关键:把进程 cwd 设成 work-tree 根。git 的 pathspec(`index.html`、`src/a.ts`)是相对
+    // **进程 cwd** 解析的,不是相对 --work-tree。app 进程 cwd 往往不是项目根(dev 模式是
+    // src-tauri/,GUI 启动可能是 / 或别处),不设就会 "pathspec 'index.html' did not match" →
+    // add 失败、新文件进不了快照(文件树标记/diff 残缺)。设成 repo 后相对路径才对得上。
+    c.current_dir(repo);
     crate::proc_ext::no_window(&mut c);
     let out = c
         .output()

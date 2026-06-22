@@ -19,6 +19,13 @@ interface ScreenViewProps {
   onSubmitToAgent?: (text: string) => void
 }
 
+type NavState = { stack: string[]; idx: number }
+
+// 导航历史按 (host, cwd) 持久化在模块级:切换工作区/机器再切回来时,恢复之前正在看的页面,
+// 而不是每次都被重置回产物列表(index)。组件重挂载也能从这里捞回状态。
+const navCache = new Map<string, NavState>()
+const navKey = (host?: string, cwd?: string): string => `${host || ''}|${cwd || ''}`
+
 /**
  * 预览区:Linco 自己在 Mac 起的本地 HTTP 服务器(preview.rs)。
  *
@@ -38,12 +45,33 @@ export default function ScreenView({
   const { t, lang } = useI18n()
   const [port, setPort] = useState(0)
   // 导航历史栈 + 当前位置(浏览器式前进后退)。url 由 stack[idx] 派生。
-  const [nav, setNav] = useState<{ stack: string[]; idx: number }>({ stack: [], idx: -1 })
+  // 初值优先从 navCache 恢复(切回旧工作区时回到原来在看的页面)。
+  const [nav, setNav] = useState<NavState>(
+    () => navCache.get(navKey(host, cwd)) ?? { stack: [], idx: -1 }
+  )
   const [nonce, setNonce] = useState(0) // 强制重载
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [empty, setEmpty] = useState(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  // nav 当前归属的 (host,cwd) key。切换工作区时用它把旧状态存回正确的桶。
+  const navKeyRef = useRef(navKey(host, cwd))
+
+  // 持久化:nav 一变就写回它所属的桶,切回来能恢复。
+  useEffect(() => {
+    navCache.set(navKeyRef.current, nav)
+  }, [nav])
+
+  // 切换工作区/机器:把当前(即将离开的)nav 存回旧桶,再从新桶恢复。
+  // 组件常驻挂载不重建,所以靠这个 effect 在 prop 变化时换状态,而不是靠重挂载。
+  useEffect(() => {
+    const k = navKey(host, cwd)
+    if (k === navKeyRef.current) return
+    navCache.set(navKeyRef.current, nav) // nav 此刻仍是旧工作区的(state 尚未变)
+    navKeyRef.current = k
+    setNav(navCache.get(k) ?? { stack: [], idx: -1 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, cwd])
 
   // 某 url 是否「产物列表(index)」页(/__index__ 或服务器根 /)。
   const isIndexUrl = (u: string): boolean => {
@@ -106,12 +134,24 @@ export default function ScreenView({
     setNonce((x) => x + 1)
   }
 
-  // 后退:在【具体 HTML 文件页】上后退 → 直接回产物列表(index),不依赖历史栈。
-  // 这是确定性行为(不受 effect 重跑 / __lincoPath 校正影响),永远一致。
-  // 已经在 index(或其它非文件页)时,走普通历史后退。
+  // 后退:在【具体 HTML 文件页】上后退 → 回产物列表(index)。
+  // 关键:不能用 pushUrl(它会截断前进历史 → `>` 回不到刚才的文件)。
+  //  - 上一条已是 index:普通 idx-- 即可(前进仍指向当前文件)。
+  //  - 否则在当前文件【前面】插入一条 index,并把 idx 停在 index 上;
+  //    这样前进(forward)能回到原文件,实现 index ⇄ 文件 双向切换。
   const back = (): void => {
     if (mode === 'served' && url && !isIndexUrl(url) && port > 0) {
-      pushUrl(`http://127.0.0.1:${port}/__index__`)
+      const indexUrl = `http://127.0.0.1:${port}/__index__`
+      setNav((n) => {
+        if (n.idx > 0 && isIndexUrl(n.stack[n.idx - 1])) {
+          return { ...n, idx: n.idx - 1 } // 上一条就是 index,直接退
+        }
+        // 在当前条目前插入 index,定位到它;当前文件成为「前进」目标
+        const stack = [...n.stack]
+        stack.splice(n.idx, 0, indexUrl)
+        return { stack, idx: n.idx }
+      })
+      setNonce((x) => x + 1)
       return
     }
     setNav((n) => (n.idx > 0 ? { ...n, idx: n.idx - 1 } : n))
@@ -136,34 +176,50 @@ export default function ScreenView({
     previewPrefetchAssets(host).catch(() => {})
   }, [port, host])
 
-  // 工作目录 / 目标文件变化 → 设定预览目标、压入历史(served 模式)
+  // 已处理过的 previewPath(避免同一个右键预览请求在 cwd/host 变动时被重复触发)。
+  const handledPreviewRef = useRef<string | undefined>(undefined)
+
+  // 工作目录 / 目标文件就绪 → 设定预览目标。
+  // 关键改动:不再每次都把历史重置回 index。
+  //  - 显式 previewPath(右键预览某文件):始终导航到该文件。
+  //  - 否则(只是 cwd/host/port 就绪):仅当本工作区**还没有任何历史**时,才落到 index;
+  //    已有历史(之前看过的页面,可能从 navCache 恢复)则原样保留,不打扰。
   useEffect(() => {
     if (!port || !cwd || modeRef.current === 'manual') return
     let alive = true
     const base = `http://127.0.0.1:${port}/`
     ;(async () => {
       try {
-        if (previewPath) {
+        const isNewPreview =
+          !!previewPath && previewPath !== handledPreviewRef.current
+        if (isNewPreview) {
           // 右键指定某文件 → 直接进该文件
-          const rel = previewPath.startsWith(cwd)
-            ? previewPath.slice(cwd.length).replace(/^\/+/, '')
-            : previewPath
+          handledPreviewRef.current = previewPath
+          const rel = previewPath!.startsWith(cwd)
+            ? previewPath!.slice(cwd.length).replace(/^\/+/, '')
+            : previewPath!
           await previewSetTarget(cwd, rel, host)
           if (!alive) return
           setEmpty(false)
           pushUrl(base + encodeURI(rel))
-        } else {
-          // 默认 → 进「产物首页」列表,自己点选要看的 HTML。
-          // 先设根目录(target_rel 空,只为把 root 告诉服务器,否则列表页拿不到 root)
-          await previewSetTarget(cwd, '', host)
-          if (!alive) return
-          setEmpty(false)
-          pushUrl(base + '__index__')
+          return
         }
-      } catch {
+        // 无新的预览请求:已有历史则保留正在看的页面,不重置。
+        if (navCache.get(navKey(host, cwd))?.stack.length) {
+          setEmpty(false)
+          return
+        }
+        // 首次进入该工作区 → 落到「产物首页」列表(target_rel 空只为把 root 告诉服务器)。
+        await previewSetTarget(cwd, '', host)
         if (!alive) return
         setEmpty(false)
         pushUrl(base + '__index__')
+      } catch {
+        if (!alive) return
+        setEmpty(false)
+        if (!navCache.get(navKey(host, cwd))?.stack.length) {
+          pushUrl(base + '__index__')
+        }
       }
     })()
     return () => {
@@ -182,7 +238,7 @@ export default function ScreenView({
     if (!rel || rel === '__index__') return
     previewSetTarget(cwd, rel, host).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url])
+  }, [url, cwd, host])
 
   // 热刷新:claude 改了 HTML → 重载(仅 served 模式)
   useEffect(() => {
@@ -205,14 +261,16 @@ export default function ScreenView({
         pushUrl(base + data.__lincoNav.replace(/^\/+/, ''))
         return
       }
-      // 子页面上报真实路径 → 校正 React url(不堆历史,只对齐当前条目)
+      // 子页面上报真实路径 → 校正当前条目的 url(只对齐 stack[idx],**不截断前进历史**,
+      // 否则 back 到 index 后、index 一加载就会把「前进→原文件」那条抹掉 → `>` 失效)。
       if (typeof data?.__lincoPath === 'string') {
         const real = base + data.__lincoPath.replace(/^\/+/, '')
         setNav((n) => {
-          if (n.stack[n.idx] === real) return n // 已一致
-          const stack = [...n.stack.slice(0, n.idx + 1)]
-          stack[n.idx < 0 ? 0 : n.idx] = real
-          return { stack, idx: Math.max(0, n.idx) }
+          const i = n.idx < 0 ? 0 : n.idx
+          if (n.stack[i] === real) return n // 已一致
+          const stack = [...n.stack]
+          stack[i] = real
+          return { stack, idx: i }
         })
       }
     }

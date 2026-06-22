@@ -204,7 +204,16 @@ export async function pluginSet(
   await invoke('plugin_set', { agent, id, enabled })
 }
 
-function shellQuote(s: string): string {
+// 目标 PTY 所用的 shell:本地 Windows 会话是 cmd.exe;其余(本地 Mac/Linux、远程 ssh→POSIX)是 posix。
+// 引用规则不同:cmd 不认单引号(会原样当字面量),必须用双引号 + `""` 表示内部双引号。
+type ShellKind = 'posix' | 'cmd'
+
+function shellQuote(s: string, shell: ShellKind = 'posix'): string {
+  if (shell === 'cmd') {
+    // cmd.exe:双引号包裹;内部的 " 用 "" 转义(cmd 在引号内把 "" 折叠成一个 ")。
+    return `"${s.replace(/"/g, '""')}"`
+  }
+  // POSIX(bash/zsh):单引号包裹;内部 ' 用 '\'' 断开转义。
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
@@ -231,9 +240,13 @@ function tomlString(s: string): string {
   return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 
-function codexConfigArg(key: string, value: string | boolean): string {
+function codexConfigArg(
+  key: string,
+  value: string | boolean,
+  shell: ShellKind = 'posix'
+): string {
   const tomlValue = typeof value === 'boolean' ? String(value) : tomlString(value)
-  return ` -c ${shellQuote(`${key}=${tomlValue}`)}`
+  return ` -c ${shellQuote(`${key}=${tomlValue}`, shell)}`
 }
 
 function hasCodexProviderConfig(command: string): boolean {
@@ -309,18 +322,23 @@ export function providerCaps(agent: AgentConfig): ProviderCaps {
 // 构造 `codex resume <id>` 命令。resume 子命令只认部分 flag,这里只拼安全的:
 // 模型(-m)、provider 配置(-c)、思考力(-c model_reasoning_effort)、
 // 权限映射(full-auto → 宽松沙箱;bypass → --dangerously-bypass…)。
-function codexResumeCommand(agent: AgentConfig, exe: string, resumeId: string): string {
-  let cmd = `${exe} resume ${shellQuote(resumeId)}`
+function codexResumeCommand(
+  agent: AgentConfig,
+  exe: string,
+  resumeId: string,
+  shell: ShellKind
+): string {
+  let cmd = `${exe} resume ${shellQuote(resumeId, shell)}`
   if (agent.baseUrl.trim()) {
-    cmd += codexConfigArg('model_provider', 'linco')
-    cmd += codexConfigArg('model_providers.linco.name', 'Linco')
-    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim())
-    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses')
-    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY')
-    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false)
+    cmd += codexConfigArg('model_provider', 'linco', shell)
+    cmd += codexConfigArg('model_providers.linco.name', 'Linco', shell)
+    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim(), shell)
+    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses', shell)
+    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY', shell)
+    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false, shell)
   }
   const model = agent.model.trim()
-  if (model) cmd += ` -m ${shellQuote(model)}`
+  if (model) cmd += ` -m ${shellQuote(model, shell)}`
   const perm = agent.permission.trim()
   if (perm === 'bypass') {
     cmd += ' --dangerously-bypass-approvals-and-sandbox'
@@ -329,11 +347,15 @@ function codexResumeCommand(agent: AgentConfig, exe: string, resumeId: string): 
     cmd += ' --sandbox workspace-write --ask-for-approval on-failure'
   }
   const effort = agent.effort.trim()
-  if (effort) cmd += codexConfigArg('model_reasoning_effort', effort)
+  if (effort) cmd += codexConfigArg('model_reasoning_effort', effort, shell)
   return cmd
 }
 
-export function agentLaunchCommand(agent: AgentConfig, resumeId?: string): string {
+export function agentLaunchCommand(
+  agent: AgentConfig,
+  resumeId?: string,
+  shell: ShellKind = 'posix'
+): string {
   let cmd = agent.command.trim()
   if (!cmd) cmd = defaultCommandForProvider(agent.provider)
 
@@ -347,21 +369,22 @@ export function agentLaunchCommand(agent: AgentConfig, resumeId?: string): strin
   // 故不能复用 agent.command 的自由尾巴(可能含 --full-auto 等根级 flag),
   // 必须从可执行名重新拼一条只含 resume 安全 flag 的命令。
   if (resume && isCodex) {
-    return codexResumeCommand(agent, commandHead(cmd), resume)
+    return codexResumeCommand(agent, commandHead(cmd), resume, shell)
   }
   if (isCodex && agent.baseUrl.trim() && !hasCodexProviderConfig(cmd)) {
-    cmd += codexConfigArg('model_provider', 'linco')
-    cmd += codexConfigArg('model_providers.linco.name', 'Linco')
-    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim())
-    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses')
-    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY')
-    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false)
+    cmd += codexConfigArg('model_provider', 'linco', shell)
+    cmd += codexConfigArg('model_providers.linco.name', 'Linco', shell)
+    cmd += codexConfigArg('model_providers.linco.base_url', agent.baseUrl.trim(), shell)
+    cmd += codexConfigArg('model_providers.linco.wire_api', 'responses', shell)
+    cmd += codexConfigArg('model_providers.linco.env_key', 'LINCO_OPENAI_API_KEY', shell)
+    cmd += codexConfigArg('model_providers.linco.requires_openai_auth', false, shell)
   }
   if (model) {
     if (isCodex) {
-      if (!hasFlag(cmd, '-m', '--model')) cmd += ` -m ${shellQuote(model)}`
+      if (!hasFlag(cmd, '-m', '--model')) cmd += ` -m ${shellQuote(model, shell)}`
     } else if (agent.provider === 'anthropic' || head === 'claude') {
-      if (!hasFlag(cmd, '--model', '--model')) cmd += ` --model ${shellQuote(model)}`
+      if (!hasFlag(cmd, '--model', '--model'))
+        cmd += ` --model ${shellQuote(model, shell)}`
     }
   }
 
@@ -381,7 +404,7 @@ export function agentLaunchCommand(agent: AgentConfig, resumeId?: string): strin
       perm !== 'default' &&
       !hasFlag(cmd, '--permission-mode', '--permission-mode')
     ) {
-      cmd += ` --permission-mode ${shellQuote(perm)}`
+      cmd += ` --permission-mode ${shellQuote(perm, shell)}`
     }
   }
 
@@ -390,15 +413,15 @@ export function agentLaunchCommand(agent: AgentConfig, resumeId?: string): strin
   if (effort) {
     if (isCodex) {
       if (!cmd.includes('model_reasoning_effort')) {
-        cmd += codexConfigArg('model_reasoning_effort', effort)
+        cmd += codexConfigArg('model_reasoning_effort', effort, shell)
       }
     } else if (!hasFlag(cmd, '--effort', '--effort')) {
-      cmd += ` --effort ${shellQuote(effort)}`
+      cmd += ` --effort ${shellQuote(effort, shell)}`
     }
   }
   // claude 的恢复 flag 放末尾(codex 的 resume 子命令已在前面拼好)
   if (resume && !isCodex && !hasFlag(cmd, '-r', '--resume')) {
-    cmd += ` --resume ${shellQuote(resume)}`
+    cmd += ` --resume ${shellQuote(resume, shell)}`
   }
   return cmd
 }

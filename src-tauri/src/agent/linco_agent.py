@@ -463,7 +463,10 @@ def _shadow_git(repo, gitdir, args, index_file=None):
     env = dict(os.environ)
     if index_file is not None:
         env["GIT_INDEX_FILE"] = index_file
-    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    # cwd=repo:git 的 pathspec 相对**进程 cwd** 解析(不是 --work-tree)。agent 进程 cwd 通常是
+    # $HOME,不设就会 "pathspec 'index.html' did not match" → 顶层文件进不了快照。设成 work-tree 根。
+    p = subprocess.run(full, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       env=env, cwd=repo)
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 
