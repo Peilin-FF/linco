@@ -208,21 +208,27 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 剪贴板走 Tauri 原生插件(WebView2 里 navigator.clipboard 常因安全上下文失效),
       // 失败再退回浏览器 API。
       const isMac = navigator.platform.toLowerCase().includes('mac')
+      const isWindows = navigator.platform.toLowerCase().includes('win')
       const copyText = (text: string): void => {
         clipWriteText(text).catch(() => {
           void navigator.clipboard?.writeText(text).catch(() => {})
         })
       }
-      const pasteText = (): void => {
+      // 粘贴策略按平台分流,避免「xterm 原生粘贴」和「我们手动粘贴」两条同时跑 → 粘两次:
+      //  - macOS/Linux:WKWebView 里 xterm 自带的粘贴(浏览器 paste 事件 → onData)工作正常,
+      //    所以键盘 Cmd+V / 右键粘贴**全部放行交给 xterm**,我们一行都不插手 → 天然单次。
+      //  - Windows:WebView2 里 navigator.clipboard 常因安全上下文失效,xterm 原生粘贴拿不到内容,
+      //    故改由我们用 Tauri 剪贴板插件手动读取粘贴,并 return false 拦掉 xterm,避免重复。
+      const pasteFromClipboard = (): void => {
         clipReadText()
           .then((txt) => {
-            if (txt) termWrite(id, txt)
+            if (txt) term.paste(txt)
           })
           .catch(() => {
             void navigator.clipboard
               ?.readText()
               .then((txt) => {
-                if (txt) termWrite(id, txt)
+                if (txt) term.paste(txt)
               })
               .catch(() => {})
           })
@@ -243,8 +249,13 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           return true // 无选中:放行(Ctrl+C=中断)
         }
         if (key === 'v') {
-          pasteText()
-          return false // 拦截默认,避免重复
+          if (isWindows) {
+            // Windows:xterm 原生粘贴不可靠,手动读剪贴板粘贴,并拦掉 xterm 默认(防重复)。
+            pasteFromClipboard()
+            return false
+          }
+          // macOS/Linux:放行,交给 xterm 自带粘贴(单次,不重复)。
+          return true
         }
         return true
       })

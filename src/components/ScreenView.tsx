@@ -205,8 +205,20 @@ export default function ScreenView({
           return
         }
         // 无新的预览请求:已有历史则保留正在看的页面,不重置。
-        if (navCache.get(navKey(host, cwd))?.stack.length) {
+        // 但**必须重设服务器 root/target**——服务器的 root 是全局状态,切换工作区后它指向
+        // 别的工作区(或为空),不重设则恢复的 url 一加载就 404。用恢复的当前条目算出 rel 传回。
+        const cached = navCache.get(navKey(host, cwd))
+        if (cached?.stack.length) {
+          const curUrl = cached.idx >= 0 ? cached.stack[cached.idx] : ''
+          let rel = ''
+          if (curUrl.startsWith(base)) {
+            const r = decodeURI(curUrl.slice(base.length).split('?')[0].split('#')[0])
+            if (r && r !== '__index__') rel = r
+          }
+          await previewSetTarget(cwd, rel, host)
+          if (!alive) return
           setEmpty(false)
+          setNonce((x) => x + 1) // 服务器 root 刚设好 → 强制重载,避免 iframe 早加载吃 404
           return
         }
         // 首次进入该工作区 → 落到「产物首页」列表(target_rel 空只为把 root 告诉服务器)。

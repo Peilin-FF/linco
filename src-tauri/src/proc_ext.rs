@@ -19,9 +19,47 @@ pub fn no_window(cmd: &mut Command) {
     }
 }
 
+/// 在现有 PATH 前面补上常见的 node / CLI 安装目录(homebrew、nvm 当前各版本、~/.local/bin、
+/// cargo、bun,以及 `extra_dir`——通常是被执行 CLI 自身所在目录)。
+///
+/// 为什么需要:GUI(Finder/launchd)启动的 app 拿到的是精简 PATH(`/usr/bin:/bin`),不含
+/// homebrew/nvm。而 claude/codex 这类 CLI 多是 **node 包装脚本**,运行时自己要去 PATH 找 `node`;
+/// 精简 PATH 里没有 node → CLI 启动即 `node: No such file or directory`(退出码 127)→ 被误判成
+/// "该 CLI 不支持 plugin 子命令"。所以光解析出 CLI 绝对路径不够,还得让它运行时找得到 node。
+/// 返回值用于 `Command::env("PATH", …)`。Windows 上 node 一般已在用户 PATH,影响小但同样无害。
+#[cfg(not(windows))]
+fn augmented_path(extra_dir: Option<&str>) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(d) = extra_dir {
+        if !d.is_empty() {
+            dirs.push(d.to_string());
+        }
+    }
+    dirs.push("/opt/homebrew/bin".into());
+    dirs.push("/usr/local/bin".into());
+    dirs.push(format!("{home}/.local/bin"));
+    dirs.push(format!("{home}/.cargo/bin"));
+    dirs.push(format!("{home}/.bun/bin"));
+    // nvm 各版本 bin(node 本体常在此);全加进去,谁在就用谁。
+    let nvm = format!("{home}/.nvm/versions/node");
+    if let Ok(rd) = std::fs::read_dir(&nvm) {
+        for e in rd.flatten() {
+            dirs.push(format!("{}/bin", e.path().to_string_lossy()));
+        }
+    }
+    let existing = std::env::var("PATH").unwrap_or_default();
+    if !existing.is_empty() {
+        dirs.push(existing);
+    }
+    dirs.join(":")
+}
+
 /// 构造一条执行 CLI(claude/codex/git 等)的 Command,已处理好跨平台细节:
 /// - 先用 `resolve_exe` 解析出真实路径并**缓存**(macOS 上 resolve_exe 会 shell-out 取 which,
 ///   较慢;缓存避免每条命令都解析一次)。
+/// - **注入增强 PATH**(见 `augmented_path`):node 包装类 CLI 运行时要找 node,GUI 精简 PATH
+///   里没有 node 会导致 CLI 启动失败(退出码 127)被误判成不支持子命令。
 /// - Windows 上若解析到的是 `.cmd`/`.bat` 批处理 shim(npm 全局装的 CLI 即如此),
 ///   **不能**用 CreateProcess 直接执行(会"程序无法识别"启动失败),必须经 `cmd.exe /c <shim>`。
 /// - 已套 `no_window`(不闪黑窗)。
@@ -40,6 +78,11 @@ pub fn cli_command(name: &str, args: &[&str]) -> Command {
         }
         r
     };
+    // CLI 自身所在目录(node 包装器常与 node 同目录,如 nvm/homebrew bin)放进 PATH 优先位。
+    #[cfg(not(windows))]
+    let exe_dir: Option<String> = std::path::Path::new(&exe)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string());
     #[cfg(windows)]
     {
         let lower = exe.to_ascii_lowercase();
@@ -55,6 +98,8 @@ pub fn cli_command(name: &str, args: &[&str]) -> Command {
     }
     let mut c = Command::new(&exe);
     c.args(args);
+    #[cfg(not(windows))]
+    c.env("PATH", augmented_path(exe_dir.as_deref()));
     no_window(&mut c);
     c
 }
