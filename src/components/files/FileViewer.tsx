@@ -120,12 +120,16 @@ function TextOrDiff({
         .then((d) => {
           if (!alive) return
           const has = d.trim().length > 0
+          console.log('[shadow-diff] path=', path, '| repo=', repo, '| diff长=', d.length, '| 有改动=', has)
           setDiff(has ? d : null)
           // 本轮有改动且用户没手动切过 → 默认显 diff;没改 → 完整文件
           if (has && !touched) setMode('diff')
           if (!has) setMode('file')
         })
-        .catch(() => alive && setDiff(null))
+        .catch((e) => {
+          console.error('[shadow-diff] ❌ 拉 diff 失败 path=', path, e)
+          if (alive) setDiff(null)
+        })
     }
     load()
     onRemoteFsChange((e) => {

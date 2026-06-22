@@ -587,7 +587,7 @@ def op_shadow_diff(a):
     with _shadow_lock(repo):
         _shadow_stage(repo, gitdir)
         code, out, _ = _shadow_git(repo, gitdir,
-                                   ["diff", "--cached", "--no-color", "HEAD", "--", rel])
+                                   ["diff", "--cached", "--no-color", "-U99999", "HEAD", "--", rel])
     return {"diff": out}
 
 

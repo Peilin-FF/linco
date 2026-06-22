@@ -729,10 +729,16 @@ export default function App(): JSX.Element {
     // 用户发消息 = 新一轮:记 git 基线,之后的改动即"本轮 agent 改动"(Cursor 式 diff)。
     // 基线建好后派发 turn-refresh:让文件树重拉 git 标记、已打开文件重拉 diff,
     // 这样即便远端轮询有 ~1s 延迟,"发消息"这一刻也立即反映上一轮已落盘的改动。
+    console.log('[shadow] handleSend  cwd=', cwd, '| typeof cwd=', typeof cwd, '| host=', host, '| typeof host=', typeof host)
     if (cwd) {
       shadowBeginTurn(cwd, host)
-        .then(() => window.dispatchEvent(new CustomEvent('linco:turn-refresh')))
-        .catch(() => {})
+        .then(() => {
+          console.log('[shadow] ✅ shadowBeginTurn 成功,基线已重置 cwd=', cwd)
+          window.dispatchEvent(new CustomEvent('linco:turn-refresh'))
+        })
+        .catch((e) => console.error('[shadow] ❌ shadowBeginTurn 失败:', e))
+    } else {
+      console.warn('[shadow] ⚠️ cwd falsy → 跳过基线重置')
     }
     if (defaultAgent) {
       usageRecordTurn(

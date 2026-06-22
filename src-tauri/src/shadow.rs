@@ -204,7 +204,10 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
         "commit.gpgsign=false".into(),
     ];
     full.extend(args.iter().map(|a| a.to_string()));
-    let mut c = Command::new("git");
+    // 用 resolve_exe 定位 git 绝对路径:GUI 启动(Finder/launchd)的 app PATH 精简,
+    // 裸名 "git" 可能找不到 → 命令启动失败 → begin_turn 的 commit 没跑成、基线永不更新。
+    // (同 plugins.rs 早先踩过的坑,解法一致。)
+    let mut c = Command::new(crate::proc_ext::resolve_exe("git"));
     c.args(&full);
     crate::proc_ext::no_window(&mut c);
     let out = c
@@ -285,8 +288,13 @@ fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
     if !files.is_empty() {
         // 用 NUL 分隔的 pathspec 文件喂给 git add -f(避免文件名含空格/特殊字符出错;
         // 也避免命令行参数过长)。文件名唯一,避免并发互相覆盖。
+        // 健壮性:过滤空串(空 pathspec 会让 git 报 "empty string is not a valid path" 而整体失败);
+        // 末尾也加 NUL 作终止符(git --pathspec-file-nul 容忍尾随 NUL,但绝不能有中间空项)。
         let mut buf = String::with_capacity(files.len() * 24);
         for f in &files {
+            if f.is_empty() {
+                continue;
+            }
             buf.push_str(f);
             buf.push('\0');
         }
@@ -298,13 +306,21 @@ fn stage_snapshot(repo: &str, gitdir: &Path) -> Result<(), String> {
             &[
                 "add",
                 "-f",
+                // --ignore-errors:某个 pathspec 对不上(文件刚被删/大小写/并发竞态)时,
+                // 跳过它继续 add 其余文件,而不是整条命令失败。否则 add 一报错就 ? 提前返回,
+                // commit 根本不跑 → 基线永不更新(这正是 "index.html did not match" 的坑)。
+                "--ignore-errors",
                 "--pathspec-from-file",
                 &tmp.to_string_lossy(),
                 "--pathspec-file-nul",
             ],
         );
         let _ = std::fs::remove_file(&tmp);
-        res?;
+        // 即便 add 整体返回非零(--ignore-errors 下仍可能因部分失败而非零退出),
+        // 也不要中断 —— 已成功 add 的文件有效,后面照常 add -u + commit 产出基线。
+        if let Err(e) = res {
+            eprintln!("[shadow] stage add 有部分失败(已忽略继续): {e}");
+        }
     }
     // 补删除:更新已跟踪文件,把磁盘上已消失的记为删除。
     shadow_git(repo, gitdir, &["add", "-u"]).map(|_| ())
@@ -336,6 +352,11 @@ fn ensure_init(host: &Option<String>, repo: &str) -> Result<PathBuf, String> {
 
 /// 把绝对路径转成相对 repo 的路径(git diff 路径参数用)。
 fn rel_of(repo: &str, path: &str) -> String {
+    // 去掉首尾空白:path 偶尔带尾随 \r/空格(前端拼接/读取残留),
+    // 否则 pathspec "README.md\r" 匹配不到 "README.md" → diff --cached -- <rel> 返回空,
+    // 导致文件树标了 M、右侧 diff 却空白。git pathspec 对尾随字符零容忍,必须 trim。
+    let repo = repo.trim();
+    let path = path.trim();
     path.strip_prefix(&format!("{}/", repo.trim_end_matches('/')))
         .unwrap_or(path)
         .to_string()
@@ -345,26 +366,35 @@ fn rel_of(repo: &str, path: &str) -> String {
 /// 覆盖上一轮基线。对一切文件生效(含 untracked / gitignored 产物),不依赖项目 git。
 #[tauri::command]
 pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(), String> {
-    crate::blocking::run(move || {
+    eprintln!("[shadow] begin_turn 进入 repo={repo} host={host:?}");
+    let r = crate::blocking::run(move || {
+        eprintln!("[shadow] begin_turn blocking 线程已起 repo={repo}");
         let host = host.filter(|s| !s.is_empty());
         // 远程暂走 agent(见 linco_agent.py 的 snap_* op);此处先实现本地。
         if host.is_some() {
             return crate::agent_rpc::shadow_begin(host.as_deref().unwrap(), &repo);
         }
         let gitdir = ensure_init(&host, &repo)?;
+        eprintln!("[shadow] begin_turn ensure_init OK gitdir={}", gitdir.display());
         // 持仓库锁:与 changed/diff 串行共享同一个热 index。增量 stage(不清空 → 秒级)。
         let lk = repo_lock(&host, &repo);
+        eprintln!("[shadow] begin_turn 等锁…");
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
+        eprintln!("[shadow] begin_turn 拿到锁,开始 stage");
         stage_snapshot(&repo, &gitdir)?;
+        eprintln!("[shadow] begin_turn stage OK,开始 commit");
         // commit:--allow-empty 保证即便无改动也产出一个基线 commit(后续 diff 才有锚点)。
         shadow_git(
             &repo,
             &gitdir,
             &["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"],
         )?;
+        eprintln!("[shadow] begin_turn commit OK ✅");
         Ok(())
     })
-    .await
+    .await;
+    eprintln!("[shadow] begin_turn 返回 result={r:?}");
+    r
 }
 
 /// 某文件本轮的 diff(unified)。无基线/无改动 → 空串(前端显完整文件)。
@@ -388,13 +418,42 @@ pub async fn shadow_diff(
         let lk = repo_lock(&host, &repo);
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
         stage_snapshot(&repo, &gitdir)?;
-        shadow_git(
+        // 先用 pathspec 限定取该文件 diff。
+        // -U99999:把上下文行数开到极大 = 包含整个文件,这样前端能「全文显示 + 仅改动行红绿」,
+        // 而不是只显示改动周围 3 行的紧凑 hunk(那是之前的回归)。
+        let rel_clean = rel.trim().trim_end_matches(['\r', '\n']).to_string();
+        let one = shadow_git(
             &repo,
             &gitdir,
-            &["diff", "--cached", "--no-color", "HEAD", "--", &rel],
-        )
+            &["diff", "--cached", "--no-color", "-U99999", "HEAD", "--", &rel_clean],
+        )?;
+        if !one.trim().is_empty() {
+            return Ok(one);
+        }
+        // 兜底:pathspec 方式偶发匹配不到(尾随字符/特殊字符/环境差异)却确实改了。
+        // 改为 diff 全量(同样 -U99999 全文),再从中切出该文件那一段。
+        let full = shadow_git(&repo, &gitdir, &["diff", "--cached", "--no-color", "-U99999", "HEAD"])?;
+        Ok(extract_file_diff(&full, &rel_clean))
     })
     .await
+}
+
+/// 从一份完整的 `git diff` 输出里,切出指定文件(相对路径 rel)那一段。
+/// diff 段以 "diff --git a/<path> b/<path>" 起头,到下一个 "diff --git" 或文末结束。
+fn extract_file_diff(full: &str, rel: &str) -> String {
+    let mut out = String::new();
+    let mut capturing = false;
+    for line in full.lines() {
+        if line.starts_with("diff --git ") {
+            // 该段是否属于目标文件:头里含 " a/<rel>" 或 " b/<rel>"
+            capturing = line.contains(&format!(" a/{rel}")) || line.contains(&format!(" b/{rel}"));
+        }
+        if capturing {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// 本轮改过哪些文件:绝对路径 → 状态字符(M/A/D)。供文件树「本轮高亮」。
