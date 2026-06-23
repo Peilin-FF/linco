@@ -535,11 +535,12 @@ fn save_artifact(body: &str) -> (Vec<u8>, String, u16) {
         Ok(v) => v,
         Err(e) => return err(&format!("bad json: {e}")),
     };
-    let rel = payload
-        .get("path")
-        .and_then(|p| p.as_str())
-        .unwrap_or("")
-        .trim_start_matches('/');
+    // path 来自前端 location.pathname,文件名/目录含中文或空格时是 percent-encoded
+    // (如 `/artifacts/%E6%88%91.html`)。必须先 percent-decode,否则 safe_join 拼出带
+    // 字面 %XX 的路径 → 文件读不到 → "file not found" → 保存静默失败。
+    // (GET 服务路径在 line 239 已经这样 decode 了;这里之前漏了,导致中文/空格名文件存不上。)
+    let decoded = percent_decode(payload.get("path").and_then(|p| p.as_str()).unwrap_or(""));
+    let rel = decoded.trim_start_matches('/');
     if !rel.ends_with(".html") {
         return err("bad request");
     }
@@ -1022,5 +1023,21 @@ mod save_tests {
     #[test]
     fn replace_seed_missing() {
         assert!(replace_seed("<html></html>", "{}").is_err());
+    }
+
+    // 回归:保存路径的 percent-decode。前端 location.pathname 对中文/空格名是编码过的,
+    // 保存时必须先 decode 再 safe_join,否则拼出带字面 %XX 的路径、文件读不到 → 保存失败。
+    #[test]
+    fn save_path_percent_decoded_for_cjk_and_space() {
+        // 中文名:%E6%88%91.html → 我.html
+        assert_eq!(percent_decode("/artifacts/%E6%88%91.html"), "/artifacts/我.html");
+        // 空格名
+        assert_eq!(percent_decode("/my%20notes/a.html"), "/my notes/a.html");
+        // decode 后再 safe_join 应能拼回真实路径(在 root 内)
+        let rel = percent_decode("/sub/%E6%88%91.html");
+        let rel = rel.trim_start_matches('/');
+        let abs = safe_join("/work/proj", rel).expect("应在 root 内");
+        assert!(abs.ends_with("/sub/我.html"), "拼出真实中文路径: {abs}");
+        assert!(!abs.contains('%'), "不应残留 percent 编码: {abs}");
     }
 }
