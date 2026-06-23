@@ -52,6 +52,8 @@ import {
 } from '@/lib/connection'
 import { watchStart, watchStop } from '@/lib/watch'
 import { shadowBeginTurn } from '@/lib/shadow'
+import { proxyStart, proxyBeginTurn } from '@/lib/agentProxy'
+import AgentCommandLog from './components/AgentCommandLog'
 import { agentTasks, type AgentTask } from '@/lib/procs'
 import { applyTheme, applyFont } from '@/lib/theme'
 import { useI18n } from '@/lib/i18n'
@@ -256,10 +258,70 @@ export default function App(): JSX.Element {
     () => config?.agents.find((a) => a.id === config.defaultAgent),
     [config]
   )
-  const agentEnvVars = useMemo(
-    () => (defaultAgent ? agentEnv(defaultAgent) : undefined),
-    [defaultAgent]
-  )
+  // 命令可见代理:本地启动一个私有代理(若 pv 可用),把 agent 的 base_url 指向它,
+  // 旁路抽取每条 bash 命令+结果按回合落盘,供「Agent 命令」面板展示。
+  //
+  // 三态:pending=还在起/未判定;ready=起好(改 base_url 指向它);off=不启用(降级,直连)。
+  // 关键:会话(agent)创建要**门控**在非 pending 上 —— 保证 agent 启动前代理已就绪、
+  // base_url 已落定,否则 agent 第一条请求会绕过代理。
+  const [proxyState, setProxyState] = useState<
+    { kind: 'pending' } | { kind: 'ready'; port: number } | { kind: 'off' }
+  >({ kind: 'off' })
+
+  // 该 agent 真实要连的上游 base_url。
+  // **订阅模式不挂代理**:① 用第三方中转碰官方订阅 token 违反 ToS、有封号风险;
+  // ② 订阅模式 CLI 走 OAuth、未必采纳 base_url 改写,技术上也不可靠。
+  // 故仅 authMode!=='subscription'(即 API key 模式)才返回上游 → 才会启代理。
+  const upstreamBaseUrl = useMemo(() => {
+    if (!defaultAgent) return ''
+    // 仅「API key 模式」才挂代理。判据与 agentEnv 注入 key 的条件一致(config.ts):
+    // 非 subscription 且确实填了 apiKey。这样既排除显式订阅,也排除「没填 key = 实际走订阅」
+    // 的情况 —— 用第三方中转碰官方订阅 token 违反 ToS、有封号风险,且订阅 CLI 走 OAuth、
+    // base_url 改写本就不可靠。
+    const isApiMode =
+      defaultAgent.authMode !== 'subscription' && !!defaultAgent.apiKey?.trim()
+    if (!isApiMode) return ''
+    const bu = defaultAgent.baseUrl?.trim()
+    if (bu) return bu
+    return defaultAgent.provider === 'openai'
+      ? 'https://api.openai.com/v1'
+      : 'https://api.anthropic.com'
+  }, [defaultAgent])
+
+  // 仅本地 + API 模式 + pv 可用时启代理;远程/订阅/无上游 → off(降级)。host/agent 变化时重起。
+  useEffect(() => {
+    if (host || !defaultAgent || !upstreamBaseUrl) {
+      setProxyState({ kind: 'off' })
+      return
+    }
+    let alive = true
+    setProxyState({ kind: 'pending' })
+    const sess = `${config?.activeConnection || 'local'}:${defaultAgent.id}`
+    proxyStart(upstreamBaseUrl, sess)
+      .then((p) => {
+        if (!alive) return
+        setProxyState(p ? { kind: 'ready', port: p } : { kind: 'off' })
+      })
+      .catch(() => alive && setProxyState({ kind: 'off' }))
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, upstreamBaseUrl, defaultAgent])
+
+  const agentEnvVars = useMemo(() => {
+    if (!defaultAgent) return undefined
+    const env = agentEnv(defaultAgent)
+    // 代理 ready → 把 base_url 改指向本地代理(agent 的请求先经代理再到真实上游)。
+    if (proxyState.kind === 'ready') {
+      const proxyUrl = `http://127.0.0.1:${proxyState.port}`
+      if ('ANTHROPIC_BASE_URL' in env) env.ANTHROPIC_BASE_URL = proxyUrl
+      if ('OPENAI_BASE_URL' in env) env.OPENAI_BASE_URL = proxyUrl
+      if (defaultAgent.provider === 'anthropic') env.ANTHROPIC_BASE_URL = proxyUrl
+      else if (defaultAgent.provider === 'openai') env.OPENAI_BASE_URL = proxyUrl
+    }
+    return env
+  }, [defaultAgent, proxyState])
   const agentCommand = useMemo(
     () =>
       defaultAgent
@@ -417,6 +479,9 @@ export default function App(): JSX.Element {
   // 瞬现。**不杀任何旧会话**——这正是"固化"。会话很轻(一个 PTY),保留到 app 退出。
   useEffect(() => {
     if (!config || !cwd) return
+    // 门控:代理还在起(pending)时**不创建会话** —— 否则 agent 会用还没改写 base_url 的 env
+    // 启动、绕过代理。等代理 ready(base_url 已指向它)或确定 off(降级直连)再建。
+    if (proxyState.kind === 'pending') return
     setChatSessions((prev) => {
       if (prev.some((s) => s.id === activeChatId)) return prev // 已在现场,复用
       const next: ChatSession = {
@@ -436,9 +501,9 @@ export default function App(): JSX.Element {
       }
       return [...prev, next]
     })
-    // 仅在活动会话 id 变化时运行(切连接/切项目)
+    // 活动会话 id 变化、或代理就绪状态变化时运行(后者让 pending→ready/off 后补建会话)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeChatId])
+  }, [activeChatId, proxyState])
 
   // dock 终端常驻挂载:打开 dock 后,把当前 连接+项目 的 dockKey 记下并保留。
   // 切到别的连接/项目再切回来,原 PTY 还在;切远程则用新 key 起在远端 cwd。
@@ -750,6 +815,14 @@ export default function App(): JSX.Element {
     } else {
       console.warn('[shadow] ⚠️ cwd falsy → 跳过基线重置')
     }
+    // 命令可见:新回合清空本会话命令日志(纯回合制,不累积)。同 shadow 的回合语义。
+    // 无条件调用:proxy_begin_turn 对不存在/已空的文件是 no-op,无害;不依赖 proxyState
+    // 避免因状态时序导致清空漏掉(代理没起时本来也没日志,截断也无妨)。
+    if (defaultAgent) {
+      const sess = `${config?.activeConnection || 'local'}:${defaultAgent.id}`
+      console.log('[cmdlog] handleSend → proxyBeginTurn', sess, 'proxyState=', proxyState.kind)
+      proxyBeginTurn(sess).catch(() => {})
+    }
     if (defaultAgent) {
       usageRecordTurn(
         {
@@ -1034,6 +1107,21 @@ export default function App(): JSX.Element {
                   <Plus size={13} />
                   {t('app.terminal.new')}
                 </button>
+                {/* 「Agent 命令」tab:命令可见代理已启用时出现,展示本会话 agent 跑的 bash+结果。 */}
+                {proxyState.kind === 'ready' && (
+                  <button
+                    onClick={() => setActiveShell('cmdlog')}
+                    className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
+                      activeShell === 'cmdlog'
+                        ? 'bg-sidebar text-ink'
+                        : 'text-ink-muted hover:bg-black/5'
+                    }`}
+                    title={t('cmdlog.title')}
+                  >
+                    <Activity size={12} className="text-[#5c8bd6]" />
+                    {t('cmdlog.title')}
+                  </button>
+                )}
                 {/* agent 后台任务 tab(自动出现/消失,不可手动关——进程结束即移除)。
                     放在用户终端之后,加一条竖分隔线区分。 */}
                 {tasks.length > 0 && (
@@ -1057,7 +1145,7 @@ export default function App(): JSX.Element {
               </div>
               {/* 终端内容 */}
               <div className="relative min-h-0 flex-1">
-                {tasks.length === 0 && shells.length === 0 ? (
+                {tasks.length === 0 && shells.length === 0 && proxyState.kind !== 'ready' ? (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-ink-faint">
                     <span>{t('app.taskEmpty')}</span>
                     <span className="text-[11px]">
@@ -1095,6 +1183,22 @@ export default function App(): JSX.Element {
                         </div>
                       )
                     })}
+                    {/* Agent 命令面板:代理启用时常驻挂载,activeShell==='cmdlog' 时显示 */}
+                    {proxyState.kind === 'ready' && (
+                      <div
+                        className={`absolute inset-0 ${
+                          activeShell === 'cmdlog'
+                            ? 'z-10 opacity-100'
+                            : 'pointer-events-none opacity-0'
+                        }`}
+                      >
+                        <AgentCommandLog
+                          session={`${config?.activeConnection || 'local'}:${defaultAgent?.id || 'agent'}`}
+                          host={host}
+                          active={view === 'terminal' && activeShell === 'cmdlog'}
+                        />
+                      </div>
+                    )}
                     {shells.map((s) => (
                       <div
                         key={s.id}

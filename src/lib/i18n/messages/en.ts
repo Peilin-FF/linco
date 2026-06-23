@@ -240,6 +240,8 @@ export const en: Record<string, string> = {
   'settings.onboarding': 'Onboarding',
   'settings.placeholder': 'This section is not yet available.',
   'task.exited': 'Exited',
+  'cmdlog.title': 'Agent commands',
+  'cmdlog.empty': 'No commands from the agent this turn yet',
   'connSet.title': 'Connections',
   'connSet.desc': 'Configure remote dev servers (SSH). After switching to a connection, the terminal / chat / files / Git all run on that server — the agent truly enters the remote environment.',
   'connSet.addFromSsh': 'Add from ~/.ssh/config',

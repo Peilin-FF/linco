@@ -260,6 +260,8 @@ export const zh: Record<string, string> = {
   'settings.placeholder': '该模块待接入。',
   // agent 任务
   'task.exited': '已结束',
+  'cmdlog.title': 'Agent 命令',
+  'cmdlog.empty': '本回合 agent 还没执行命令',
   // 连接设置
   'connSet.title': '连接',
   'connSet.desc': '配置远程开发服务器(SSH)。切到某连接后,终端 / 对话 / 文件 / Git 都运行在该服务器上 —— agent 真正进入远程环境。',

@@ -5,6 +5,7 @@
 // 对话框的输入被重定向写入 PTY(等价于在终端键入),CLI 的输出在
 // 终端视图中实时渲染。对任何厂家的 CLI 都通用。
 
+mod agent_proxy;
 mod agent_rpc;
 mod blocking;
 mod config;
@@ -64,6 +65,12 @@ pub fn run() {
             preview::preview_set_target,
             preview::preview_default_target,
             preview::preview_prefetch_assets,
+            agent_proxy::proxy_available,
+            agent_proxy::proxy_start,
+            agent_proxy::proxy_stop,
+            agent_proxy::proxy_status,
+            agent_proxy::proxy_cmdlog_file,
+            agent_proxy::proxy_begin_turn,
             watch::watch_start,
             watch::watch_stop,
             shadow::shadow_begin_turn,
@@ -129,6 +136,12 @@ pub fn run() {
             transfer::transfer_download,
             transfer::transfer_cancel,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Linco");
+        .build(tauri::generate_context!())
+        .expect("error while running Linco")
+        .run(|_app, event| {
+            // app 退出时确保命令可见代理子进程被清理,避免留下孤儿进程
+            if let tauri::RunEvent::Exit = event {
+                agent_proxy::proxy_stop();
+            }
+        });
 }
