@@ -230,7 +230,6 @@ fn expand_tilde(p: String) -> PathBuf {
 #[tauri::command]
 pub fn proxy_begin_turn(session: String) {
     let path = proxy_cmdlog_file(session);
-    eprintln!("[agent_proxy] begin_turn 截断: {path}");
     let _ = std::fs::OpenOptions::new()
         .write(true)
         .truncate(true)

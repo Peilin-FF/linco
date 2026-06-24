@@ -273,6 +273,12 @@ export default function App(): JSX.Element {
   // ② 订阅模式 CLI 走 OAuth、未必采纳 base_url 改写,技术上也不可靠。
   // 故仅 authMode!=='subscription'(即 API key 模式)才返回上游 → 才会启代理。
   const upstreamBaseUrl = useMemo(() => {
+    // 命令可见代理总开关:暂关闭(代理/「Agent 命令」面板休眠)。
+    // 相关代码(agent_proxy.rs / AgentCommandLog / pv submodule)全部保留,
+    // 改回 true 即恢复。关闭时 upstream 恒空 → 代理不启、面板不显示、base_url 不改写、
+    // 会话创建不被门控,完全回到无代理的原行为。
+    const COMMAND_PROXY_ENABLED = false
+    if (!COMMAND_PROXY_ENABLED) return ''
     if (!defaultAgent) return ''
     // 仅「API key 模式」才挂代理。判据与 agentEnv 注入 key 的条件一致(config.ts):
     // 非 subscription 且确实填了 apiKey。这样既排除显式订阅,也排除「没填 key = 实际走订阅」
@@ -820,7 +826,6 @@ export default function App(): JSX.Element {
     // 避免因状态时序导致清空漏掉(代理没起时本来也没日志,截断也无妨)。
     if (defaultAgent) {
       const sess = `${config?.activeConnection || 'local'}:${defaultAgent.id}`
-      console.log('[cmdlog] handleSend → proxyBeginTurn', sess, 'proxyState=', proxyState.kind)
       proxyBeginTurn(sess).catch(() => {})
     }
     if (defaultAgent) {
