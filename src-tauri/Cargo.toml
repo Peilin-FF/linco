@@ -1,6 +1,6 @@
 [package]
 name = "linco"
-version = "0.3.2"
+version = "0.3.3"
 description = "Linco — 直接驱动 Claude Code / Codex 等 CLI agent 的桌面应用"
 authors = ["Linco"]
 edition = "2021"

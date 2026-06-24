@@ -66,7 +66,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            修复 Windows/Mac 若干已知问题:codex 历史会话恢复、插件管理、终端粘贴、文件树刷新、预览状态保留等
+            后台任务实时显示:自动为 python 命令注入无缓冲(PYTHONUNBUFFERED),监控面板不再冻住;其它已知问题修复
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
