@@ -65,6 +65,7 @@ pub fn run() {
             preview::preview_set_target,
             preview::preview_default_target,
             preview::preview_prefetch_assets,
+            preview::preview_prefetch_file,
             agent_proxy::proxy_available,
             agent_proxy::proxy_start,
             agent_proxy::proxy_stop,

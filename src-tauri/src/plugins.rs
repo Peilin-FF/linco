@@ -223,6 +223,29 @@ fn install_local_copy(app: &AppHandle, lang: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn set_claude_plugin_copy(
+    app: &AppHandle,
+    id: &str,
+    lang: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let dst_root = claude_plugins_dir()?;
+    let variant = claude_variant(id, lang);
+    let dst = dst_root.join(&variant);
+    if enabled {
+        let src = plugins_source(app)?.join(&variant);
+        if !src.exists() {
+            return Err(format!("鎻掍欢婧愮己澶? {}", src.to_string_lossy()));
+        }
+        copy_dir(&src, &dst)
+    } else {
+        if dst.exists() {
+            std::fs::remove_dir_all(&dst).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+}
+
 /// 远程安装(claude):rsync 整个 marketplace 到远端 ~/.linco/marketplace/,
 /// 再经 SSH 跑 `claude plugin marketplace add ~/.linco/marketplace` + `plugin install --scope user`。
 /// CLI 不可用则回退:rsync 三件套到远端 ~/.claude/plugins/(老逻辑)。
@@ -601,19 +624,37 @@ pub async fn plugin_status() -> Result<Vec<PluginStatus>, String> {
         let mut out = Vec::new();
         // claude
         let claude_ids = claude_installed_ids();
+        let claude_cli = cli_has_plugin("claude");
+        let claude_dir = claude_plugins_dir().ok();
         for (base, name, desc) in CLAUDE_PLUGINS {
             let variant = claude_variant(base, &lang);
             let full = format!("{variant}@{CLAUDE_MARKETPLACE}");
+            let installed = if claude_cli {
+                claude_ids.contains(&full)
+            } else {
+                claude_dir
+                    .as_ref()
+                    .map(|dir| dir.join(&variant).exists())
+                    .unwrap_or(false)
+            };
             out.push(PluginStatus {
                 agent: "claude".into(),
                 id: base.into(),
                 name: name.into(),
                 desc: desc.into(),
-                installed: claude_ids.contains(&full),
+                installed,
             });
         }
         // codex:三个逻辑插件(html / task-monitor / shadow-diff)
         let codex_names = codex_installed_names();
+        let codex_cli = cli_has_plugin("codex");
+        let codex_fallback = crate::config::home_dir()
+            .ok()
+            .and_then(|home| {
+                std::fs::read_to_string(PathBuf::from(home).join(".codex").join("AGENTS.md")).ok()
+            })
+            .map(|s| s.contains(CODEX_BEGIN))
+            .unwrap_or(false);
         for (id, name, desc) in CODEX_PLUGINS {
             let variant = codex_variant(id, &lang);
             out.push(PluginStatus {
@@ -621,7 +662,11 @@ pub async fn plugin_status() -> Result<Vec<PluginStatus>, String> {
                 id: id.into(),
                 name: name.into(),
                 desc: desc.into(),
-                installed: codex_names.contains(&variant),
+                installed: if codex_cli {
+                    codex_names.contains(&variant)
+                } else {
+                    codex_fallback
+                },
             });
         }
         Ok(out)
@@ -643,7 +688,11 @@ pub async fn plugin_set(
         if agent == "codex" {
             // codex:始终先确保 marketplace 已注册
             if !cli_has_plugin("codex") {
-                return Err("当前 codex 版本不支持插件管理(无 plugin 子命令)".into());
+                return if enabled {
+                    install_codex_local(&app, &lang)
+                } else {
+                    Ok(())
+                };
             }
             ensure_codex_marketplace(&app)?;
             let variant = codex_variant(&id, &lang);
@@ -661,7 +710,7 @@ pub async fn plugin_set(
         } else {
             // claude
             if !cli_has_plugin("claude") {
-                return Err("当前 claude 版本不支持插件管理(无 plugin 子命令)".into());
+                return set_claude_plugin_copy(&app, &id, &lang, enabled);
             }
             let root = marketplace_root(&app)?;
             run_cli(

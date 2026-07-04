@@ -30,47 +30,29 @@ import type { UnlistenFn } from '@tauri-apps/api/event'
 
 // 跟随系统深浅色:深色模式下 claude 等 TUI 会用深色背景的 ANSI 块,
 // 终端背景也必须深,否则块与白底对不齐,出现大片空白(本次修复的问题)。
-function prefersDark(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    window.matchMedia?.('(prefers-color-scheme: dark)').matches
-  )
-}
-
-function termTheme(dark: boolean): Record<string, string> {
-  if (dark) {
-    return {
-      background: '#1e1e1e',
-      foreground: '#e4e4e4',
-      cursor: '#e4e4e4',
-      cursorAccent: '#1e1e1e',
-      selectionBackground: 'rgba(255,255,255,0.18)',
-      black: '#1e1e1e',
-      red: '#f47067',
-      green: '#57ab5a',
-      yellow: '#c69026',
-      blue: '#539bf5',
-      magenta: '#b083f0',
-      cyan: '#39c5cf',
-      white: '#d1d5da',
-      brightBlack: '#6e7681'
-    }
-  }
+function termTheme(): Record<string, string> {
   return {
-    background: '#ffffff',
-    foreground: '#1f1f1f',
-    cursor: '#1a1a1a',
-    cursorAccent: '#ffffff',
-    selectionBackground: 'rgba(0,0,0,0.10)',
-    black: '#1f1f1f',
-    red: '#c0392b',
-    green: '#27894e',
-    yellow: '#b8860b',
-    blue: '#2563eb',
-    magenta: '#8b5cf6',
-    cyan: '#0e7490',
-    white: '#3f3f3f',
-    brightBlack: '#9a9a9a'
+    background: '#1e1e1e',
+    foreground: '#e6edf3',
+    cursor: '#e6edf3',
+    cursorAccent: '#1e1e1e',
+    selectionBackground: 'rgba(255,255,255,0.18)',
+    black: '#1e1e1e',
+    red: '#f47067',
+    green: '#57ab5a',
+    yellow: '#c69026',
+    blue: '#539bf5',
+    magenta: '#b083f0',
+    cyan: '#39c5cf',
+    white: '#d1d5da',
+    brightBlack: '#8b949e',
+    brightRed: '#ff7b72',
+    brightGreen: '#7ee787',
+    brightYellow: '#d29922',
+    brightBlue: '#79c0ff',
+    brightMagenta: '#d2a8ff',
+    brightCyan: '#56d4dd',
+    brightWhite: '#ffffff'
   }
 }
 
@@ -130,6 +112,8 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const usageRef = useRef(usage)
     const usageBufferRef = useRef('')
     const usageTimerRef = useRef<number | null>(null)
+    const outputQueueRef = useRef<Uint8Array[]>([])
+    const outputFrameRef = useRef<number | null>(null)
     const decoderRef = useRef(new TextDecoder())
     hostRef2.current = host
     identityRef.current = identity
@@ -183,14 +167,14 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         cursorBlink: true,
         cursorStyle: 'bar',
         scrollback: 5000,
-        theme: termTheme(prefersDark()),
+        theme: termTheme(),
         allowProposedApi: true
       })
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
       // 让 host 内边距区域也跟随终端背景,避免深色下出现白边框
-      host.style.background = termTheme(prefersDark()).background
+      host.style.background = termTheme().background
       fit.fit()
       termRef.current = term
       fitRef.current = fit
@@ -198,6 +182,42 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       let unlistenOut: UnlistenFn | undefined
       let unlistenExit: UnlistenFn | undefined
       let disposed = false
+
+      const flushTerminalOutput = (): void => {
+        outputFrameRef.current = null
+        const chunks = outputQueueRef.current
+        outputQueueRef.current = []
+        if (disposed || chunks.length === 0) return
+
+        const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+        const bytes = new Uint8Array(total)
+        let offset = 0
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset)
+          offset += chunk.length
+        }
+
+        term.write(bytes)
+        const usage = usageRef.current
+        if (usage) {
+          usageBufferRef.current += decoderRef.current.decode(bytes, { stream: true })
+            if (usageBufferRef.current.length > 5000) {
+              const timer = usageTimerRef.current
+              window.clearTimeout(timer ?? undefined)
+              flushUsageOutput()
+            } else if (usageTimerRef.current === null) {
+            usageTimerRef.current = window.setTimeout(flushUsageOutput, 900)
+          }
+        }
+        onActivityRef.current?.(id)
+      }
+
+      const enqueueTerminalOutput = (bytes: Uint8Array): void => {
+        outputQueueRef.current.push(bytes)
+        if (outputFrameRef.current === null) {
+          outputFrameRef.current = window.requestAnimationFrame(flushTerminalOutput)
+        }
+      }
 
       // 用户在终端里键入 → 写回 PTY
       const dataSub = term.onData((d) => termWrite(id, d))
@@ -208,31 +228,41 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 剪贴板走 Tauri 原生插件(WebView2 里 navigator.clipboard 常因安全上下文失效),
       // 失败再退回浏览器 API。
       const isMac = navigator.platform.toLowerCase().includes('mac')
-      const isWindows = navigator.platform.toLowerCase().includes('win')
       const copyText = (text: string): void => {
         clipWriteText(text).catch(() => {
           void navigator.clipboard?.writeText(text).catch(() => {})
         })
       }
-      // 粘贴策略按平台分流,避免「xterm 原生粘贴」和「我们手动粘贴」两条同时跑 → 粘两次:
-      //  - macOS/Linux:WKWebView 里 xterm 自带的粘贴(浏览器 paste 事件 → onData)工作正常,
-      //    所以键盘 Cmd+V / 右键粘贴**全部放行交给 xterm**,我们一行都不插手 → 天然单次。
-      //  - Windows:WebView2 里 navigator.clipboard 常因安全上下文失效,xterm 原生粘贴拿不到内容,
-      //    故改由我们用 Tauri 剪贴板插件手动读取粘贴,并 return false 拦掉 xterm,避免重复。
-      const pasteFromClipboard = (): void => {
+      const pasteText = (): void => {
         clipReadText()
-          .then((txt) => {
-            if (txt) term.paste(txt)
+          .catch(() => navigator.clipboard?.readText?.() ?? '')
+          .then((text) => {
+            if (text) termWrite(id, text.replace(/\r?\n/g, '\r'))
           })
-          .catch(() => {
-            void navigator.clipboard
-              ?.readText()
-              .then((txt) => {
-                if (txt) term.paste(txt)
-              })
-              .catch(() => {})
-          })
+          .catch(() => {})
       }
+      const onKeyDownCapture = (e: KeyboardEvent): void => {
+        const mod = isMac ? e.metaKey : e.ctrlKey
+        if (!mod) return
+
+        const key = e.key.toLowerCase()
+        if (key === 'v') {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          pasteText()
+        } else if (key === 'c' && term.hasSelection()) {
+          e.preventDefault()
+          e.stopImmediatePropagation()
+          copyText(term.getSelection())
+          term.clearSelection()
+        }
+      }
+      host.addEventListener('keydown', onKeyDownCapture, true)
+      // 粘贴一律放行,交给 xterm 自带的粘贴(浏览器 paste 事件 → onData)→ 天然单次。
+      // 历史坑:之前 Windows 分支额外手动 term.paste() 又 return false,以为能拦掉 xterm,
+      // 但 return false 并不会 preventDefault,浏览器原生 paste 事件照样触发 → xterm 也粘一次,
+      // 于是粘两次(`npm install...npm install...`)。WebView2 的原生 paste 事件本就拿得到
+      // 剪贴板内容(无需 navigator.clipboard),所以全平台放行即可,不要再手动插一脚。
       term.attachCustomKeyEventHandler((e): boolean => {
         if (e.type !== 'keydown') return true
         // 复制/粘贴的修饰键:mac=Cmd,其它=Ctrl
@@ -248,15 +278,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           }
           return true // 无选中:放行(Ctrl+C=中断)
         }
-        if (key === 'v') {
-          if (isWindows) {
-            // Windows:xterm 原生粘贴不可靠,手动读剪贴板粘贴,并拦掉 xterm 默认(防重复)。
-            pasteFromClipboard()
-            return false
-          }
-          // macOS/Linux:放行,交给 xterm 自带粘贴(单次,不重复)。
-          return true
-        }
+        // v(粘贴):放行交给 xterm 自带粘贴,单次不重复(见上方注释)。
         return true
       })
 
@@ -287,20 +309,22 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       ;(async () => {
         unlistenOut = await onTermOutput(id, (bytes) => {
           if (!disposed) {
+            enqueueTerminalOutput(bytes)
+            if (false) {
             term.write(bytes)
             const usage = usageRef.current
             if (usage) {
               usageBufferRef.current += decoderRef.current.decode(bytes, { stream: true })
               if (usageBufferRef.current.length > 5000) {
-                if (usageTimerRef.current !== null) {
-                  window.clearTimeout(usageTimerRef.current)
-                }
+                const timer = usageTimerRef.current
+                window.clearTimeout(timer ?? undefined)
                 flushUsageOutput()
               } else if (usageTimerRef.current === null) {
                 usageTimerRef.current = window.setTimeout(flushUsageOutput, 900)
               }
             }
             onActivityRef.current?.(id) // 上报活动 → 侧栏判忙/空闲
+          }
           }
         })
         unlistenExit = await onTermExit(id, () => {
@@ -327,8 +351,8 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 监听系统深浅色切换 → 实时更新终端主题
       const mql = window.matchMedia('(prefers-color-scheme: dark)')
       const onScheme = (): void => {
-        term.options.theme = termTheme(mql.matches)
-        host.style.background = termTheme(mql.matches).background
+        term.options.theme = termTheme()
+        host.style.background = termTheme().background
       }
       mql.addEventListener?.('change', onScheme)
 
@@ -336,10 +360,16 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         disposed = true
         ro.disconnect()
         mql.removeEventListener?.('change', onScheme)
+        host.removeEventListener('keydown', onKeyDownCapture, true)
         dataSub.dispose()
-        if (usageTimerRef.current !== null) {
-          window.clearTimeout(usageTimerRef.current)
+        const timer = usageTimerRef.current
+        window.clearTimeout(timer ?? undefined)
+        if (outputFrameRef.current !== null) {
+          const frame = outputFrameRef.current
+          window.cancelAnimationFrame(frame)
+          outputFrameRef.current = null
         }
+        outputQueueRef.current = []
         flushUsageOutput()
         unlistenOut?.()
         unlistenExit?.()

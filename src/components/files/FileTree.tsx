@@ -13,6 +13,7 @@ import {
   Replace
 } from 'lucide-react'
 import { listDir, prefetchFile, prefetchBytes, baseName, type DirEntry } from '@/lib/fs'
+import { previewPrefetchFile } from '@/lib/preview'
 import { startDragOut, markInternalDrag, clearInternalDrag } from '@/lib/transfer'
 import {
   replaceInFile,
@@ -63,6 +64,16 @@ function isUnder(child: string, parent: string): boolean {
 }
 
 // 计算节点的 git 状态:文件取自身;文件夹聚合(内部任意改动则取一个代表字符)。
+function isHtmlFile(name: string): boolean {
+  return /\.(html?|xhtml)$/i.test(name)
+}
+
+function prefetchPreviewEntries(entries: DirEntry[], host?: string): void {
+  for (const entry of entries.filter((e) => !e.isDir && isHtmlFile(e.name)).slice(0, 8)) {
+    previewPrefetchFile(entry.path, host).catch(() => {})
+  }
+}
+
 function nodeGitStatus(
   entry: DirEntry,
   gitMap?: Map<string, string>
@@ -138,6 +149,10 @@ const Node = memo(function Node({
   // 悬停预读:停留 ~250ms 才预读,避免滚动滑过时狂发命令(远程尤其卡)
   const onHoverEnter = (): void => {
     if (entry.isDir) return
+    if (isHtmlFile(entry.name)) {
+      previewPrefetchFile(entry.path, host).catch(() => {})
+      return
+    }
     if (hoverTimer.current != null) clearTimeout(hoverTimer.current)
     hoverTimer.current = window.setTimeout(() => {
       // xlsx/xls 与媒体一样按二进制预读;csv/tsv 是文本(TableViewer 也走文本缓存)
@@ -160,7 +175,9 @@ const Node = memo(function Node({
   const loadChildren = async (): Promise<void> => {
     setLoading(true)
     try {
-      setChildren(await listDir(entry.path, host))
+      const next = await listDir(entry.path, host)
+      setChildren(next)
+      prefetchPreviewEntries(next, host)
     } catch (e) {
       console.error('列目录失败', e)
       setChildren([])
@@ -421,7 +438,9 @@ export default function FileTree({
 
   const load = async (): Promise<void> => {
     try {
-      setEntries(await listDir(root, host))
+      const next = await listDir(root, host)
+      setEntries(next)
+      prefetchPreviewEntries(next, host)
     } catch (e) {
       console.error('列根目录失败', e)
       setEntries([])

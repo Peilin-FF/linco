@@ -51,6 +51,7 @@ import {
   type Connection
 } from '@/lib/connection'
 import { watchStart, watchStop } from '@/lib/watch'
+import { previewPrefetchAssets } from '@/lib/preview'
 import { shadowBeginTurn } from '@/lib/shadow'
 import { proxyStart, proxyBeginTurn } from '@/lib/agentProxy'
 import AgentCommandLog from './components/AgentCommandLog'
@@ -62,6 +63,8 @@ import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
+
+const ENABLE_BACKGROUND_PREWARM = false
 
 // agent 后台任务 tab 的短标题:从命令行里挑一个有意义的词(脚本名/可执行名)。
 function taskLabel(args: string): string {
@@ -387,6 +390,7 @@ export default function App(): JSX.Element {
   // 切连接(host/cwd 变)时重置重热。
   useEffect(() => {
     setPrewarmed(false)
+    if (!ENABLE_BACKGROUND_PREWARM) return
     if (!cwd || !remoteDataReady) return // 没选工作目录/远端未 ready 就别空跑
     const ric =
       window.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 600))
@@ -431,7 +435,7 @@ export default function App(): JSX.Element {
       return
     }
     let stop = false
-    const GRACE_MS = 9000
+    const GRACE_MS = 16000
     const merge = (list: AgentTask[]): void => {
       const now = Date.now()
       const seen = taskSeenRef.current
@@ -452,7 +456,7 @@ export default function App(): JSX.Element {
         })
     }
     pull()
-    const t = window.setInterval(pull, 3000)
+    const t = window.setInterval(pull, 8000)
     return () => {
       stop = true
       window.clearInterval(t)
@@ -529,7 +533,7 @@ export default function App(): JSX.Element {
 
   // 会话忙/空闲心跳:每 1s tick 一次,驱动侧栏重算(近 3s 有输出=忙)。
   useEffect(() => {
-    const t = window.setInterval(() => setActivityTick((n) => n + 1), 1000)
+    const t = window.setInterval(() => setActivityTick((n) => n + 1), 3000)
     return () => window.clearInterval(t)
   }, [])
 
@@ -564,7 +568,7 @@ export default function App(): JSX.Element {
         status = 'exited'
       } else {
         const last = sessionActivityRef.current.get(s.id) ?? 0
-        status = now - last < 3000 ? 'busy' : 'idle'
+        status = now - last < 6000 ? 'busy' : 'idle'
       }
       const proj = s.cwd ? s.cwd.replace(/\/+$/, '').split('/').pop() || s.cwd : '—'
       return { id: s.id, connId: s.connId, connName: connName(s.connId), project: proj, status }
@@ -591,18 +595,22 @@ export default function App(): JSX.Element {
 
   // 激活某连接后:尝试静默 connect(key/已有 master)。
   // 成功 → connected;失败(需密码/2FA)→ 切到终端视图交互连接。
+  const markRemoteConnected = (h: string): void => {
+    setConnState('connected')
+    previewPrefetchAssets(h).catch(() => {})
+    if (!remotePluginsDoneRef.current.has(h)) {
+      remotePluginsDoneRef.current.add(h)
+      installRemotePlugins(h).catch(() => remotePluginsDoneRef.current.delete(h))
+    }
+  }
+
   const tryConnect = async (h: string, identity?: string): Promise<void> => {
     setConnState('connecting')
     const _t = performance.now()
     try {
       await sshConnect(h, identity)
       console.log('[switch] sshConnect OK', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
-      setConnState('connected')
-      // 连上后把当前语言的插件装到远端 ~/.claude/plugins(每 host 一次,后台、失败静默)。
-      if (!remotePluginsDoneRef.current.has(h)) {
-        remotePluginsDoneRef.current.add(h)
-        installRemotePlugins(h).catch(() => remotePluginsDoneRef.current.delete(h))
-      }
+      markRemoteConnected(h)
     } catch {
       console.log('[switch] sshConnect FAIL', h, 'cost', (performance.now() - _t).toFixed(0), 'ms')
       // 需交互认证:跳到终端,让用户输密码;master 建立后各视图随即可用
@@ -623,6 +631,30 @@ export default function App(): JSX.Element {
   }, [host, activeConn?.identity, activeConn?.id])
 
   // 切到本地
+  useEffect(() => {
+    if (!host || connState === 'connected') return
+    let stopped = false
+    let timer: number | undefined
+
+    const poll = (): void => {
+      sshConnect(host, activeConn?.identity || undefined)
+        .then(() => {
+          if (stopped) return
+          markRemoteConnected(host)
+        })
+        .catch(() => {
+          if (!stopped) timer = window.setTimeout(poll, 5000)
+        })
+    }
+
+    timer = window.setTimeout(poll, connState === 'error' ? 1000 : 5000)
+    return () => {
+      stopped = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, connState, activeConn?.identity])
+
   const selectLocal = (): void => {
     if (!config) return
     console.log('[switch] → local at', performance.now().toFixed(0))

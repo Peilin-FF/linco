@@ -43,6 +43,12 @@ input {
   user-select: text;
 }
 
+.xterm,
+iframe {
+  contain: strict;
+  transform: translateZ(0);
+}
+
 /* 细滚动条 */
 ::-webkit-scrollbar {
   width: 8px;

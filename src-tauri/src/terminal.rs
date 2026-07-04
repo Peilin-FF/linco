@@ -152,6 +152,12 @@ pub fn term_start(
             cmd.env("TERM", "xterm-256color");
             cmd.env("PYTHONUTF8", "1");
             cmd.env("PYTHONIOENCODING", "utf-8");
+            // chcp 65001 让 cmd 自身与 UTF-8 原生程序(node/claude 等)正常,但 Git-for-Windows /
+            // MSYS 的 coreutils(ls、grep 等)按 **locale 字符集** 把 UTF-16 文件名转出来,默认是
+            // ANSI 代码页(简中=GBK),于是吐 GBK 字节 → xterm 按 UTF-8 解 → 中文文件名乱码
+            // (如 `'GLM□'$'\235'...`)。给一个 UTF-8 locale,让这些 MSYS 工具改吐 UTF-8。
+            cmd.env("LANG", "en_US.UTF-8");
+            cmd.env("LC_ALL", "en_US.UTF-8");
             if let Some(vars) = &env {
                 for (k, v) in vars {
                     if !k.is_empty() {

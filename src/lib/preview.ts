@@ -31,6 +31,10 @@ export function previewPrefetchAssets(host?: string): Promise<void> {
 }
 
 /** 监听热刷新事件(claude 改了 HTML → 自动重载 iframe)。 */
+export function previewPrefetchFile(path: string, host?: string): Promise<void> {
+  return invoke('preview_prefetch_file', { host: host || null, path })
+}
+
 export function onPreviewReload(cb: () => void): Promise<UnlistenFn> {
   return listen<{ token: number }>('preview-reload', () => cb())
 }

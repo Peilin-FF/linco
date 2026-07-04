@@ -59,7 +59,6 @@ type Pending = Arc<Mutex<HashMap<u64, SyncSender<Result<Value, String>>>>>;
 enum RpcLane {
     Interactive,
     Background,
-    Preview,
 }
 
 impl RpcLane {
@@ -67,7 +66,6 @@ impl RpcLane {
         match self {
             RpcLane::Interactive => "interactive",
             RpcLane::Background => "background",
-            RpcLane::Preview => "preview",
         }
     }
 }
@@ -165,19 +163,36 @@ fn ensure_script(host: &str) -> Result<String, String> {
             return Ok(p.clone());
         }
     }
-    let b64 = B64.encode(AGENT_SRC.as_bytes());
-    let script = format!(
-        "d=\"$HOME/.linco\"; mkdir -p \"$d\"; \
-         if [ \"$(cat \"$d/agent.version\" 2>/dev/null)\" != {ver} ]; then \
-           base64 -d > \"$d/linco_agent.py\" <<'__LINCO_AGENT_B64__'\n{b64}\n__LINCO_AGENT_B64__\n \
-           printf %s {ver} > \"$d/agent.version\"; \
-         fi; \
-         printf '%s/linco_agent.py' \"$d\"",
+    let check = format!(
+        "d=\"$HOME/.linco\"; \
+         if [ \"$(cat \"$d/agent.version\" 2>/dev/null)\" = {ver} ] && [ -s \"$d/linco_agent.py\" ]; then \
+           printf '%s/linco_agent.py' \"$d\"; \
+         fi",
         ver = shq(AGENT_VERSION),
-        b64 = b64,
     );
-    let out = crate::remote::run_remote_oneshot_pub(host, &script, None)?;
-    let path = String::from_utf8_lossy(&out).trim().to_string();
+    let mut path =
+        String::from_utf8_lossy(&crate::remote::run_remote_oneshot_pub(host, &check, None)?)
+            .trim()
+            .to_string();
+
+    if path.is_empty() {
+        let b64 = B64.encode(AGENT_SRC.as_bytes());
+        let upload = format!(
+            "d=\"$HOME/.linco\"; mkdir -p \"$d\"; \
+             tmp=\"$d/linco_agent.py.tmp.$$\"; \
+             base64 -d > \"$tmp\" && mv \"$tmp\" \"$d/linco_agent.py\" && \
+             printf %s {ver} > \"$d/agent.version\" && \
+             printf '%s/linco_agent.py' \"$d\"",
+            ver = shq(AGENT_VERSION),
+        );
+        path = String::from_utf8_lossy(&crate::remote::run_remote_oneshot_pub(
+            host,
+            &upload,
+            Some(b64.as_bytes()),
+        )?)
+        .trim()
+        .to_string();
+    }
     if path.is_empty() {
         return Err("无法部署 agent 脚本".into());
     }
@@ -378,11 +393,6 @@ pub fn call_background_timeout(
     call_on_lane_timeout(host, RpcLane::Background, op, args, timeout)
 }
 
-/// HTML preview 专用 RPC lane:预览刷新是主路径,不与文件树/编辑器/后台任务排队。
-pub fn call_preview(host: &str, op: &str, args: Value) -> Result<Value, String> {
-    call_on_lane_timeout(host, RpcLane::Preview, op, args, RPC_TIMEOUT)
-}
-
 fn call_on_lane(host: &str, lane: RpcLane, op: &str, args: Value) -> Result<Value, String> {
     call_on_lane_timeout(host, lane, op, args, RPC_TIMEOUT)
 }
@@ -485,16 +495,6 @@ pub fn warmup(host: &str) -> Result<(), String> {
     }
 }
 
-/// 预热 HTML preview 专用 lane,让首次 iframe 读取不承担建连/握手成本。
-pub fn warmup_preview(host: &str) -> Result<(), String> {
-    let v = call_preview(host, "ping", json!({}))?;
-    if v.get("pong").and_then(|x| x.as_bool()).unwrap_or(false) {
-        Ok(())
-    } else {
-        Err("preview agent warmup 响应异常".into())
-    }
-}
-
 /// 开始监听某 host 工作目录(agent watch op)。事件经 reader 线程 emit remote-fs-change。
 pub fn watch(host: &str, root: &str) -> Result<(), String> {
     call_background(host, "watch", json!({ "root": root })).map(|_| ())
@@ -568,13 +568,22 @@ mod tests {
     fn local_agent() -> AgentSession {
         let tmp = std::env::temp_dir().join("linco_agent_test.py");
         std::fs::write(&tmp, AGENT_SRC).unwrap();
-        let mut child = Command::new("python3")
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let mut child = Command::new(python)
             .arg(&tmp)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("spawn python3 agent");
+            .unwrap_or_else(|_| {
+                Command::new(if python == "python3" { "python" } else { "python3" })
+                    .arg(&tmp)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn python agent")
+            });
         let stdin = Arc::new(Mutex::new(child.stdin.take().unwrap()));
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
@@ -784,46 +793,4 @@ mod tests {
         assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
     }
 
-    #[test]
-    fn preview_rpc_does_not_wait_for_interactive_or_background_lane_locks() {
-        let host = format!(
-            "local-preview-lane-test-{}",
-            SEQ.fetch_add(1, Ordering::Relaxed)
-        );
-        {
-            let bg = host_handle_for(&host, RpcLane::Background);
-            let mut guard = bg.lock().unwrap();
-            *guard = Some(local_agent());
-        }
-        {
-            let ui = host_handle_for(&host, RpcLane::Interactive);
-            let mut guard = ui.lock().unwrap();
-            *guard = Some(local_agent());
-        }
-        {
-            let pv = host_handle_for(&host, RpcLane::Preview);
-            let mut guard = pv.lock().unwrap();
-            *guard = Some(local_agent());
-        }
-
-        let bg = host_handle_for(&host, RpcLane::Background);
-        let ui = host_handle_for(&host, RpcLane::Interactive);
-        let _bg_guard = bg.lock().unwrap();
-        let _ui_guard = ui.lock().unwrap();
-
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let host_for_call = host.clone();
-        let t = std::thread::spawn(move || {
-            let _ = tx.send(call_preview(&host_for_call, "ping", json!({})));
-        });
-
-        let pong = rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("preview lane should not wait for interactive/background lane locks")
-            .expect("preview ping should succeed");
-        let _ = t.join();
-        drop_session(&host);
-
-        assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
-    }
 }

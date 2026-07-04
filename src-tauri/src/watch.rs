@@ -120,7 +120,7 @@ fn scan_mtimes(root: &str) -> HashMap<String, i64> {
 fn local_poll(app: AppHandle, root: String, gen: u64) {
     let mut prev = scan_mtimes(&root);
     loop {
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(2000));
         if LOCAL_GEN.load(Ordering::Relaxed) != gen {
             return; // 已换代,退出
         }

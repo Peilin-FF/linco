@@ -11,7 +11,7 @@
 // "preview-reload" 事件,前端把 iframe key+1 重载。远端 inotify 不可行,统一轮询。
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
-const CACHE_TTL: Duration = Duration::from_secs(2);
+const CACHE_TTL: Duration = Duration::from_secs(30);
 
 struct PreviewInner {
     port: u16,            // 0 = 未启动
@@ -145,11 +145,14 @@ pub fn preview_set_target(
 ) -> Result<(), String> {
     let host = host.filter(|s| !s.is_empty());
     let mut inner = global().lock().map_err(|e| e.to_string())?;
+    let workspace_changed = inner.host != host || inner.root != root;
     inner.host = host;
     inner.root = root;
     inner.target_rel = target_rel;
     inner.last_mtime = None; // 重新基线,切换后不误刷
-    inner.cache.clear();
+    if workspace_changed {
+        inner.cache.clear();
+    }
     Ok(())
 }
 
@@ -160,9 +163,6 @@ pub fn preview_set_target(
 pub fn preview_prefetch_assets(host: Option<String>) {
     let host = host.filter(|s| !s.is_empty());
     std::thread::spawn(move || {
-        if let Some(h) = host.as_deref() {
-            let _ = crate::agent_rpc::warmup_preview(h);
-        }
         for asset in [
             "notebook.css",
             "notebook.js",
@@ -170,6 +170,29 @@ pub fn preview_prefetch_assets(host: Option<String>) {
             "katex.min.js",
         ] {
             let _ = serve_asset(&host, asset); // 命中即写入 assets_cache
+        }
+    });
+}
+
+#[tauri::command]
+pub fn preview_prefetch_file(host: Option<String>, path: String) {
+    let host = host.filter(|s| !s.is_empty());
+    std::thread::spawn(move || {
+        if let Some(h) = host.as_deref() {
+            let _ = read_remote_cached(h, &path);
+            return;
+        }
+
+        let key = format!("|{path}");
+        if let Ok(g) = global().lock() {
+            if g.cache.contains_key(&key) {
+                return;
+            }
+        }
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(mut g) = global().lock() {
+                g.cache.insert(key, (Instant::now(), data));
+            }
         }
     });
 }
@@ -239,9 +262,9 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
     let decoded = percent_decode(path);
     let rel = decoded.trim_start_matches('/');
 
-    let (host, root) = {
+    let (host, root, target_rel) = {
         match global().lock() {
-            Ok(g) => (g.host.clone(), g.root.clone()),
+            Ok(g) => (g.host.clone(), g.root.clone(), g.target_rel.clone()),
             Err(_) => return (b"server busy".to_vec(), "text/plain".into(), 500),
         }
     };
@@ -255,6 +278,17 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
 
     if root.is_empty() {
         return (b"no preview target".to_vec(), "text/plain".into(), 404);
+    }
+
+    if rel == "__debug__" {
+        let body = format!(
+            "host: {}\nroot: {}\ntarget_rel: {}\nrequest_rel: {}\n",
+            host.as_deref().unwrap_or("(local)"),
+            root,
+            target_rel,
+            rel
+        );
+        return (body.into_bytes(), "text/plain; charset=utf-8".into(), 200);
     }
 
     // 产物首页:显式 /__index__ 或目录请求(空/以 / 结尾)→ 列出所有 HTML 可点链接。
@@ -293,7 +327,11 @@ fn serve(url: &str) -> (Vec<u8>, String, u16) {
                 (b, ctype, 200)
             }
         }
-        Err(_) => (b"not found".to_vec(), "text/plain".into(), 404),
+        Err(e) => (
+            format!("preview read failed\n\npath: {abs}\nerror: {e}").into_bytes(),
+            "text/plain; charset=utf-8".into(),
+            404,
+        ),
     }
 }
 
@@ -309,9 +347,17 @@ fn serve_index(host: &Option<String>, root: &str, dir_rel: &str) -> (Vec<u8>, St
         format!("{}/{}", root.trim_end_matches('/'), dir_rel)
     };
     // 收集 HTML 相对路径(相对 root,供链接)
-    let htmls = list_html_rel(host, root, &base);
+    let (htmls, list_error) = match list_html_rel(host, root, &base) {
+        Ok(v) => (v, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
     let mut items = String::new();
-    if htmls.is_empty() {
+    if let Some(e) = list_error {
+        items.push_str(&format!(
+            "<p class=empty>远端 HTML 列表读取失败。</p><pre>{}</pre>",
+            html_escape(&e)
+        ));
+    } else if htmls.is_empty() {
         items.push_str("<p class=empty>工作目录里还没有 HTML 产物。</p>");
     } else {
         items.push_str("<ul>");
@@ -369,26 +415,25 @@ if(a){{e.preventDefault();try{{parent.postMessage({{__lincoNav:a.getAttribute('h
 }
 
 /// 列出 base 目录下(限深)所有 HTML,返回相对 root 的路径(/ 分隔)。
-fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
+fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     if let Some(h) = host.as_deref() {
         // 远程:find(经持久会话);跳过噪声目录。
         // -L:跟随符号链接 —— 产物目录常是 `artifacts -> ../artifacts` 这类软链,
         // 不加 -L 的 find 不会进入软链目录,会导致产物列表为空。
+        let base_q = crate::remote::shq(base);
         let cmd = format!(
-            "find -L {} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500",
-            crate::remote::shq(base)
+            "if [ -d {base_q} ]; then find -L {base_q} -maxdepth 4 \\( -name node_modules -o -name .git -o -name target -o -name __pycache__ \\) -prune -o -type f \\( -iname '*.html' -o -iname '*.htm' \\) -print 2>/dev/null | head -500; else printf 'preview root not found: %s\\n' {base_q} >&2; exit 2; fi"
         );
-        if let Ok(b) = crate::remote::preview_run_remote(h, &cmd) {
-            let root_pref = format!("{}/", root.trim_end_matches('/'));
-            for line in String::from_utf8_lossy(&b).lines() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let rel = line.strip_prefix(&root_pref).unwrap_or(line);
-                out.push(rel.to_string());
+        let b = crate::remote::preview_run_remote(h, &cmd)?;
+        let root_pref = format!("{}/", root.trim_end_matches('/'));
+        for line in String::from_utf8_lossy(&b).lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
             }
+            let rel = line.strip_prefix(&root_pref).unwrap_or(line);
+            out.push(rel.to_string());
         }
     } else {
         let root_path = std::path::Path::new(root);
@@ -433,7 +478,7 @@ fn list_html_rel(host: &Option<String>, root: &str, base: &str) -> Vec<String> {
         }
     }
     out.sort();
-    out
+    Ok(out)
 }
 
 fn html_escape(s: &str) -> String {
@@ -489,16 +534,31 @@ fn serve_asset(host: &Option<String>, asset: &str) -> (Vec<u8>, String, u16) {
             return (data.clone(), ctype, 200);
         }
     }
-    let dir = match assets_dir(host) {
-        Some(d) if !d.is_empty() => d,
-        _ => return (b"assets not found".to_vec(), "text/plain".into(), 404),
-    };
-    let abs = format!("{}/{}", dir.trim_end_matches('/'), asset);
-    let bytes = if let Some(h) = host.as_deref() {
-        read_remote_cached(h, &abs)
-    } else {
-        std::fs::read(&abs).map_err(|e| e.to_string())
-    };
+    if let Some(b) = read_local_asset(asset) {
+        if let Ok(mut g) = global().lock() {
+            g.assets_cache.insert(ckey, b.clone());
+        }
+        return (b, ctype, 200);
+    }
+    let bytes = assets_dir(host)
+        .filter(|d| !d.is_empty())
+        .ok_or_else(|| "assets not found".to_string())
+        .and_then(|dir| {
+            let abs = format!("{}/{}", dir.trim_end_matches('/'), asset);
+            if let Some(h) = host.as_deref() {
+                read_remote_cached(h, &abs)
+            } else {
+                std::fs::read(&abs).map_err(|e| e.to_string())
+            }
+        })
+        .or_else(|_| {
+            find_assets_local()
+                .ok_or_else(|| "local assets not found".to_string())
+                .and_then(|dir| {
+                    let abs = std::path::Path::new(&dir).join(asset);
+                    std::fs::read(&abs).map_err(|e| e.to_string())
+                })
+        });
     match bytes {
         Ok(b) => {
             if let Ok(mut g) = global().lock() {
@@ -508,6 +568,12 @@ fn serve_asset(host: &Option<String>, asset: &str) -> (Vec<u8>, String, u16) {
         }
         Err(_) => (b"asset not found".to_vec(), "text/plain".into(), 404),
     }
+}
+
+fn read_local_asset(asset: &str) -> Option<Vec<u8>> {
+    let dir = find_assets_local()?;
+    let abs = std::path::Path::new(&dir).join(asset);
+    std::fs::read(abs).ok()
 }
 
 /// WYSIWYG 保存(复刻插件 /__save)。body 是 JSON:
@@ -679,6 +745,7 @@ fn find_assets_local() -> Option<String> {
         .to_string();
     // 已知安装位置(按优先级):新插件名 > 旧名(回退) > 开发副本 > 插件缓存搜索
     let mut cands = vec![
+        format!("{home}/.codex/skills/html-kit/assets"),
         format!("{home}/.claude/plugins/linco-html/assets"), // 中文版插件(主)
         format!("{home}/.claude/plugins/linco-html-en/assets"), // 英文版插件
         format!("{home}/.claude/plugins/html-vibe/assets"),  // 旧插件名(兼容已部署)
@@ -744,7 +811,7 @@ $(find \"$HOME/.claude/plugins\" -maxdepth 6 -type d -name assets 2>/dev/null); 
 fn reload_loop(app: AppHandle) {
     let mut token: u64 = 0;
     loop {
-        std::thread::sleep(Duration::from_millis(1000));
+        std::thread::sleep(Duration::from_millis(2000));
         let (host, root, target_rel, last) = {
             match global().lock() {
                 Ok(g) => (
@@ -836,25 +903,36 @@ fn newest_local_html(root: &str) -> Option<String> {
 fn join_rel(root: &str, rel: &str) -> String {
     format!(
         "{}/{}",
-        root.trim_end_matches('/'),
-        rel.trim_start_matches('/')
+        root.trim_end_matches(['/', '\\']),
+        rel.trim_start_matches(['/', '\\'])
     )
 }
 
 /// 安全拼接:归一化 rel,拒绝 `..` 逃逸;结果绝对路径必须在 root 内。
 fn safe_join(root: &str, rel: &str) -> Option<String> {
-    let mut norm = PathBuf::new();
-    for comp in Path::new(rel).components() {
+    if rel.starts_with(['/', '\\']) || rel.contains(':') {
+        return None;
+    }
+    let mut parts: Vec<&str> = Vec::new();
+    for comp in rel.split(['/', '\\']) {
         match comp {
-            Component::Normal(c) => norm.push(c),
-            Component::CurDir => {}
-            // 任何 .. 或绝对根都视为非法
-            _ => return None,
+            "" | "." => {}
+            ".." => return None,
+            c => {
+                if c.contains('\0') {
+                    return None;
+                }
+                parts.push(c);
+            }
         }
     }
-    let abs = join_rel(root, &norm.to_string_lossy());
-    // 双保险:abs 必须以 root 为前缀
-    if abs.starts_with(root.trim_end_matches('/')) {
+    let root_clean = root.trim_end_matches(['/', '\\']);
+    let abs = if parts.is_empty() {
+        root_clean.to_string()
+    } else {
+        format!("{}/{}", root_clean, parts.join("/"))
+    };
+    if abs == root_clean || abs.starts_with(&format!("{root_clean}/")) {
         Some(abs)
     } else {
         None
@@ -933,6 +1011,10 @@ mod tests {
         assert_eq!(
             safe_join("/work", "./a/./b.css").as_deref(),
             Some("/work/a/b.css")
+        );
+        assert_eq!(
+            safe_join("/work", r"artifacts\index.html").as_deref(),
+            Some("/work/artifacts/index.html")
         );
     }
 

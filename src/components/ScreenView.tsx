@@ -196,8 +196,8 @@ export default function ScreenView({
           // 右键指定某文件 → 直接进该文件
           handledPreviewRef.current = previewPath
           const rel = previewPath!.startsWith(cwd)
-            ? previewPath!.slice(cwd.length).replace(/^\/+/, '')
-            : previewPath!
+            ? previewPath!.slice(cwd.length).replace(/^[\\/]+/, '').replace(/\\/g, '/')
+            : previewPath!.replace(/\\/g, '/')
           await previewSetTarget(cwd, rel, host)
           if (!alive) return
           setEmpty(false)
@@ -246,7 +246,7 @@ export default function ScreenView({
     if (!cwd || mode !== 'served' || !url || port <= 0) return
     const base = `http://127.0.0.1:${port}/`
     if (!url.startsWith(base)) return
-    const rel = decodeURI(url.slice(base.length))
+    const rel = decodeURI(url.slice(base.length).split('?')[0].split('#')[0])
     if (!rel || rel === '__index__') return
     previewSetTarget(cwd, rel, host).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
