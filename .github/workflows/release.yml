@@ -66,7 +66,11 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            后台任务实时显示:自动为 python 命令注入无缓冲(PYTHONUNBUFFERED),监控面板不再冻住;其它已知问题修复
+            Windows 可靠性更新:
+            - 修复 xterm 6 在 WebView2 中高度为 0 导致 Chat/Terminal 黑屏
+            - 修复 PTY 并发启动、首屏输出丢失和粘贴重复
+            - 恢复远程 RPC 快速通道并改进 SSH、HTML 预览和插件兼容性
+            - 降低后台轮询带来的 CPU 占用
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
