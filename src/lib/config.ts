@@ -328,7 +328,7 @@ function codexResumeCommand(
   resumeId: string,
   shell: ShellKind
 ): string {
-  let cmd = `${exe} resume ${shellQuote(resumeId, shell)}`
+  let cmd = `${exe} resume ${shellQuote(resumeId, shell)} --no-alt-screen`
   if (agent.baseUrl.trim()) {
     cmd += codexConfigArg('model_provider', 'linco', shell)
     cmd += codexConfigArg('model_providers.linco.name', 'Linco', shell)
@@ -370,6 +370,12 @@ export function agentLaunchCommand(
   // 必须从可执行名重新拼一条只含 resume 安全 flag 的命令。
   if (resume && isCodex) {
     return codexResumeCommand(agent, commandHead(cmd), resume, shell)
+  }
+  // Linco embeds Codex in xterm.js. Inline mode keeps completed output in
+  // xterm's normal scrollback, so the mouse wheel and text selection behave
+  // like a native terminal instead of being lost to Codex's redraw buffer.
+  if (isCodex && !hasFlag(cmd, '--no-alt-screen', '--no-alt-screen')) {
+    cmd += ' --no-alt-screen'
   }
   if (isCodex && agent.baseUrl.trim() && !hasCodexProviderConfig(cmd)) {
     cmd += codexConfigArg('model_provider', 'linco', shell)
