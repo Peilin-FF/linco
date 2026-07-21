@@ -4,7 +4,13 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export interface TermOutput {
   id: string
+  gen: number
   data: string // base64
+}
+
+export interface TermExit {
+  id: string
+  gen: number
 }
 
 export function termStart(
@@ -18,8 +24,8 @@ export function termStart(
     host?: string
     identity?: string
   }
-): Promise<void> {
-  return invoke('term_start', {
+): Promise<number> {
+  return invoke<number>('term_start', {
     id,
     cols,
     rows,
@@ -49,24 +55,24 @@ export function termResize(id: string, cols: number, rows: number): Promise<void
   return invoke<void>('term_resize', { id, cols, rows }).catch(ignoreNoSession)
 }
 
-export function termKill(id: string): Promise<void> {
-  return invoke<void>('term_kill', { id }).catch(ignoreNoSession)
+export function termKill(id: string, gen?: number): Promise<void> {
+  return invoke<void>('term_kill', { id, gen: gen ?? null }).catch(ignoreNoSession)
 }
 
 /** 监听某个终端的输出,回调收到的是已解码的原始字节。 */
 export function onTermOutput(
   id: string,
-  cb: (bytes: Uint8Array) => void
+  cb: (bytes: Uint8Array, gen: number) => void
 ): Promise<UnlistenFn> {
   return listen<TermOutput>('term-output', (e) => {
     if (e.payload.id !== id) return
-    cb(b64ToBytes(e.payload.data))
+    cb(b64ToBytes(e.payload.data), e.payload.gen)
   })
 }
 
-export function onTermExit(id: string, cb: () => void): Promise<UnlistenFn> {
-  return listen<{ id: string }>('term-exit', (e) => {
-    if (e.payload.id === id) cb()
+export function onTermExit(id: string, cb: (gen: number) => void): Promise<UnlistenFn> {
+  return listen<TermExit>('term-exit', (e) => {
+    if (e.payload.id === id) cb(e.payload.gen)
   })
 }
 

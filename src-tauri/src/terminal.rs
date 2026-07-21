@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
 /// 单个终端会话持有的句柄。
 pub(crate) struct Session {
+    gen: u64,
     master: Box<dyn MasterPty + Send>,
     writer: SharedWriter,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -35,6 +37,7 @@ pub struct TerminalState(pub Mutex<HashMap<String, Session>>);
 #[derive(Clone, Serialize)]
 struct TermOutput {
     id: String,
+    gen: u64,
     /// base64 编码的原始 PTY 字节
     data: String,
 }
@@ -42,7 +45,10 @@ struct TermOutput {
 #[derive(Clone, Serialize)]
 struct TermExit {
     id: String,
+    gen: u64,
 }
+
+static TERM_GEN: AtomicU64 = AtomicU64::new(1);
 
 /// 启动一个终端会话:开 PTY、跑登录 shell、起读取线程把输出流式 emit 回前端。
 /// 登录 shell 确保 ~/.cargo/bin、homebrew、npm 全局等路径在 PATH 中,
@@ -64,12 +70,17 @@ pub fn term_start(
     initial_command: Option<String>,
     host: Option<String>,
     identity: Option<String>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    let gen = TERM_GEN.fetch_add(1, Ordering::Relaxed);
+
     // 若同 id 已存在,先清掉旧会话
     {
         let mut map = state.0.lock().map_err(|e| e.to_string())?;
-        if let Some(mut old) = map.remove(&id) {
-            let _ = old.child.kill();
+        let should_replace = map.get(&id).is_some_and(|old| old.gen < gen);
+        if should_replace {
+            if let Some(mut old) = map.remove(&id) {
+                let _ = old.child.kill();
+            }
         }
     }
 
@@ -243,6 +254,7 @@ pub fn term_start(
                     }
                     let payload = TermOutput {
                         id: id_for_thread.clone(),
+                        gen,
                         data: B64.encode(&buf[..n]),
                     };
                     if app_for_thread.emit("term-output", payload).is_err() {
@@ -252,7 +264,7 @@ pub fn term_start(
                 Err(_) => break,
             }
         }
-        let _ = app_for_thread.emit("term-exit", TermExit { id: id_for_thread });
+        let _ = app_for_thread.emit("term-exit", TermExit { id: id_for_thread, gen });
     });
 
     // 自动启动 agent:在 shell 提示符就绪后再写入启动命令(等价于在终端键入并回车)。
@@ -274,16 +286,22 @@ pub fn term_start(
         });
     }
 
+    let mut session = Session {
+        gen,
+        master: pair.master,
+        writer,
+        child,
+    };
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    map.insert(
+    if map.get(&id).is_some_and(|current| current.gen > gen) {
+        let _ = session.child.kill();
+    } else if let Some(mut old) = map.insert(
         id,
-        Session {
-            master: pair.master,
-            writer,
-            child,
-        },
-    );
-    Ok(())
+        session,
+    ) {
+        let _ = old.child.kill();
+    }
+    Ok(gen)
 }
 
 /// 把数据写入终端 stdin(等价于在终端里键入)。
@@ -322,10 +340,19 @@ pub fn term_resize(
 
 /// 结束终端会话。
 #[tauri::command]
-pub fn term_kill(state: State<'_, TerminalState>, id: String) -> Result<(), String> {
+pub fn term_kill(
+    state: State<'_, TerminalState>,
+    id: String,
+    gen: Option<u64>,
+) -> Result<(), String> {
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(mut session) = map.remove(&id) {
-        let _ = session.child.kill();
+    let should_kill = map
+        .get(&id)
+        .is_some_and(|session| gen.is_none_or(|expected| session.gen == expected));
+    if should_kill {
+        if let Some(mut session) = map.remove(&id) {
+            let _ = session.child.kill();
+        }
     }
     Ok(())
 }
@@ -342,6 +369,26 @@ mod tests {
     use portable_pty::PtySize;
     use std::time::{Duration, Instant};
 
+    fn test_shell(_login_or_interactive: bool) -> CommandBuilder {
+        #[cfg(windows)]
+        {
+            let shell = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
+            let mut cmd = CommandBuilder::new(&shell);
+            cmd.arg("/K");
+            cmd.arg("chcp 65001>nul");
+            cmd.env("TERM", "xterm-256color");
+            cmd
+        }
+        #[cfg(not(windows))]
+        {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+            let mut cmd = CommandBuilder::new(&shell);
+            cmd.arg(if _login_or_interactive { "-i" } else { "-l" });
+            cmd.env("TERM", "xterm-256color");
+            cmd
+        }
+    }
+
     /// 冒烟测试:验证 PTY 核心机制 —— 开 shell、写命令、读回输出。
     /// 这是“对话框 → 终端重定向”和“输出流式回传”的底层保证。
     #[test]
@@ -356,10 +403,7 @@ mod tests {
             })
             .expect("openpty");
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.arg("-l");
-        cmd.env("TERM", "xterm-256color");
+        let cmd = test_shell(false);
 
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);
@@ -410,10 +454,7 @@ mod tests {
             })
             .expect("openpty");
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.arg("-i"); // 交互式,触发行编辑器初始化(复现被吞场景)
-        cmd.env("TERM", "xterm-256color");
+        let cmd = test_shell(true);
 
         let mut child = pair.slave.spawn_command(cmd).expect("spawn");
         drop(pair.slave);

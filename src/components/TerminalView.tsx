@@ -173,6 +173,12 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
+      // xterm 6 不再替应用设置根节点高度。没有这两行时内部 rows 虽然
+      // 已经渲染,但 .xterm 本身是 0px 高,Windows WebView2 最终只显示背景。
+      if (term.element) {
+        term.element.style.width = '100%'
+        term.element.style.height = '100%'
+      }
       // 让 host 内边距区域也跟随终端背景,避免深色下出现白边框
       host.style.background = termTheme().background
       fit.fit()
@@ -182,6 +188,12 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       let unlistenOut: UnlistenFn | undefined
       let unlistenExit: UnlistenFn | undefined
       let disposed = false
+      let activeGen: number | null = null
+      let startSequence = 0
+      type StartupEvent =
+        | { kind: 'output'; gen: number; bytes: Uint8Array }
+        | { kind: 'exit'; gen: number }
+      let startupEvents: StartupEvent[] = []
 
       const flushTerminalOutput = (): void => {
         outputFrameRef.current = null
@@ -217,6 +229,21 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         if (outputFrameRef.current === null) {
           outputFrameRef.current = window.requestAnimationFrame(flushTerminalOutput)
         }
+      }
+
+      const showExit = (): void => {
+        if (disposed) return
+        started = false
+        term.write(`\r\n\x1b[90m[${tRef.current('term.disconnected')}]\x1b[0m\r\n`)
+        setExited(true)
+        onExitRef.current?.(id)
+      }
+
+      const bufferStartupEvent = (event: StartupEvent): void => {
+        // term_start 的返回值和 PTY 输出走不同 IPC 通道。Windows 上首屏输出
+        // 经常先到,先保留并在拿到 gen 后只回放当前会话的数据。
+        if (startupEvents.length >= 256) startupEvents.shift()
+        startupEvents.push(event)
       }
 
       // 用户在终端里键入 → 写回 PTY
@@ -285,17 +312,42 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 启动(或重启)PTY 会话:重连时复用同一函数。
       let started = false // 会话建好前不发 resize(减少无谓调用)
       const start = (): void => {
+        const sequence = ++startSequence
         setExited(false)
+        started = false
+        activeGen = null
+        startupEvents = []
         void termStart(id, term.cols, term.rows, {
           cwd: cwdRef.current,
           env: envRef.current,
           initialCommand: initCmdRef.current,
           host: hostRef2.current,
           identity: identityRef.current
-        }).then(() => {
-          started = true
-          term.focus()
         })
+          .then((gen) => {
+            if (disposed || sequence !== startSequence) {
+              void termKill(id, gen)
+              return
+            }
+
+            activeGen = gen
+            started = true
+            const buffered = startupEvents
+            startupEvents = []
+            for (const event of buffered) {
+              if (event.gen !== gen) continue
+              if (event.kind === 'output') enqueueTerminalOutput(event.bytes)
+              else showExit()
+            }
+            term.focus()
+          })
+          .catch((e) => {
+            if (disposed || sequence !== startSequence) return
+            startupEvents = []
+            term.write(`\r\n\x1b[31m[${String(e)}]\x1b[0m\r\n`)
+            setExited(true)
+            onExitRef.current?.(id)
+          })
       }
       restartRef.current = (silent?: boolean) => {
         if (disposed) return
@@ -307,35 +359,42 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
       // 订阅输出 + 退出(断线/进程结束 → 显示「重连」覆盖层)
       ;(async () => {
-        unlistenOut = await onTermOutput(id, (bytes) => {
-          if (!disposed) {
+        const stopOutput = await onTermOutput(id, (bytes, gen) => {
+          if (disposed) return
+          if (activeGen === null) {
+            bufferStartupEvent({ kind: 'output', gen, bytes })
+          } else if (gen === activeGen) {
             enqueueTerminalOutput(bytes)
-            if (false) {
-            term.write(bytes)
-            const usage = usageRef.current
-            if (usage) {
-              usageBufferRef.current += decoderRef.current.decode(bytes, { stream: true })
-              if (usageBufferRef.current.length > 5000) {
-                const timer = usageTimerRef.current
-                window.clearTimeout(timer ?? undefined)
-                flushUsageOutput()
-              } else if (usageTimerRef.current === null) {
-                usageTimerRef.current = window.setTimeout(flushUsageOutput, 900)
-              }
-            }
-            onActivityRef.current?.(id) // 上报活动 → 侧栏判忙/空闲
-          }
           }
         })
-        unlistenExit = await onTermExit(id, () => {
-          if (!disposed) {
-            term.write(`\r\n\x1b[90m[${tRef.current('term.disconnected')}]\x1b[0m\r\n`)
-            setExited(true)
-            onExitRef.current?.(id)
+        if (disposed) {
+          stopOutput()
+          return
+        }
+        unlistenOut = stopOutput
+
+        const stopExit = await onTermExit(id, (gen) => {
+          if (disposed) return
+          if (activeGen === null) {
+            bufferStartupEvent({ kind: 'exit', gen })
+          } else if (gen === activeGen) {
+            showExit()
           }
         })
+        if (disposed) {
+          stopExit()
+          unlistenOut?.()
+          unlistenOut = undefined
+          return
+        }
+        unlistenExit = stopExit
         start()
-      })()
+      })().catch((e) => {
+        if (disposed) return
+        term.write(`\r\n\x1b[31m[${String(e)}]\x1b[0m\r\n`)
+        setExited(true)
+        onExitRef.current?.(id)
+      })
 
       // 尺寸自适应:容器变化时 fit + 同步 PTY(会话建好后才发 resize)
       const ro = new ResizeObserver(() => {
@@ -358,6 +417,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
       return () => {
         disposed = true
+        startSequence += 1
+        const gen = activeGen
+        activeGen = null
+        startupEvents = []
         ro.disconnect()
         mql.removeEventListener?.('change', onScheme)
         host.removeEventListener('keydown', onKeyDownCapture, true)
@@ -373,7 +436,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         flushUsageOutput()
         unlistenOut?.()
         unlistenExit?.()
-        termKill(id)
+        if (gen !== null) void termKill(id, gen)
         term.dispose()
         termRef.current = null
         fitRef.current = null
