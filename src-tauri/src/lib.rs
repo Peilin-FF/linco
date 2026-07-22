@@ -11,6 +11,7 @@ mod blocking;
 mod config;
 mod fs;
 mod git;
+mod latex;
 mod model_test;
 mod plugins;
 mod preview;
@@ -42,6 +43,7 @@ pub fn run() {
         .setup(|app| {
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
+            latex::prepare_bundled_tex(app.handle().clone());
             Ok(())
         })
         .manage(TerminalState::default())
@@ -120,6 +122,12 @@ pub fn run() {
             git::git_stash_apply,
             git::git_stash_pop,
             git::git_stash_drop,
+            latex::overleaf_project_info,
+            latex::overleaf_clone,
+            latex::overleaf_store_token,
+            latex::overleaf_pull,
+            latex::overleaf_publish,
+            latex::latex_compile,
             remote::ssh_config_hosts,
             remote::ssh_connect,
             remote::ssh_check,

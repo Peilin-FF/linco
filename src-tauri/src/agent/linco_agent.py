@@ -372,10 +372,15 @@ def op_git(a):
     # 在 repo 目录跑 git,返回 stdout/stderr/code(不抛错,由调用方按 code 判断)
     repo = a["repo"]
     args = a.get("args") or []
+    env = os.environ.copy()
+    for key, value in (a.get("env") or {}).items():
+        env[str(key)] = str(value)
+    timeout = float(a.get("timeout") or 180)
     try:
         p = subprocess.run(
             ["git", "-C", repo] + list(args),
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env, timeout=timeout,
         )
         return {
             "stdout": p.stdout.decode("utf-8", "replace"),
@@ -384,6 +389,10 @@ def op_git(a):
         }
     except FileNotFoundError:
         raise ValueError("git 未安装")
+
+
+    except subprocess.TimeoutExpired:
+        raise ValueError("git operation timed out")
 
 
 # ---------- 影子快照(本轮 agent 改动):与项目 git 无关的独立影子仓库 ----------

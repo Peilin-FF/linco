@@ -1,0 +1,25 @@
+name lt3luabridge
+category Package
+revision 76924
+shortdesc Execute Lua code in any TeX engine that exposes the shell
+longdesc This is an expl3(-generic) package for plain TeX, LaTeX, and
+longdesc ConTeXt that allows you to execute Lua code in LuaTeX or any
+longdesc other TeX engine that exposes the shell.
+containersize 3276
+containerchecksum d3b7c10e0db17f32f9c9120bd39d99ce0c6f1905711244341248c66477a7e48b77f108cd486c686149379d626f40cae7e152c67b140101786f0beebced5281f8
+doccontainersize 500508
+doccontainerchecksum 46d55147e8cad3403e1eec816b3d16613d95b69baf5ca3b0ff6cb0eccc5b1cec6752e25a9614d1a1d1937c8fcec36b34648523135f97bf7eb9f5c6d7b41580a2
+srccontainersize 4988
+srccontainerchecksum ac7f23b228a6c6baee1dec163a90a6f935f0debb104bd3edb9ac579528fc242ba4726bbc32411d29bb9e77944b577423daddac58914f1fc96a2d2bfb895b9eca
+runfiles size=5
+ texmf-dist/tex/generic/lt3luabridge/lt3luabridge.sty
+ texmf-dist/tex/generic/lt3luabridge/lt3luabridge.tex
+ texmf-dist/tex/generic/lt3luabridge/t-lt3luabridge.tex
+catalogue-contact-announce https://github.com/witiko/lt3luabridge/releases
+catalogue-contact-bugs https://github.com/witiko/lt3luabridge/issues
+catalogue-contact-development https://github.com/witiko/lt3luabridge/discussions
+catalogue-contact-repository https://github.com/witiko/lt3luabridge
+catalogue-ctan /macros/generic/lt3luabridge
+catalogue-license lppl1.3c
+catalogue-topics exec-foreign
+catalogue-version 2.2.2

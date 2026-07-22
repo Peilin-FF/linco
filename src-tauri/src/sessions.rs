@@ -399,8 +399,8 @@ mod tests {
     #[test]
     fn encodes_project_path_like_claude() {
         assert_eq!(
-            encode_project_path("/Users/peilinfeng/linco"),
-            "-Users-peilinfeng-linco"
+            encode_project_path("/Users/tester/project"),
+            "-Users-tester-project"
         );
     }
 

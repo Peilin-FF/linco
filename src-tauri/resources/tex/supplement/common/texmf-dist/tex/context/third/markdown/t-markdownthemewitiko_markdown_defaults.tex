@@ -1,0 +1,284 @@
+%%
+%% This is file `t-markdownthemewitiko_markdown_defaults.tex',
+%% generated with the docstrip utility.
+%%
+%% The original source files were:
+%%
+%% markdown.dtx  (with options: `themes-witiko-markdown-defaults-ctx')
+%% 
+%% Copyright (C) 2016-2026 Vít Starý Novotný, Andrej Genčur
+%% 
+%% This work may be distributed and/or modified under the
+%% conditions of the LaTeX Project Public License, either version 1.3c
+%% of this license or (at your option) any later version.
+%% The latest version of this license is in
+%% 
+%%    http://www.latex-project.org/lppl.txt
+%% 
+%% This work has the LPPL maintenance status `maintained'.
+%% The Current Maintainer of this work is Vít Starý Novotný.
+%% 
+%% Send bug reports, requests for additions and questions
+%% either to the GitHub issue tracker at
+%% 
+%%   https://github.com/Witiko/markdown/issues
+%% 
+%% or to the e-mail address <witiko@mail.muni.cz>.
+%% 
+%% MODIFICATION ADVICE:
+%% 
+%% If you want to customize this file, it is best to make a copy of
+%% the source file(s) from which it was produced.  Use a different
+%% name for your copy(ies) and modify the copy(ies); this will ensure
+%% that your modifications do not get overwritten when you install a
+%% new release of the standard system.  You should also ensure that
+%% your modified source file does not generate any modified file with
+%% the same name as a standard file.
+%% 
+%% You will also need to produce your own, suitably named, .ins file to
+%% control the generation of files from your source file; this file
+%% should contain your own preambles for the files it generates, not
+%% those in the standard .ins files.
+%% 
+%% The names of the source files used are shown above.
+%% 
+\startmodule[markdownthemewitiko_markdown_defaults]
+\unprotect
+\markdownLoadPlainTeXTheme
+\markdownIfOption{plain}{\iffalse}{\iftrue}
+\def\markdownRendererHardLineBreakPrototype{\blank}%
+\def\markdownRendererLeftBracePrototype{\textbraceleft}%
+\def\markdownRendererRightBracePrototype{\textbraceright}%
+\def\markdownRendererDollarSignPrototype{\textdollar}%
+\def\markdownRendererPercentSignPrototype{\percent}%
+\def\markdownRendererUnderscorePrototype{\textunderscore}%
+\def\markdownRendererCircumflexPrototype{\textcircumflex}%
+\def\markdownRendererBackslashPrototype{\textbackslash}%
+\def\markdownRendererTildePrototype{\textasciitilde}%
+\def\markdownRendererPipePrototype{\char`|}%
+\def\markdownRendererLinkPrototype#1#2#3#4{%
+  \useURL[#1][#3][][#4]#1\footnote[#1]{\ifx\empty#4\empty\else#4:
+  \fi\tt<\hyphenatedurl{#3}>}}%
+\usemodule[database]
+\defineseparatedlist
+  [MarkdownConTeXtCSV]
+  [separator={,},
+   before=\bTABLE,after=\eTABLE,
+   first=\bTR,last=\eTR,
+   left=\bTD,right=\eTD]
+\def\markdownConTeXtCSV{csv}
+\def\markdownRendererContentBlockPrototype#1#2#3#4{%
+  \def\markdownConTeXtCSV@arg{#1}%
+  \ifx\markdownConTeXtCSV@arg\markdownConTeXtCSV
+    \placetable[][tab:#1]{#4}{%
+      \processseparatedfile[MarkdownConTeXtCSV][#3]}%
+  \else
+    \markdownInput{#3}%
+  \fi}%
+\def\markdownRendererImagePrototype#1#2#3#4{%
+  \placefigure[][]{#4}{\externalfigure[#3]}}%
+\def\markdownRendererUlBeginPrototype{\startitemize}%
+\def\markdownRendererUlBeginTightPrototype{\startitemize[packed]}%
+\def\markdownRendererUlItemPrototype{\item}%
+\def\markdownRendererUlEndPrototype{\stopitemize}%
+\def\markdownRendererUlEndTightPrototype{\stopitemize}%
+\def\markdownRendererOlBeginPrototype{\startitemize[n]}%
+\def\markdownRendererOlBeginTightPrototype{\startitemize[packed,n]}%
+\def\markdownRendererOlItemPrototype{\item}%
+\def\markdownRendererOlItemWithNumberPrototype#1{\sym{#1.}}%
+\def\markdownRendererOlEndPrototype{\stopitemize}%
+\def\markdownRendererOlEndTightPrototype{\stopitemize}%
+\definedescription
+  [MarkdownConTeXtDlItemPrototype]
+  [location=hanging,
+   margin=standard,
+   headstyle=bold]%
+\definestartstop
+  [MarkdownConTeXtDlPrototype]
+  [before=\blank,
+   after=\blank]%
+\definestartstop
+  [MarkdownConTeXtDlTightPrototype]
+  [before=\blank\startpacked,
+   after=\stoppacked\blank]%
+\def\markdownRendererDlBeginPrototype{%
+  \startMarkdownConTeXtDlPrototype}%
+\def\markdownRendererDlBeginTightPrototype{%
+  \startMarkdownConTeXtDlTightPrototype}%
+\def\markdownRendererDlItemPrototype#1{%
+  \startMarkdownConTeXtDlItemPrototype{#1}}%
+\def\markdownRendererDlItemEndPrototype{%
+  \stopMarkdownConTeXtDlItemPrototype}%
+\def\markdownRendererDlEndPrototype{%
+  \stopMarkdownConTeXtDlPrototype}%
+\def\markdownRendererDlEndTightPrototype{%
+  \stopMarkdownConTeXtDlTightPrototype}%
+\def\markdownRendererEmphasisPrototype#1{{\em#1}}%
+\def\markdownRendererStrongEmphasisPrototype#1{{\bf#1}}%
+\def\markdownRendererBlockQuoteBeginPrototype{\startquotation}%
+\def\markdownRendererBlockQuoteEndPrototype{\stopquotation}%
+\def\markdownRendererLineBlockBeginPrototype{%
+  \begingroup
+    \def\markdownRendererHardLineBreak{
+    }%
+    \startlines
+}%
+\def\markdownRendererLineBlockEndPrototype{%
+    \stoplines
+  \endgroup
+}%
+\def\markdownRendererInputVerbatimPrototype#1{\typefile{#1}}%
+\ExplSyntaxOn
+\cs_gset:Npn
+  \markdownRendererInputFencedCodePrototype#1#2#3
+  {
+    \tl_if_empty:nTF
+      { #2 }
+      { \markdownRendererInputVerbatim{#1} }
+      {
+        \regex_extract_once:nnN
+          { \w* }
+          { #2 }
+          \l_tmpa_seq
+        \seq_pop_left:NN
+          \l_tmpa_seq
+          \l_tmpa_tl
+        \typefile[ \l_tmpa_tl ][] {#1}
+      }
+  }
+\ExplSyntaxOff
+\def\markdownRendererHeadingOnePrototype#1{\chapter{#1}}%
+\def\markdownRendererHeadingTwoPrototype#1{\section{#1}}%
+\def\markdownRendererHeadingThreePrototype#1{\subsection{#1}}%
+\def\markdownRendererHeadingFourPrototype#1{\subsubsection{#1}}%
+\def\markdownRendererHeadingFivePrototype#1{\subsubsubsection{#1}}%
+\def\markdownRendererHeadingSixPrototype#1{\subsubsubsubsection{#1}}%
+\def\markdownRendererThematicBreakPrototype{%
+  \blackrule[height=1pt, width=\hsize]}%
+\def\markdownRendererNotePrototype#1{\footnote{#1}}%
+\def\markdownRendererTickedBoxPrototype{$\boxtimes$}
+\def\markdownRendererHalfTickedBoxPrototype{$\boxdot$}
+\def\markdownRendererUntickedBoxPrototype{$\square$}
+\def\markdownRendererStrikeThroughPrototype#1{\overstrikes{#1}}
+\def\markdownRendererSuperscriptPrototype#1{\high{#1}}
+\def\markdownRendererSubscriptPrototype#1{\low{#1}}
+\def\markdownRendererDisplayMathPrototype#1{%
+  \startformula#1\stopformula}%
+\newcount\markdownConTeXtRowCounter
+\newcount\markdownConTeXtRowTotal
+\newcount\markdownConTeXtColumnCounter
+\newcount\markdownConTeXtColumnTotal
+\newtoks\markdownConTeXtTable
+\newtoks\markdownConTeXtTableFloat
+\def\markdownRendererTablePrototype#1#2#3{%
+  \markdownConTeXtTable={}%
+  \ifx\empty#1\empty
+    \markdownConTeXtTableFloat={%
+      \the\markdownConTeXtTable}%
+  \else
+    \markdownConTeXtTableFloat={%
+      \placetable{#1}{\the\markdownConTeXtTable}}%
+  \fi
+  \begingroup
+  \setupTABLE[r][each][topframe=off, bottomframe=off,
+                       leftframe=off, rightframe=off]
+  \setupTABLE[c][each][topframe=off, bottomframe=off,
+                       leftframe=off, rightframe=off]
+  \setupTABLE[r][1][topframe=on, bottomframe=on]
+  \setupTABLE[r][#1][bottomframe=on]
+  \markdownConTeXtRowCounter=0%
+  \markdownConTeXtRowTotal=#2%
+  \markdownConTeXtColumnTotal=#3%
+  \markdownConTeXtRenderTableRow}
+\def\markdownConTeXtRenderTableRow#1{%
+  \markdownConTeXtColumnCounter=0%
+  \ifnum\markdownConTeXtRowCounter=0\relax
+    \markdownConTeXtReadAlignments#1%
+    \markdownConTeXtTable={\bTABLE}%
+  \else
+    \markdownConTeXtTable=\expandafter{%
+      \the\markdownConTeXtTable\bTR}%
+    \markdownConTeXtRenderTableCell#1%
+    \markdownConTeXtTable=\expandafter{%
+      \the\markdownConTeXtTable\eTR}%
+  \fi
+  \advance\markdownConTeXtRowCounter by 1\relax
+  \ifnum\markdownConTeXtRowCounter>\markdownConTeXtRowTotal\relax
+    \markdownConTeXtTable=\expandafter{%
+      \the\markdownConTeXtTable\eTABLE}%
+    \the\markdownConTeXtTableFloat
+    \endgroup
+    \expandafter\gobbleoneargument
+  \fi\markdownConTeXtRenderTableRow}
+\def\markdownConTeXtReadAlignments#1{%
+  \advance\markdownConTeXtColumnCounter by 1\relax
+  \if#1d%
+    \setupTABLE[c][\the\markdownConTeXtColumnCounter][align=right]
+  \fi\if#1l%
+    \setupTABLE[c][\the\markdownConTeXtColumnCounter][align=right]
+  \fi\if#1c%
+    \setupTABLE[c][\the\markdownConTeXtColumnCounter][align=middle]
+  \fi\if#1r%
+    \setupTABLE[c][\the\markdownConTeXtColumnCounter][align=left]
+  \fi
+  \ifnum\markdownConTeXtColumnCounter<\markdownConTeXtColumnTotal\relax
+  \else
+    \expandafter\gobbleoneargument
+  \fi\markdownConTeXtReadAlignments}
+\def\markdownConTeXtRenderTableCell#1{%
+  \advance\markdownConTeXtColumnCounter by 1\relax
+  \markdownConTeXtTable=\expandafter{%
+    \the\markdownConTeXtTable\bTD#1\eTD}%
+  \ifnum\markdownConTeXtColumnCounter<\markdownConTeXtColumnTotal\relax
+  \else
+    \expandafter\gobbleoneargument
+  \fi\markdownConTeXtRenderTableCell}
+\ExplSyntaxOn
+\cs_gset:Npn
+  \markdownRendererInputRawInlinePrototype#1#2
+  {
+    \str_case:nnF
+      { #2 }
+      {
+        { latex }
+          {
+            \__markdown_plain_tex_default_input_raw_inline:nn
+              { #1 }
+              { context }
+          }
+      }
+      {
+        \__markdown_plain_tex_default_input_raw_inline:nn
+          { #1 }
+          { #2 }
+      }
+  }
+\cs_gset:Npn
+  \markdownRendererInputRawBlockPrototype#1#2
+  {
+    \str_case:nnF
+      { #2 }
+      {
+        { context }
+          {
+            \__markdown_plain_tex_default_input_raw_block:nn
+              { #1 }
+              { tex }
+          }
+      }
+      {
+        \__markdown_plain_tex_default_input_raw_block:nn
+          { #1 }
+          { #2 }
+      }
+  }
+\cs_gset_eq:NN
+  \markdownRendererInputRawBlockPrototype
+  \markdownRendererInputRawInlinePrototype
+\fi % Closes `\markdownIfOption{plain}{\iffalse}{\iftrue}`
+\ExplSyntaxOff
+\stopmodule
+\protect
+\endinput
+%%
+%% End of file `t-markdownthemewitiko_markdown_defaults.tex'.

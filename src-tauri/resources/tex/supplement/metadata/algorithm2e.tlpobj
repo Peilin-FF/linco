@@ -1,0 +1,23 @@
+name algorithm2e
+category Package
+revision 77682
+shortdesc Floating algorithm environment with algorithmic keywords
+longdesc Algorithm2e is an environment for writing algorithms. An
+longdesc algorithm becomes a floating object (like figure, table, etc.).
+longdesc The package provides macros that allow you to create different
+longdesc keywords, and a set of predefined key words is provided; you
+longdesc can change the typography of the keywords. The package allows
+longdesc vertical lines delimiting a block of instructions in an
+longdesc algorithm, and defines different sorts of algorithms such as
+longdesc Procedure or Function; the name of these functions may be
+longdesc reused in the text or in other algorithms.
+containersize 32872
+containerchecksum f627d29db1607f59eac3885af7071de6365a7e5c90dd85d685cd97b2a9d5824fabeaafefde3cd6570a7f35afc560bf8a4238267b20a45414f2c75afc199f4d28
+doccontainersize 559228
+doccontainerchecksum a835f027a72fee2375cb12d248f4b091baee5a21c5f41ed97c32f83a1488814a7393e4fc6514402aeaf81aab7af7bf57741450d637885ff92184a30660e44abd
+runfiles size=41
+ texmf-dist/tex/latex/algorithm2e/algorithm2e.sty
+catalogue-ctan /macros/latex/contrib/algorithm2e
+catalogue-license lppl
+catalogue-topics pseudocode tagged-pdf-incompatible
+catalogue-version 5.2

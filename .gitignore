@@ -4,6 +4,7 @@ node_modules/
 # build output
 dist/
 src-tauri/target/
+src-tauri/target-*/
 target/
 crates/*/target/
 apps/*/target/
@@ -18,7 +19,12 @@ DerivedData/
 # misc
 .DS_Store
 *.log
+.logs/
+image.png
 icon-source.png
+/liblint_probe.rlib
+/msvc-check.bat
+/msvc-dev.bat
 
 # 本地临时文件 / 测试脚本(不入库)
 tmp/

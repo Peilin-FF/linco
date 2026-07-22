@@ -1,0 +1,20 @@
+name aliascnt
+category Package
+revision 79461
+shortdesc Alias counters
+longdesc This package introduces aliases for counters that share the
+longdesc same counter register and 'clear' list.
+containersize 1636
+containerchecksum 48a5c67aa6c86de0fbda91b33e6c9c0c2990f58bfc6f32e7c7eef21fc81b3a8f6b63686f53c78a71854b7937d54b67ff3256dfa3de4976fd85fa7e37e6cb2331
+doccontainersize 325356
+doccontainerchecksum dc7b30dae27086f4a0dea839a174763a24de325a4c827f6082e93a0efee1b737d797e1fdeb4b1fa7b72621ae6500bd2f49f1de4fb815ad20cc1d3b3e46520215
+srccontainersize 5532
+srccontainerchecksum 2257c7f8c84b73ec27a647f35aa6458ce223ebcb1601e08109d83256d1fc1180545eca8de826371238c6abcde61052ff27f5a396e700b22fb5463a9b3b2ec3ef
+runfiles size=1
+ texmf-dist/tex/latex/aliascnt/aliascnt.sty
+catalogue-contact-bugs https://github.com/LaTeX-Package-Repositories/aliascnt/issues
+catalogue-contact-repository https://github.com/LaTeX-Package-Repositories/aliascnt
+catalogue-ctan /macros/latex/contrib/aliascnt
+catalogue-license lppl1.3c
+catalogue-topics counter-mgmt macro-supp tagged-pdf
+catalogue-version 1.7

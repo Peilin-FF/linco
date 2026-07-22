@@ -1,0 +1,39 @@
+name markdown
+category Package
+revision 79410
+shortdesc Converting and rendering markdown documents inside TeX
+longdesc The package provides facilities for the conversion of markdown
+longdesc and YAML markup to plain TeX. These are provided both in form
+longdesc of a Lua module and in form of plain TeX, LaTeX, and ConTeXt
+longdesc macro packages that enable the direct inclusion of markdown and
+longdesc YAML documents inside TeX documents.
+depend l3kernel
+depend lt3luabridge
+depend lua-tinyyaml
+depend markdown.ARCH
+containersize 100972
+containerchecksum d3f7000d837de5e9ad2c77394a185b6a1e6dbf8b9f150a611ad1fef20fbdb64e0dc6712921e158d6494fe55ed4e959734179db05b838ba097e95ea19d13287d6
+doccontainersize 1639760
+doccontainerchecksum f0bc05252f29798a069c3f89b6b3c3b5d6378cf7450c94ab59578670772842d9042d20d80706ed12e56985d7d22d8eeafe3c756d4819f18121a5c50114db4f9d
+srccontainersize 156800
+srccontainerchecksum 717126def1bb3622e07fe6bcfbd951ead277a4e2636ddb66ca29dd1710fa083f09ffe338a2c4e13ee0d2b114498335f18304e0005f23964c7aa3bc285e925e28
+runfiles size=276
+ texmf-dist/scripts/markdown/markdown-cli.lua
+ texmf-dist/scripts/markdown/markdown2tex.lua
+ texmf-dist/tex/context/third/markdown/t-markdown.tex
+ texmf-dist/tex/context/third/markdown/t-markdownthemewitiko_markdown_defaults.tex
+ texmf-dist/tex/generic/markdown/markdown.tex
+ texmf-dist/tex/generic/markdown/markdownthemewitiko_markdown_defaults.tex
+ texmf-dist/tex/latex/markdown/markdown.sty
+ texmf-dist/tex/latex/markdown/markdownthemewitiko_markdown_defaults.sty
+ texmf-dist/tex/luatex/markdown/markdown-parser.lua
+ texmf-dist/tex/luatex/markdown/markdown-unicode-data.lua
+ texmf-dist/tex/luatex/markdown/markdown.lua
+catalogue-contact-announce https://github.com/Witiko/markdown/releases
+catalogue-contact-bugs https://github.com/Witiko/markdown/issues
+catalogue-contact-development https://github.com/Witiko/markdown/pulls
+catalogue-contact-repository https://github.com/Witiko/markdown
+catalogue-ctan /macros/generic/markdown
+catalogue-license lppl1.3c
+catalogue-topics markup
+catalogue-version 3.16.0-0-g4d0fb773

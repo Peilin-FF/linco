@@ -1,0 +1,6 @@
+name markdown.universal-darwin
+category Package
+revision 73628
+shortdesc universal-darwin files of markdown
+binfiles arch=universal-darwin size=1
+ bin/universal-darwin/markdown2tex

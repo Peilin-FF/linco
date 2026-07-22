@@ -1,0 +1,26 @@
+name nicematrix
+category Package
+revision 79680
+shortdesc Improve the typesetting of matrices and tabulars with PGF
+longdesc This package is based on the package array. It creates PGF/TikZ
+longdesc nodes under the cells of the array and uses these nodes to
+longdesc provide functionalities to construct tabulars, arrays and
+longdesc matrices. Among the features : continuous dotted lines for the
+longdesc mathematical matrices; exterior rows and columns (so-called
+longdesc border matrices); control of the width of the columns; tools to
+longdesc color rows and columns with a good PDF result; blocks of cells;
+longdesc tabular notes; etc. The package requires and loads array,
+longdesc amsmath, pgfcore, and the module shapes of PGF.
+containersize 49232
+containerchecksum 2bc011a9591fa8d9e324be0b05f61203ad848458284eb3a5888f86e83d19dfd915ad617e916612fc6fd28b694c043bae99c72fe11bef5aa85b634280ed81bb42
+doccontainersize 2567332
+doccontainerchecksum 78e5bb05242e2ef75bcc9328aac2dcadb67a3e9e64495f755e4624f85d8afb1e8655c75f9338ca7e98040b140caf7aa93cd26ea0c6b9293bd87d50f10f36fa44
+srccontainersize 104044
+srccontainerchecksum 6d3475a7f58e752848e4d001440de5416a321ec15a84a3ed6673ddd03d69f5e036c737842d3137f500c5fabc7e82b9760e0f5062a5bd887a3a47fd92a8f87345
+runfiles size=109
+ texmf-dist/tex/latex/nicematrix/nicematrix.sty
+catalogue-contact-repository https://github.com/fpantigny/nicematrix
+catalogue-ctan /macros/latex/contrib/nicematrix
+catalogue-license lppl1.3
+catalogue-topics maths matrix pgf-tikz tagged-pdf-incompatible
+catalogue-version 7.11

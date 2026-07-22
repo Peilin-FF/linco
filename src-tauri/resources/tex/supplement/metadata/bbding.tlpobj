@@ -1,0 +1,23 @@
+name bbding
+category Package
+revision 77682
+shortdesc A symbol (dingbat) font and LaTeX macros for its use
+longdesc A symbol font (distributed as Metafont source) that contains
+longdesc many of the symbols of the Zapf dingbats set, together with an
+longdesc NFSS interface for using the font. An Adobe Type 1 version of
+longdesc the fonts is available in the niceframe fonts bundle.
+containersize 11680
+containerchecksum 7d17bc9a105135da725db1efce688b4d1a35bef1e826de23b713479919b6f51469cc3c581945783dcdc6c6dd75a8fba4c9f9337f3c0ce55cf8ff5cc3e95d1046
+doccontainersize 437588
+doccontainerchecksum 11c08081ef758e515b881debb432495553c143c3f840e717b82225875452d5d48d58438d47ac228715b41866df272813fe87ca149cb4eef3d3dad46ad2f71b0f
+srccontainersize 10156
+srccontainerchecksum ae963e262755e9d1c05b530283f71791f8bb3d58995177431caf057f6532a44e73fead974f0b9274a90a1a5ac28f6a3d9103ddc2608f8081c221a47e3e57738b
+runfiles size=24
+ texmf-dist/fonts/source/public/bbding/bbding10.mf
+ texmf-dist/fonts/tfm/public/bbding/bbding10.tfm
+ texmf-dist/tex/latex/bbding/Uding.fd
+ texmf-dist/tex/latex/bbding/bbding.sty
+catalogue-ctan /fonts/bbding
+catalogue-license lppl
+catalogue-topics font font-symbol font-mf tagged-pdf-partially
+catalogue-version 1.01

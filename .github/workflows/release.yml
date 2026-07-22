@@ -66,11 +66,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            终端滚动修复:
-            - Codex 会话改用内联模式，输出进入 xterm 原生历史缓冲区
-            - 修复 Windows WebView2 中 Chat 页面鼠标滚轮无法查看历史内容
-            - 为已运行会话和旧版 Codex 增加 transcript 滚动兼容层
-            - 保持 PowerShell、bash 和 SSH 终端的原生滚动行为
+            Linco 1.0:
+            - 新增类 Word 的 LaTeX 编辑器，支持可视化编辑、源码编辑和 PDF 预览
+            - Windows 和 macOS 安装包内置 TinyTeX，本地编译无需额外安装 TeX 发行版
+            - 新增 Overleaf Git 项目克隆、拉取和发布，令牌通过系统 Git 凭据助手保存
+            - 改进远程 RPC、终端会话恢复与 PTY 进程清理
+            - 包含原生 iPhone 客户端与 headless Linco server 的首个稳定版本
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

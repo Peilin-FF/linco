@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Eye,
   MessagesSquare,
@@ -6,6 +6,7 @@ import {
   FolderTree,
   GitBranch,
   PencilRuler,
+  BookOpenText,
   Settings as SettingsIcon,
   Plus,
   Activity,
@@ -31,6 +32,7 @@ import LanguagePicker from './components/LanguagePicker'
 import UpdatePanel from './components/UpdatePanel'
 import CodeMirrorWarmup from './components/CodeMirrorWarmup'
 import ResizeHandle from './components/ResizeHandle'
+import ViewErrorBoundary from './components/ViewErrorBoundary'
 import TransferDock, { useTransfers } from './components/transfer/TransferDock'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import {
@@ -64,9 +66,11 @@ import { usageRecordTurn, type UsageAgentContext } from '@/lib/usage'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 
-type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'files' | 'git'
+type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'latex' | 'files' | 'git'
 
 const ENABLE_BACKGROUND_PREWARM = false
+
+const LatexView = lazy(() => import('./components/LatexView'))
 
 // agent 后台任务 tab 的短标题:从命令行里挑一个有意义的词(脚本名/可执行名)。
 function taskLabel(args: string): string {
@@ -90,6 +94,7 @@ const VIEWS: { id: ViewId; labelKey: string; icon: typeof Eye }[] = [
   { id: 'terminal', labelKey: 'view.terminal', icon: TerminalSquare },
   { id: 'preview', labelKey: 'view.preview', icon: Eye },
   { id: 'drawing', labelKey: 'view.drawing', icon: PencilRuler },
+  { id: 'latex', labelKey: 'view.latex', icon: BookOpenText },
   { id: 'files', labelKey: 'view.files', icon: FolderTree },
   { id: 'git', labelKey: 'view.git', icon: GitBranch }
 ]
@@ -486,7 +491,7 @@ export default function App(): JSX.Element {
   const chatSplitActive =
     chatSplitOpen &&
     hasActiveChat &&
-    (view === 'terminal' || view === 'preview' || view === 'drawing')
+    (view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex')
 
   // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
   // 每个 连接+agent+工作目录 各一个会话:切到新项目/切 Codex=新会话(agent 在后台
@@ -962,7 +967,7 @@ export default function App(): JSX.Element {
           </button>
         ))}
         {/* 左分栏开关:终端/预览视图显示,放顶部视图栏(在视图按钮右边),不挡视图内工具栏。 */}
-        {(view === 'terminal' || view === 'preview' || view === 'drawing') && (
+        {(view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex') && (
           <button
             onClick={() => setChatSplitOpen((o) => !o)}
             title={chatSplitOpen ? t('app.chatPane.collapse') : t('app.chatPane.expand')}
@@ -1295,6 +1300,29 @@ export default function App(): JSX.Element {
                 cwd={cwd}
                 onSubmitToAgent={submitToAgent}
               />
+            </div>
+          )}
+          {remoteDataReady && view === 'latex' && (
+            <div
+              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              className="absolute right-0 top-0 bottom-0 z-10"
+            >
+              <ViewErrorBoundary>
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center rounded-2xl bg-canvas text-[12px] text-ink-faint shadow-card ring-1 ring-black/5">
+                      <Loader2 size={15} className="animate-spin" />
+                    </div>
+                  }
+                >
+                  <LatexView
+                    host={host}
+                    cwd={cwd}
+                    onOpenProject={handlePickDir}
+                    onSubmitToAgent={submitToAgent}
+                  />
+                </Suspense>
+              </ViewErrorBoundary>
             </div>
           )}
           {/* 文件 / Git:预热后或访问过即常驻挂载,切回瞬时显示(不重挂载、不重拉) */}

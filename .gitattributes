@@ -1,0 +1,2 @@
+src-tauri/resources/tex/supplement/macos/bin/universal-darwin/markdown2tex text eol=lf
+src-tauri/resources/tex/supplement/** -whitespace

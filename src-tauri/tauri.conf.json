@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Linco",
-  "version": "0.3.6",
+  "version": "1.0.0",
   "identifier": "ai.linco.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
+    "beforeBundleCommand": "node scripts/prepare-tex-bundle.mjs",
     "frontendDist": "../dist"
   },
   "app": {

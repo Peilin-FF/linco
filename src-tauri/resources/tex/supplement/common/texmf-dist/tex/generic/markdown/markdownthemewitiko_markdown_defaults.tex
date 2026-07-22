@@ -1,0 +1,625 @@
+%%
+%% This is file `markdownthemewitiko_markdown_defaults.tex',
+%% generated with the docstrip utility.
+%%
+%% The original source files were:
+%%
+%% markdown.dtx  (with options: `themes-witiko-markdown-defaults-tex')
+%% 
+%% Copyright (C) 2016-2026 Vít Starý Novotný, Andrej Genčur
+%% 
+%% This work may be distributed and/or modified under the
+%% conditions of the LaTeX Project Public License, either version 1.3c
+%% of this license or (at your option) any later version.
+%% The latest version of this license is in
+%% 
+%%    http://www.latex-project.org/lppl.txt
+%% 
+%% This work has the LPPL maintenance status `maintained'.
+%% The Current Maintainer of this work is Vít Starý Novotný.
+%% 
+%% Send bug reports, requests for additions and questions
+%% either to the GitHub issue tracker at
+%% 
+%%   https://github.com/Witiko/markdown/issues
+%% 
+%% or to the e-mail address <witiko@mail.muni.cz>.
+%% 
+%% MODIFICATION ADVICE:
+%% 
+%% If you want to customize this file, it is best to make a copy of
+%% the source file(s) from which it was produced.  Use a different
+%% name for your copy(ies) and modify the copy(ies); this will ensure
+%% that your modifications do not get overwritten when you install a
+%% new release of the standard system.  You should also ensure that
+%% your modified source file does not generate any modified file with
+%% the same name as a standard file.
+%% 
+%% You will also need to produce your own, suitably named, .ins file to
+%% control the generation of files from your source file; this file
+%% should contain your own preambles for the files it generates, not
+%% those in the standard .ins files.
+%% 
+%% The names of the source files used are shown above.
+%% 
+\def\markdownRendererInterblockSeparatorPrototype{\par}%
+\def\markdownRendererParagraphSeparatorPrototype{%
+  \markdownRendererInterblockSeparator}%
+\def\markdownRendererHardLineBreakPrototype{\hfil\break}%
+\def\markdownRendererSoftLineBreakPrototype{ }%
+\let\markdownRendererEllipsisPrototype\dots
+\def\markdownRendererNbspPrototype{~}%
+\def\markdownRendererLeftBracePrototype{\char`\{}%
+\def\markdownRendererRightBracePrototype{\char`\}}%
+\def\markdownRendererDollarSignPrototype{\char`$}%
+\def\markdownRendererPercentSignPrototype{\char`\%}%
+\def\markdownRendererAmpersandPrototype{\&}%
+\def\markdownRendererUnderscorePrototype{\char`_}%
+\def\markdownRendererHashPrototype{\char`\#}%
+\def\markdownRendererCircumflexPrototype{\char`^}%
+\def\markdownRendererBackslashPrototype{\char`\\}%
+\def\markdownRendererTildePrototype{\char`~}%
+\def\markdownRendererPipePrototype{|}%
+\def\markdownRendererCodeSpanPrototype#1{{\tt#1}}%
+\def\markdownRendererLinkPrototype#1#2#3#4{#2}%
+\def\markdownRendererContentBlockPrototype#1#2#3#4{%
+  \markdownInput{#3}}%
+\def\markdownRendererContentBlockOnlineImagePrototype{%
+  \markdownRendererImage}%
+\def\markdownRendererContentBlockCodePrototype#1#2#3#4#5{%
+  \markdownRendererInputFencedCode{#3}{#2}{#2}}%
+\def\markdownRendererImagePrototype#1#2#3#4{#2}%
+\def\markdownRendererUlBeginPrototype{}%
+\def\markdownRendererUlBeginTightPrototype{}%
+\def\markdownRendererUlItemPrototype{}%
+\def\markdownRendererUlItemEndPrototype{}%
+\def\markdownRendererUlEndPrototype{}%
+\def\markdownRendererUlEndTightPrototype{}%
+\def\markdownRendererOlBeginPrototype{}%
+\def\markdownRendererOlBeginTightPrototype{}%
+\def\markdownRendererFancyOlBeginPrototype#1#2{%
+  \markdownRendererOlBegin}%
+\def\markdownRendererFancyOlBeginTightPrototype#1#2{%
+  \markdownRendererOlBeginTight}%
+\def\markdownRendererOlItemPrototype{}%
+\def\markdownRendererOlItemWithNumberPrototype#1{}%
+\def\markdownRendererOlItemEndPrototype{}%
+\def\markdownRendererFancyOlItemPrototype{\markdownRendererOlItem}%
+\def\markdownRendererFancyOlItemWithNumberPrototype{%
+  \markdownRendererOlItemWithNumber}%
+\def\markdownRendererFancyOlItemEndPrototype{}%
+\def\markdownRendererOlEndPrototype{}%
+\def\markdownRendererOlEndTightPrototype{}%
+\def\markdownRendererFancyOlEndPrototype{\markdownRendererOlEnd}%
+\def\markdownRendererFancyOlEndTightPrototype{%
+  \markdownRendererOlEndTight}%
+\def\markdownRendererDlBeginPrototype{}%
+\def\markdownRendererDlBeginTightPrototype{}%
+\def\markdownRendererDlItemPrototype#1{#1}%
+\def\markdownRendererDlItemEndPrototype{}%
+\def\markdownRendererDlDefinitionBeginPrototype{}%
+\def\markdownRendererDlDefinitionEndPrototype{\par}%
+\def\markdownRendererDlEndPrototype{}%
+\def\markdownRendererDlEndTightPrototype{}%
+\def\markdownRendererEmphasisPrototype#1{{\it#1}}%
+\def\markdownRendererStrongEmphasisPrototype#1{{\bf#1}}%
+\def\markdownRendererBlockQuoteBeginPrototype{\begingroup\it}%
+\def\markdownRendererBlockQuoteEndPrototype{\endgroup\par}%
+\def\markdownRendererLineBlockBeginPrototype{\begingroup\parindent=0pt}%
+\def\markdownRendererLineBlockEndPrototype{\endgroup}%
+\def\markdownRendererInputVerbatimPrototype#1{%
+  \par{\tt\input#1\relax{}}\par}%
+\def\markdownRendererInputFencedCodePrototype#1#2#3{%
+  \markdownRendererInputVerbatim{#1}}%
+\def\markdownRendererHeadingOnePrototype#1{#1}%
+\def\markdownRendererHeadingTwoPrototype#1{#1}%
+\def\markdownRendererHeadingThreePrototype#1{#1}%
+\def\markdownRendererHeadingFourPrototype#1{#1}%
+\def\markdownRendererHeadingFivePrototype#1{#1}%
+\def\markdownRendererHeadingSixPrototype#1{#1}%
+\def\markdownRendererThematicBreakPrototype{}%
+\def\markdownRendererNotePrototype#1{#1}%
+\def\markdownRendererCitePrototype#1{}%
+\def\markdownRendererTextCitePrototype#1{}%
+\def\markdownRendererTickedBoxPrototype{[X]}%
+\def\markdownRendererHalfTickedBoxPrototype{[/]}%
+\def\markdownRendererUntickedBoxPrototype{[ ]}%
+\def\markdownRendererStrikeThroughPrototype#1{#1}%
+\def\markdownRendererSuperscriptPrototype#1{#1}%
+\def\markdownRendererSubscriptPrototype#1{#1}%
+\def\markdownRendererDisplayMathPrototype#1{$$#1$$}%
+\def\markdownRendererInlineMathPrototype#1{$#1$}%
+\ExplSyntaxOn
+\cs_gset_protected:Npn
+  \markdownRendererHeaderAttributeContextBeginPrototype
+  {
+    \group_begin:
+    \color_group_begin:
+  }
+\cs_gset_protected:Npn
+  \markdownRendererHeaderAttributeContextEndPrototype
+  {
+    \color_group_end:
+    \group_end:
+  }
+\cs_gset_eq:NN
+  \markdownRendererBracketedSpanAttributeContextBeginPrototype
+  \markdownRendererHeaderAttributeContextBeginPrototype
+\cs_gset_eq:NN
+  \markdownRendererBracketedSpanAttributeContextEndPrototype
+  \markdownRendererHeaderAttributeContextEndPrototype
+\cs_gset_eq:NN
+  \markdownRendererFencedDivAttributeContextBeginPrototype
+  \markdownRendererHeaderAttributeContextBeginPrototype
+\cs_gset_eq:NN
+  \markdownRendererFencedDivAttributeContextEndPrototype
+  \markdownRendererHeaderAttributeContextEndPrototype
+\cs_gset_eq:NN
+  \markdownRendererFencedCodeAttributeContextBeginPrototype
+  \markdownRendererHeaderAttributeContextBeginPrototype
+\cs_gset_eq:NN
+  \markdownRendererFencedCodeAttributeContextEndPrototype
+  \markdownRendererHeaderAttributeContextEndPrototype
+\cs_gset:Npn
+  \markdownRendererReplacementCharacterPrototype
+  { \codepoint_str_generate:n { fffd } }
+\ExplSyntaxOff
+\def\markdownRendererSectionBeginPrototype{}%
+\def\markdownRendererSectionEndPrototype{}%
+\ExplSyntaxOn
+\cs_gset_protected:Npn
+  \markdownRendererWarningPrototype
+  #1#2#3#4
+  {
+    \tl_set:Nn
+      \l_tmpa_tl
+      { #2 }
+    \tl_if_empty:nF
+      { #4 }
+      {
+        \tl_put_right:Nn
+          \l_tmpa_tl
+          { \iow_newline: #4 }
+      }
+    \exp_args:NV
+      \markdownWarning
+      \l_tmpa_tl
+  }
+\ExplSyntaxOff
+\def\markdownRendererErrorPrototype#1#2#3#4{%
+  \markdownError{#2}{#4}}%
+\def\markdownRendererBracketedSpanPrototype#1{#1}%
+\def\markdownRendererInlineHtmlProcessingInstructionPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInlineHtmlDeclarationPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInlineHtmlCdataSectionPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInlineHtmlOpenTagPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInlineHtmlCloseTagPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInlineHtmlEmptyTagPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\def\markdownRendererInputBlockHtmlCdataElementPrototype{%
+  \markdownRendererInputBlockHtmlElementPrototype}%
+\def\markdownRendererInputBlockHtmlProcessingInstructionPrototype{%
+  \markdownRendererInputBlockHtmlElementPrototype}%
+\def\markdownRendererInputBlockHtmlDeclarationPrototype{%
+  \markdownRendererInputBlockHtmlElementPrototype}%
+\def\markdownRendererInputBlockHtmlCdataSectionPrototype{%
+  \markdownRendererInputBlockHtmlElementPrototype}%
+\def\markdownRendererInputBlockHtmlPcdataElementPrototype{%
+  \markdownRendererInputBlockHtmlElementPrototype}%
+\def\markdownRendererBlockHtmlCommentPrototype{%
+  \markdownRendererInlineHtmlCommentPrototype}%
+\def\markdownRendererBlockHtmlStandaloneTagPrototype{%
+  \markdownRendererInlineHtmlTagPrototype}%
+\ExplSyntaxOn
+\cs_new:Nn
+  \__markdown_plain_tex_default_input_raw_inline:nn
+  {
+    \str_case:nn
+      { #2 }
+      {
+        { md  } { \markdownInput{#1}  }
+        { tex } { \markdownEscape{#1} \unskip }
+      }
+  }
+\cs_new:Nn
+  \__markdown_plain_tex_default_input_raw_block:nn
+  {
+    \str_case:nn
+      { #2 }
+      {
+        { md  } { \markdownInput{#1}  }
+        { tex } { \markdownEscape{#1} }
+      }
+  }
+\cs_gset:Npn
+  \markdownRendererInputRawInlinePrototype#1#2
+  {
+    \__markdown_plain_tex_default_input_raw_inline:nn
+      { #1 }
+      { #2 }
+  }
+\cs_gset:Npn
+  \markdownRendererInputRawBlockPrototype#1#2
+  {
+    \__markdown_plain_tex_default_input_raw_block:nn
+      { #1 }
+      { #2 }
+  }
+\seq_new:N   \g__markdown_jekyll_data_datatypes_seq
+\tl_const:Nn \c__markdown_jekyll_data_sequence_tl   { sequence }
+\tl_const:Nn \c__markdown_jekyll_data_mapping_tl    { mapping  }
+\tl_const:Nn \c__markdown_jekyll_data_scalar_tl     { scalar   }
+\seq_new:N \g__markdown_jekyll_data_wildcard_absolute_address_seq
+\cs_new:Nn \__markdown_jekyll_data_push_address_segment:n
+  {
+    \seq_if_empty:NF
+      \g__markdown_jekyll_data_datatypes_seq
+      {
+        \seq_get_right:NN
+          \g__markdown_jekyll_data_datatypes_seq
+          \l_tmpa_tl
+      \str_if_eq:NNTF
+        \l_tmpa_tl
+        \c__markdown_jekyll_data_sequence_tl
+        {
+          \seq_put_right:Nn
+            \g__markdown_jekyll_data_wildcard_absolute_address_seq
+            { *  }
+        }
+        {
+          \seq_put_right:Nn
+            \g__markdown_jekyll_data_wildcard_absolute_address_seq
+            { #1 }
+        }
+      }
+  }
+\tl_new:N  \g__markdown_jekyll_data_wildcard_absolute_address_tl
+\tl_new:N  \g__markdown_jekyll_data_wildcard_relative_address_tl
+\cs_new_protected:Nn \__markdown_jekyll_data_concatenate_address:NN
+  {
+    \seq_pop_left:NN #1 \l_tmpa_tl
+    \tl_set:Nx #2 { / \seq_use:Nn #1 { / } }
+    \seq_put_left:NV #1 \l_tmpa_tl
+  }
+\cs_new_protected:Nn \__markdown_jekyll_data_update_address_tls:
+  {
+    \__markdown_jekyll_data_concatenate_address:NN
+      \g__markdown_jekyll_data_wildcard_absolute_address_seq
+      \g__markdown_jekyll_data_wildcard_absolute_address_tl
+    \seq_get_right:NN
+      \g__markdown_jekyll_data_wildcard_absolute_address_seq
+      \g__markdown_jekyll_data_wildcard_relative_address_tl
+  }
+\cs_new_protected:Nn \__markdown_jekyll_data_push:nN
+  {
+    \__markdown_jekyll_data_push_address_segment:n
+      { #1 }
+    \seq_put_right:NV
+     \g__markdown_jekyll_data_datatypes_seq
+     #2
+    \__markdown_jekyll_data_update_address_tls:
+  }
+\cs_new_protected:Nn \__markdown_jekyll_data_pop:
+  {
+    \seq_pop_right:NN
+      \g__markdown_jekyll_data_wildcard_absolute_address_seq
+      \l_tmpa_tl
+    \seq_pop_right:NN
+      \g__markdown_jekyll_data_datatypes_seq
+      \l_tmpa_tl
+    \__markdown_jekyll_data_update_address_tls:
+  }
+\cs_new_protected:Nn \__markdown_jekyll_data_set_keyval_known:nn
+  {
+    \keys_set_known:nn
+      { markdown/jekyllData }
+      { { #1 } = { #2 } }
+  }
+\cs_generate_variant:Nn
+  \__markdown_jekyll_data_set_keyval_known:nn
+  { Vn }
+\cs_new_protected:Nn \__markdown_jekyll_data_set_keyvals_known:nn
+  {
+    \__markdown_jekyll_data_push:nN
+      { #1 }
+      \c__markdown_jekyll_data_scalar_tl
+    \__markdown_jekyll_data_set_keyval_known:Vn
+      \g__markdown_jekyll_data_wildcard_absolute_address_tl
+      { #2 }
+    \__markdown_jekyll_data_set_keyval_known:Vn
+      \g__markdown_jekyll_data_wildcard_relative_address_tl
+      { #2 }
+    \__markdown_jekyll_data_pop:
+  }
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataSequenceBeginPrototype #1#2
+  {
+    \__markdown_jekyll_data_push:nN
+      { #1 }
+      \c__markdown_jekyll_data_sequence_tl
+  }
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataMappingBeginPrototype #1#2
+  {
+    \__markdown_jekyll_data_push:nN
+      { #1 }
+      \c__markdown_jekyll_data_mapping_tl
+  }
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataSequenceEndPrototype
+  {
+    \__markdown_jekyll_data_pop:
+  }
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataMappingEndPrototype
+  {
+    \__markdown_jekyll_data_pop:
+  }
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataBooleanPrototype #1#2
+  {
+    \__markdown_jekyll_data_set_keyvals_known:nn
+      { #1 }
+      { #2 }
+  }
+\def\markdownRendererJekyllDataEmptyPrototype#1{}
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataNumberPrototype #1#2
+  {
+    \__markdown_jekyll_data_set_keyvals_known:nn
+      { #1 }
+      { #2 }
+  }
+\def\markdownRendererJekyllDataProgrammaticStringPrototype#1#2{}
+\cs_gset_protected:Npn
+  \markdownRendererJekyllDataTypographicStringPrototype #1#2
+  {
+    \__markdown_jekyll_data_set_keyvals_known:nn
+      { #1 }
+      { #2 }
+  }
+\__markdown_with_various_cases:nn
+  { jekyllDataKeyValue }
+  {
+    \keys_define:nn
+      { markdown/options }
+      {
+        #1 .code:n = {
+          \__markdown_route_jekyll_data_to_key_values:n
+            { ##1 }
+        },
+        #1 .value_required:n = { false },
+        #1 .default:n = { },
+      }
+  }
+\seq_new:N
+  \l__markdown_jekyll_data_current_position_seq
+\tl_new:N
+  \l__markdown_jekyll_data_current_position_tl
+\cs_new_protected:Nn
+  \__markdown_route_jekyll_data_to_key_values:n
+  {
+    \markdownSetup
+      {
+        renderers = {
+          jekyllData(Sequence|Mapping)Begin = {
+            \bool_lazy_and:nnTF
+              {
+                \seq_if_empty_p:N
+                  \l__markdown_jekyll_data_current_position_seq
+              }
+              {
+                \str_if_eq_p:nn
+                  { ##1 }
+                  { null }
+              }
+              {
+                \tl_if_empty:nF
+                  { #1 }
+                  {
+                    \seq_put_right:Nn
+                      \l__markdown_jekyll_data_current_position_seq
+                      { #1 }
+                  }
+              }
+              {
+                \seq_put_right:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { ##1 }
+              }
+          },
+          jekyllData(Sequence|Mapping)End = {
+            \seq_pop_right:NN
+              \l__markdown_jekyll_data_current_position_seq
+              \l_tmpa_tl
+          },
+          jekyllDataBoolean = {
+            \tl_set:Nx
+              \l__markdown_jekyll_data_current_position_tl
+              {
+                \seq_use:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { / }
+              }
+            \keys_if_exist:VnTF
+              \l__markdown_jekyll_data_current_position_tl
+              { ##1 / boolean }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1 / boolean
+                  }
+                  { ##2 }
+              }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1
+                  }
+                  { ##2 }
+              }
+          },
+          jekyllDataNumber = {
+            \tl_set:Nx
+              \l__markdown_jekyll_data_current_position_tl
+              {
+                \seq_use:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { / }
+              }
+            \keys_if_exist:VnTF
+              \l__markdown_jekyll_data_current_position_tl
+              { ##1 / number }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1 / number
+                  }
+                  { ##2 }
+              }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1
+                  }
+                  { ##2 }
+              }
+          },
+          jekyllDataEmpty = {
+            \tl_set:Nx
+              \l__markdown_jekyll_data_current_position_tl
+              {
+                \seq_use:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { / }
+              }
+            \keys_if_exist:VnTF
+              \l__markdown_jekyll_data_current_position_tl
+              { ##1 / empty }
+              {
+                  \keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1
+                  }
+                  { empty }
+              }
+              {
+                \keys_set:Vn
+                  \l__markdown_jekyll_data_current_position_tl
+                  { ##1 }
+              }
+          },
+          jekyllDataTypographicString = {
+            \tl_set:Nx
+              \l__markdown_jekyll_data_current_position_tl
+              {
+                \seq_use:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { / }
+              }
+            \keys_if_exist:VnTF
+              \l__markdown_jekyll_data_current_position_tl
+              { ##1 / typographicString }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1 / typographicString
+                  }
+                  { ##2 }
+              }
+              {
+                \keys_if_exist:VnTF
+                  \l__markdown_jekyll_data_current_position_tl
+                  { ##1 / programmaticString }
+                  {
+                    \__markdown_keys_set_known:xn
+                      {
+                        \tl_use:N
+                          \l__markdown_jekyll_data_current_position_tl
+                        / ##1
+                      }
+                      { ##2 }
+                  }
+                  {
+                    \__markdown_keys_set:xn
+                      {
+                        \tl_use:N
+                          \l__markdown_jekyll_data_current_position_tl
+                        / ##1
+                      }
+                      { ##2 }
+                  }
+              }
+          },
+          jekyllDataProgrammaticString = {
+            \tl_set:Nx
+              \l__markdown_jekyll_data_current_position_tl
+              {
+                \seq_use:Nn
+                  \l__markdown_jekyll_data_current_position_seq
+                  { / }
+              }
+            \keys_if_exist:VnT
+              \l__markdown_jekyll_data_current_position_tl
+              { ##1 / programmaticString }
+              {
+                \__markdown_keys_set:xn
+                  {
+                    \tl_use:N
+                      \l__markdown_jekyll_data_current_position_tl
+                    / ##1 / programmaticString
+                  }
+                  { ##2 }
+              }
+          },
+        },
+      }
+  }
+\cs_new_protected:Nn
+  \__markdown_keys_set:nn
+  {
+    \keys_set:nn
+      { }
+      { { #1 } = { #2 } }
+  }
+\cs_new_protected:Nn
+  \__markdown_keys_set_known:nn
+  {
+    \keys_set_known:nn
+      { }
+      { { #1 } = { #2 } }
+  }
+\cs_generate_variant:Nn
+  \__markdown_keys_set:nn
+  { xn }
+\cs_generate_variant:Nn
+  \__markdown_keys_set_known:nn
+  { xn }
+\cs_generate_variant:Nn
+  \keys_set:nn
+  { xn, Vn }
+\prg_generate_conditional_variant:Nnn
+  \keys_if_exist:nn
+  { Vn }
+  { T, TF }
+\ExplSyntaxOff
+\endinput
+%%
+%% End of file `markdownthemewitiko_markdown_defaults.tex'.

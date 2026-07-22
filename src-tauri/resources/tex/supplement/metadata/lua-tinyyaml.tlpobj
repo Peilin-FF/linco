@@ -1,0 +1,19 @@
+name lua-tinyyaml
+category Package
+revision 73671
+shortdesc A tiny YAML (subset) parser in pure Lua
+longdesc This package provides a YAML (subset) parser written in pure
+longdesc Lua. It supports a subset of the YAML 1.2 specifications. It is
+longdesc required by several other LuaTeX packages including markdown
+longdesc and citeproc-lua.
+containersize 5616
+containerchecksum 8dc998562742e65727a8053c6b42e1ffd6bc6f618d873145b8d71b6243adfce41afebd8dfe68733b9977eb3def7ec837c3c264ec2350b40bf917d013ce7a1960
+doccontainersize 196272
+doccontainerchecksum 7c6036d51a022214ddb6390d7972e634c549bff97a4e3ce0a92dbd47262fce40a0542e3abc2e2d8f6b48e657f4a325e26047b2d2fd50ff79a04686a366f127d9
+runfiles size=6
+ texmf-dist/scripts/lua-tinyyaml/tinyyaml.lua
+catalogue-contact-repository https://github.com/zepinglee/lua-tinyyaml
+catalogue-ctan /macros/luatex/generic/lua-tinyyaml
+catalogue-license mit
+catalogue-topics luatex parser
+catalogue-version 0.4.4

@@ -1,0 +1,8 @@
+name markdown.windows
+category Package
+revision 73628
+shortdesc windows files of markdown
+containersize 2304
+containerchecksum af860af4308b1d7e93cda1c7ae9903d1c5ab9bbcde9a897394dc1e95b44c1ae3f1f47eb8fe336d13507f8e884385921934fdaee7da7237bda5434da2a1c4b7c7
+binfiles arch=windows size=2
+ bin/windows/markdown2tex.exe

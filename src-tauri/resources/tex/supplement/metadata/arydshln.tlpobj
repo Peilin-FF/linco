@@ -1,0 +1,23 @@
+name arydshln
+category Package
+revision 77682
+shortdesc Draw dash-lines in array/tabular
+longdesc The package is to draw dash-lines in array/tabular
+longdesc environments. Horizontal lines are drawn by \hdashline and
+longdesc \cdashline while vertical ones can be specified as a part of
+longdesc the preamble using ':'. The shape of dash-lines may be
+longdesc controlled through style parameters or optional arguments. The
+longdesc package is compatible with array, colortab, longtable, and
+longdesc colortbl.
+containersize 9332
+containerchecksum 74a5f636ab9c1d68f15b69fd4d9966b702a2e39459075bef03c7081e65f17058e193d7084ed4976ada0a6551cef7c15ac2a9db0c3ccd4485855cd917043d2ec9
+doccontainersize 834260
+doccontainerchecksum 31e3823c74a3587314abf3547099cdd35e7b811b852de15735c9c924daf85425dbd5041130b81b3f09b080741dc135c12d0b00a7e8990927a3ade9dec89aa3af
+srccontainersize 53924
+srccontainerchecksum 8e308ff12e9c41dbd4f40ec5602082bb36b4b350672981acbd21521f2706d1f73f635d03e1189c1ce54870aa1afeea19b2c17f774faed5b22892fc088455ed20
+runfiles size=12
+ texmf-dist/tex/latex/arydshln/arydshln.sty
+catalogue-ctan /macros/latex/contrib/arydshln
+catalogue-license lppl1
+catalogue-topics alignment-supp tagged-pdf-incompatible
+catalogue-version 1.76
