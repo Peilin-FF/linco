@@ -31,7 +31,7 @@ jobs:
       CADDY_SHA512: 8220d1f013b6f27510247b2360c9e0ca9f018feebd82515f07635318b34ff9777ccc8fd0b6e6f2486ce3a33fe389fbb7db12d05baa474f4587509fb4f5ebf1c9
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
@@ -90,10 +90,10 @@ jobs:
     name: Rust workspace
     needs: release-metadata
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
@@ -115,7 +115,34 @@ jobs:
         run: cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Test workspace
-        run: cargo +1.85.0 test --workspace --all-targets --all-features --locked
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/linco-rust-tests.log"
+          set +e
+          timeout --signal=TERM --kill-after=30s 10m \
+            cargo +1.85.0 test --workspace --all-targets --all-features --locked -- --nocapture \
+            2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            python3 - "$log" "$status" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          lines = [ansi.sub("", line) for line in lines]
+          status = int(sys.argv[2])
+          selected = lines[-80:]
+          prefix = "Rust tests exceeded the 10 minute diagnostic limit.\n" if status == 124 else ""
+          message = prefix + "\n".join(line[:1000] for line in selected)
+          escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Rust workspace tests failed::{escaped}")
+          PY
+            exit "$status"
+          fi
 
       - name: Build release daemon
         run: cargo +1.85.0 build --release -p linco-server --locked
@@ -130,7 +157,7 @@ jobs:
       XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
@@ -310,19 +337,85 @@ jobs:
           build
 
       - name: Run iPhone unit and UI tests
-        run: >-
-          xcodebuild
-          -project ios/Linco.xcodeproj
-          -scheme Linco
-          -configuration Debug
-          -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_UDID}"
-          -derivedDataPath "$RUNNER_TEMP/LincoDerivedData"
-          -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages"
-          -disableAutomaticPackageResolution
-          -onlyUsePackageVersionsFromResolvedFile
-          -parallel-testing-enabled NO
-          CODE_SIGNING_ALLOWED=NO
-          CODE_SIGNING_REQUIRED=NO
-          CODE_SIGN_IDENTITY=
-          COMPILER_INDEX_STORE_ENABLE=NO
-          test
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/linco-iphone-tests.log"
+          result_bundle="$RUNNER_TEMP/LincoTests.xcresult"
+          result_summary="$RUNNER_TEMP/LincoTests-summary.json"
+          rm -rf "$result_bundle"
+          set +e
+          xcodebuild \
+            -project ios/Linco.xcodeproj \
+            -scheme Linco \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_UDID}" \
+            -derivedDataPath "$RUNNER_TEMP/LincoDerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages" \
+            -disableAutomaticPackageResolution \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -parallel-testing-enabled NO \
+            -resultBundlePath "$result_bundle" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            test 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            xcrun xcresulttool get test-results summary \
+              --path "$result_bundle" \
+              --compact > "$result_summary" 2>/dev/null || true
+            python3 - "$log" "$result_summary" <<'PY'
+          from pathlib import Path
+          import json
+          import re
+          import sys
+
+          log_lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          log_lines = [ansi.sub("", line) for line in log_lines]
+          markers = (
+              "error:",
+              "failed",
+              "failure",
+              "assertion",
+              "xctassert",
+              "testing failed",
+              "test case",
+              "test suite",
+          )
+          indexes = [
+              index
+              for index, line in enumerate(log_lines)
+              if any(marker in line.lower() for marker in markers)
+          ]
+          selected_indexes = []
+          for index in indexes:
+              selected_indexes.extend(range(max(0, index - 3), min(len(log_lines), index + 4)))
+          selected_indexes = list(dict.fromkeys(selected_indexes))[-50:]
+          selected_lines = (
+              [log_lines[index] for index in selected_indexes]
+              if selected_indexes
+              else log_lines[-50:]
+          )
+
+          summary_path = Path(sys.argv[2])
+          summary = ""
+          if summary_path.exists() and summary_path.stat().st_size:
+              raw_summary = summary_path.read_text(encoding="utf-8", errors="replace")
+              try:
+                  summary = json.dumps(json.loads(raw_summary), indent=2, ensure_ascii=False)
+              except json.JSONDecodeError:
+                  summary = raw_summary
+          sections = []
+          if summary:
+              sections.append("xcresult summary:\n" + summary[-24_000:])
+          sections.append("xcodebuild diagnostics:\n" + "\n".join(line[:1000] for line in selected_lines))
+          message = "\n\n".join(sections)
+          escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=iPhone tests failed::{escaped}")
+          PY
+            exit "$status"
+          fi
