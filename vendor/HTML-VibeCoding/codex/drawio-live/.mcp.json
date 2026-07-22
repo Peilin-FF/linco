@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "linco-drawio-live": {
+      "command": "node",
+      "args": ["./scripts/server.mjs"],
+      "cwd": "."
+    }
+  }
+}

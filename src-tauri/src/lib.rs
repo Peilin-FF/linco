@@ -9,6 +9,7 @@ mod agent_proxy;
 mod agent_rpc;
 mod blocking;
 mod config;
+mod drawio_live;
 mod fs;
 mod git;
 mod latex;
@@ -43,6 +44,7 @@ pub fn run() {
         .setup(|app| {
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
+            drawio_live::prepare(app.handle().clone())?;
             latex::prepare_bundled_tex(app.handle().clone());
             Ok(())
         })
@@ -63,6 +65,7 @@ pub fn run() {
             plugins::install_remote_plugins,
             plugins::plugin_status,
             plugins::plugin_set,
+            drawio_live::drawio_live_respond,
             preview::preview_start,
             preview::preview_set_target,
             preview::preview_default_target,

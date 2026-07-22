@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Linco Native 1.0 · 最终验收报告</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">保存到文件</button>
+    <button class="btn ghost sm" id="copy">复制 Markdown</button>
+    <span class="hint" id="hint">双击 cell 编辑 · Shift+↵ 完成 · Ctrl+S 保存 · 拖动 ⠿ 重排</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">LINCO NATIVE · SOURCE RELEASE CANDIDATE · 1.0.0</div><h1>只带一部 iPhone，也能继续远程开发</h1><p class=\"lede\">Linco 已重构为一条正式的原生发布路径：<b>iPhone 直接连接远程 Linux 上的无界面守护进程</b>，不再建立 SSH 会话，也不依赖桌面中转。交互链路、输入可靠性、安全边界、原生界面与发布门禁已经收口；当前源码候选经两轮独立审计为 <b>GO</b>，未发现已知 P0/P1。</p><div class=\"summary-band\"><div><span class=\"k\">Rust 实跑</span>97 / 97 全绿</div><div><span class=\"k\">Swift 覆盖</span>111 个用例已编写</div><div><span class=\"k\">实时协议</span>16-byte 帧头</div><div><span class=\"k\">正式接口</span>12 个 typed RPC</div><div><span class=\"k\">SSH</span>0</div></div><div class=\"callout rec\"><div class=\"callout-h\">交付结论</div><b>源码 / Release Candidate：GO。</b> App Store 立即发布仍是条件性 NO-GO——原因不是已知源码缺陷，而是当前 Windows 环境无法代替 macOS Xcode、Apple 签名与真实 iPhone 网络/Metal 验收。</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>最终产品形态</h2><div class=\"grid col-3\"><div class=\"card\"><div class=\"eyebrow\">01 · IPHONE</div><b>原生 SwiftUI App</b><p>安全扫码配对、会话、低延迟终端、代码编辑、隔离预览与设置。iOS 17+，不嵌套桌面 Web 壳。</p></div><div class=\"card\"><div class=\"eyebrow\">02 · EDGE</div><b>HTTPS / WSS</b><p>Caddy 负责可信 TLS；控制与终端交互分成两条独立 WebSocket，文件与预览走 HTTPS。</p></div><div class=\"card\"><div class=\"eyebrow\">03 · LINUX</div><b>linco-server</b><p>无界面守护进程管理 PTY、Shell / Claude / Codex、工作区、文件能力与预览，不以 root 运行。</p></div></div><div class=\"callout olive\"><b>正式拓扑：</b>iPhone → HTTPS/WSS → Caddy → loopback → linco-server → PTY / workspace。公网只开放 80/443；7337 保持 loopback。</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>为什么这版响应更快</h2><div class=\"grid col-2\"><div class=\"card\"><b>交互与控制物理分流</b><p>键入/终端输出使用独立 interactive WSS；列表、取消与状态走 control WSS。文件下载、上传和预览不会堵在按键前面。</p></div><div class=\"card\"><b>原始字节直传</b><p>终端 payload 使用 16-byte 固定头，不做 JSON + Base64。服务端启用 TCP_NODELAY，交互事件队列保持浅而有界。</p></div><div class=\"card\"><b>一往返前台恢复</b><p>已有 socket 时，缓存的 stream + generation 先发安全 resume，再并行校正列表；首屏恢复不再先支付 session_list 的额外 RTT。</p></div><div class=\"card\"><b>网络切换主动感知</b><p>NWPathMonitor 监听 Wi‑Fi / 蜂窝变化，120ms 去抖后立即探测；断网不必等 12s 心跳周期才发现。</p></div><div class=\"card\"><b>原生高质量渲染</b><p>SwiftTerm 挂载到 window 后显式启用 Metal，失败自动回退；编辑器使用 Runestone + Tree-sitter，不用 WebView 假装原生编辑器。</p></div><div class=\"card\"><b>恢复优先正确性</b><p>每次 transport boundary 强制 offset 0 / snapshot，避免旧连接已经推进、但画面尚未消费时跳过不可见字节。</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["Release 微基准", "最终二进制方案", "JSON / Base64 对照", "编码优势", "线宽减少"],
+    "rows": [
+      ["64 B payload", "80 B wire", "154 B wire", "6.36×", "48.05%"],
+      ["4 KiB payload", "4,112 B wire", "5,530 B wire", "34.83×", "25.64%"],
+      ["32 KiB payload", "32,784 B wire", "43,759 B wire", "10.00×", "25.08%"],
+      ["16 B vs 32 B header", "16 B", "32 B", "3.01× header encode", "50.00% header bytes"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout\"><b>读数边界：</b>以上是同一 Windows 主机、Release 模式、5 轮中位数的协议编码微基准，用于选型；它不是公网 RTT、真机 FPS 或端到端首字节指标。对照实验代码已按要求移除，生产树只保留胜出的 16-byte 原始二进制方案。</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>输入可靠性：快，但绝不赌命令是否重复执行</h2><div class=\"grid col-2\"><div class=\"card\"><b>ACK 驱动的 exactly-once 边界</b><p>每个终端拥有绝对输入偏移 <code>input_through</code>。同一 server epoch 才能重放未确认后缀；冲突或写入结果不确定时，单流隔离并要求用户明确处理。</p></div><div class=\"card\"><b>整段粘贴原子接收</b><p>一次 delegate 输入会先完整入账，再拆成最多 32 KiB 的帧。同步输入泵含 in-flight 共 1 MiB 上限；新输入要么完整接收，要么零字节拒绝并显示原因。</p></div><div class=\"card\"><b>PTY 写入看门狗</b><p>生产写入期限 5s。尚未开始则证明 zero-write、发 <code>overloaded</code> 并在 250ms 内关闭旧 lane；已经开始则终止该 generation、标记 ambiguous，并有界释放输入锁。</p></div><div class=\"card\"><b>生命周期顺序</b><p>页面卸载和进入后台均先冻结新输入，再 drain 已接收输入，最后唯一 detach。EOS 只结束输出，不能抹掉此前的输入歧义证据。</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": ["安全层", "最终实现", "关键结果"],
+    "rows": [
+      ["服务器身份", "二维码固定 Ed25519 公钥；每次 hello 证明持钥", "拒绝伪装服务器"],
+      ["iPhone 身份", "Secure Enclave P-256，不可导出私钥", "设备签名不落盘明文"],
+      ["临时授权", "120s 单次配对；最小权限 HTTP capability；Authorization header", "令牌不进入 URL / 日志"],
+      ["设备撤销", "独立 watcher + 最终 fresh-auth 检查", "WSS 与已签发能力 5s 内失效"],
+      ["文件写入", "SHA-256 ETag、If-Match、同目录 fsync + 原子替换、同路径 CAS 串行", "Linco 并发旧版本只能一个成功"],
+      ["服务器隔离", "显式工作区、拒绝绝对路径 / .. / symlink 逃逸、loopback 明文端口", "把权限边界缩到已授权工作区"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>客户实际看到的产品</h2><div class=\"grid col-2\"><div class=\"card\"><b>第一次打开</b><p>品牌化暗色 onboarding、相机扫码与手动粘贴双路径；配对中单飞，避免两个结果互相覆盖。</p></div><div class=\"card\"><b>会话</b><p>Shell、Claude Code、Codex 三种入口；连接状态、真实延迟与恢复状态可见，重复启动使用稳定 idempotency identity。</p></div><div class=\"card\"><b>终端</b><p>SwiftTerm 原生终端、Metal、触控键盘附件、链接、resize 合并、全屏重放与无界面切换竞态。</p></div><div class=\"card\"><b>文件与预览</b><p>Runestone 语法编辑、脏文件离开保护、ETag 冲突拒绝；WKWebView 非持久隔离预览，只允许 bootstrap origin。</p></div></div><div class=\"callout rec\"><b>品牌资产：</b>最终 App Icon 为 1024×1024、24-bit RGB、无 Alpha；App 内 <code>LincoMark</code> 使用同一书写式品牌路径与蓝橙渐变语言。</div>"
+  },
+  {
+    "type": "table",
+    "head": ["质量门禁", "当前结果", "证据 / 边界"],
+    "rows": [
+      ["Rust 1.85 fmt", "PASS", "workspace 全量格式检查"],
+      ["Clippy -D warnings", "PASS", "workspace / all-targets / all-features / locked"],
+      ["Rust tests", "PASS · 97/97", "15 core + 26 protocol + 47 server + 9 HTTP/WSS 黑盒"],
+      ["linco-server Release build", "PASS", "本机 locked optimized build；版本 1.0.0"],
+      ["SwiftPM lock", "PASS", "3 个直接 + 4 个传递依赖，URL / version / 40-char revision 精确校验"],
+      ["Swift 静态审计", "GO", "111 个测试用例已编写（48 Swift Testing + 63 XCTest）；AST / 签名 / scope / actor 路径复核无已知 P0/P1"],
+      ["资源与配置", "PASS", "JSON、plist/XML、YAML、1024 图标与 git diff whitespace 校验"],
+      ["macOS Xcode 16.4 Native CI", "REQUIRED", "当前 Windows 无 Swift/Xcode；workflow 已配置 locked resolve、Debug test、Release iphoneos build"],
+      ["真实 iPhone / TestFlight", "REQUIRED", "Secure Enclave、蜂窝↔Wi‑Fi、后台恢复、Metal、签名归档与 TestFlight"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>发布判定</h2><div class=\"procon\"><div class=\"pros\"><b>现在可以冻结的内容</b><ul><li>iOS 原生产品源码与锁定依赖</li><li>Linux daemon、协议、部署模板与 97 项实跑测试</li><li>无 SSH 的正式拓扑与双通道低延迟方案</li><li>输入 exactly-once / ambiguity / watchdog 状态机</li><li>Native CI、版本对齐与 Release checklist</li></ul></div><div class=\"cons\"><b>上架前绝不能跳过</b><ul><li>把当前未跟踪的 native tree 与 workflow 纳入正式提交</li><li>让 macOS 15 / Xcode 16.4 的 Native CI 全绿</li><li>真实 iPhone 做 Secure Enclave 与网络切换矩阵</li><li>验证后台恢复、无重复输入和 Metal 视觉/性能</li><li>Apple 签名 Archive、Organizer validation、TestFlight</li></ul></div></div><div class=\"callout olive\"><b>为什么这不是“仓促测试品”：</b>源码候选只在 P0/P1 清零、服务端完整门禁全绿后冻结；同时把当前环境无法证明的 Apple 构建与真机结果明确留在发布门外，不用措辞掩盖证据缺口。</div>"
+  },
+  {
+    "type": "table",
+    "head": ["正式路径", "职责"],
+    "rows": [
+      ["ios/", "iOS 17+ SwiftUI App、LincoCore、111 个 Swift 测试、资源与锁文件"],
+      ["apps/linco-server/", "Linux 无界面 daemon：鉴权、PTY、文件、预览、WebSocket"],
+      ["crates/linco-protocol/", "v1 typed wire、共享 conformance fixture、16-byte binary frame"],
+      ["crates/linco-core/", "终端重放环、订阅过滤、工作区核心"],
+      ["deploy/", "systemd user service、Caddy、环境模板"],
+      [".github/workflows/native-ci.yml", "Ubuntu Rust + macOS iOS 的锁定发布门禁"],
+      ["docs/DEPLOYMENT.md · docs/release.md", "生产部署、升级、回滚、签名与 TestFlight 清单"]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">冻结建议</div>当前源码候选应停止非必要改动。下一步不是继续堆功能，而是：<b>纳入发布提交 → 跑 Native CI → 真机矩阵 → 签名 Archive → TestFlight</b>。旧桌面 React/Tauri 文件未做破坏性删除，也不属于新的正式发布/CI 路径；本轮同时保留了工作区中与 native 项目无关的用户改动。</div>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

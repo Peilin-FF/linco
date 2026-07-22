@@ -180,8 +180,14 @@ fn resolve_exe_in(
     if name.contains('\\') || name.contains('/') {
         return name.to_string();
     }
-    let mut exts: Vec<String> = vec![String::new()];
-    exts.extend(pathext.split(';').filter(|s| !s.is_empty()).map(|s| s.to_string()));
+    // npm installs both an extensionless POSIX shim and a Windows .cmd shim.
+    // Prefer PATHEXT candidates so CreateProcess never receives the POSIX file.
+    let mut exts: Vec<String> = pathext
+        .split(';')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect();
+    exts.push(String::new());
     for dir in path.split(';').filter(|s| !s.is_empty()) {
         for ext in &exts {
             let cand = format!("{dir}\\{name}{ext}");
@@ -208,6 +214,19 @@ mod tests {
         let path = r"C:\Users\me\AppData\Roaming\npm;C:\Windows\System32";
         let exists =
             |p: &str| p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex.cmd");
+        assert_eq!(
+            resolve_exe_in("codex", path, PATHEXT, exists).to_ascii_lowercase(),
+            r"c:\users\me\appdata\roaming\npm\codex.cmd"
+        );
+    }
+
+    #[test]
+    fn prefers_windows_shim_over_extensionless_npm_shim() {
+        let path = r"C:\Users\me\AppData\Roaming\npm";
+        let exists = |p: &str| {
+            p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex")
+                || p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex.cmd")
+        };
         assert_eq!(
             resolve_exe_in("codex", path, PATHEXT, exists).to_ascii_lowercase(),
             r"c:\users\me\appdata\roaming\npm\codex.cmd"

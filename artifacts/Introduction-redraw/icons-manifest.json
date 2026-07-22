@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "icons": [
+    {
+      "id": "fluent-emoji-flat:man-police-officer-light",
+      "provider": "Iconify",
+      "collection": "Fluent Emoji Flat",
+      "author": {
+        "name": "Microsoft Corporation",
+        "url": "https://github.com/microsoft/fluentui-emoji"
+      },
+      "license": {
+        "title": "MIT",
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE"
+      },
+      "local_path": "assets/icons/fluent-emoji-flat--man-police-officer-light.svg",
+      "source_url": "https://icon-sets.iconify.design/fluent-emoji-flat/man-police-officer-light/",
+      "download_url": "https://api.iconify.design/fluent-emoji-flat/man-police-officer-light.svg",
+      "downloaded_at": "2026-07-22T16:52:19.813Z"
+    },
+    {
+      "id": "fluent-emoji-flat:woman-curly-hair-medium",
+      "provider": "Iconify",
+      "collection": "Fluent Emoji Flat",
+      "author": {
+        "name": "Microsoft Corporation",
+        "url": "https://github.com/microsoft/fluentui-emoji"
+      },
+      "license": {
+        "title": "MIT",
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE"
+      },
+      "local_path": "assets/icons/fluent-emoji-flat--woman-curly-hair-medium.svg",
+      "source_url": "https://icon-sets.iconify.design/fluent-emoji-flat/woman-curly-hair-medium/",
+      "download_url": "https://api.iconify.design/fluent-emoji-flat/woman-curly-hair-medium.svg",
+      "downloaded_at": "2026-07-22T16:52:20.395Z"
+    },
+    {
+      "id": "fluent-emoji-flat:woman-office-worker-light",
+      "provider": "Iconify",
+      "collection": "Fluent Emoji Flat",
+      "author": {
+        "name": "Microsoft Corporation",
+        "url": "https://github.com/microsoft/fluentui-emoji"
+      },
+      "license": {
+        "title": "MIT",
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE"
+      },
+      "local_path": "assets/icons/fluent-emoji-flat--woman-office-worker-light.svg",
+      "source_url": "https://icon-sets.iconify.design/fluent-emoji-flat/woman-office-worker-light/",
+      "download_url": "https://api.iconify.design/fluent-emoji-flat/woman-office-worker-light.svg",
+      "downloaded_at": "2026-07-22T16:52:19.296Z"
+    },
+    {
+      "id": "fluent-emoji-flat:woman-teacher-light",
+      "provider": "Iconify",
+      "collection": "Fluent Emoji Flat",
+      "author": {
+        "name": "Microsoft Corporation",
+        "url": "https://github.com/microsoft/fluentui-emoji"
+      },
+      "license": {
+        "title": "MIT",
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE"
+      },
+      "local_path": "assets/icons/fluent-emoji-flat--woman-teacher-light.svg",
+      "source_url": "https://icon-sets.iconify.design/fluent-emoji-flat/woman-teacher-light/",
+      "download_url": "https://api.iconify.design/fluent-emoji-flat/woman-teacher-light.svg",
+      "downloaded_at": "2026-07-22T16:56:37.128Z"
+    },
+    {
+      "id": "fluent-emoji-flat:woman-with-headscarf-light",
+      "provider": "Iconify",
+      "collection": "Fluent Emoji Flat",
+      "author": {
+        "name": "Microsoft Corporation",
+        "url": "https://github.com/microsoft/fluentui-emoji"
+      },
+      "license": {
+        "title": "MIT",
+        "spdx": "MIT",
+        "url": "https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE"
+      },
+      "local_path": "assets/icons/fluent-emoji-flat--woman-with-headscarf-light.svg",
+      "source_url": "https://icon-sets.iconify.design/fluent-emoji-flat/woman-with-headscarf-light/",
+      "download_url": "https://api.iconify.design/fluent-emoji-flat/woman-with-headscarf-light.svg",
+      "downloaded_at": "2026-07-22T16:52:20.938Z"
+    }
+  ]
+}

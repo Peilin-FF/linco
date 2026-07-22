@@ -1,0 +1,18 @@
+{
+  "name": "drawio-live",
+  "version": "1.4.0",
+  "description": "Drive Linco's visible draw.io canvas step by step through MCP, then save the already-visible diagram.",
+  "author": {
+    "name": "Linco"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Linco Draw.io Live",
+    "shortDescription": "Watch Agent drawing operations appear live in Linco draw.io.",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "brandColor": "#E07A22"
+  }
+}

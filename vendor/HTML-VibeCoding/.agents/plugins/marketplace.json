@@ -37,6 +37,12 @@
       "source": { "source": "local", "path": "./codex/en-shadow-diff" },
       "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
       "category": "Productivity"
+    },
+    {
+      "name": "drawio-live",
+      "source": { "source": "local", "path": "./codex/drawio-live" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
     }
   ]
 }
