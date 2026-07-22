@@ -8,7 +8,8 @@ struct TerminalReliabilityTests {
     func coldRestartInputBaseline() throws {
         var ledger = TerminalInputLedger()
 
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 4_096) == .ready)
+        let baseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 4_096)
+        #expect(baseline == .ready)
         let input = try ledger.enqueue(streamID: 7, payload: Data("x".utf8))
 
         #expect(input.sequence == 4_096)
@@ -21,7 +22,8 @@ struct TerminalReliabilityTests {
         _ = try ledger.enqueue(streamID: 7, payload: Data("abcdef".utf8))
         try ledger.acknowledge(streamID: 7, through: 2)
 
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 4) == .ready)
+        let refreshedBaseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 4)
+        #expect(refreshedBaseline == .ready)
         let pending = ledger.pendingFrames(streamID: 7)
         #expect(pending.count == 1)
         #expect(pending[0].sequence == 4)
@@ -36,7 +38,8 @@ struct TerminalReliabilityTests {
         _ = try ledger.synchronizeServerInputThrough(streamID: 7, through: 0)
         _ = try ledger.enqueue(streamID: 7, payload: Data("abc".utf8))
 
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 9) == .ambiguous)
+        let conflictingBaseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 9)
+        #expect(conflictingBaseline == .ambiguous)
         #expect(ledger.pendingFrames(streamID: 7).first?.sequence == 0)
         #expect(throws: TerminalReliabilityError.ambiguousInput) {
             try ledger.enqueue(streamID: 7, payload: Data("d".utf8))
@@ -48,14 +51,17 @@ struct TerminalReliabilityTests {
         var ledger = TerminalInputLedger()
         _ = try ledger.synchronizeServerInputThrough(streamID: 7, through: 0)
         _ = try ledger.enqueue(streamID: 7, payload: Data("abc".utf8))
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 9) == .ambiguous)
+        let conflictingBaseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 9)
+        #expect(conflictingBaseline == .ambiguous)
 
         #expect(ledger.isInputAmbiguous(streamID: 7))
-        #expect(ledger.discardAmbiguousInput() == [7])
+        let discardedStreams = ledger.discardAmbiguousInput()
+        #expect(discardedStreams == [7])
         #expect(throws: TerminalReliabilityError.inputBaselineRequired(streamID: 7)) {
             try ledger.enqueue(streamID: 7, payload: Data("d".utf8))
         }
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 9) == .ready)
+        let freshBaseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 9)
+        #expect(freshBaseline == .ready)
         let next = try ledger.enqueue(streamID: 7, payload: Data("d".utf8))
         #expect(next.sequence == 9)
     }
@@ -67,7 +73,8 @@ struct TerminalReliabilityTests {
         _ = try ledger.enqueue(streamID: 7, payload: Data("abc".utf8))
         try ledger.acknowledge(streamID: 7, through: 3)
 
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 7, through: 12) == .ready)
+        let advancedBaseline = try ledger.synchronizeServerInputThrough(streamID: 7, through: 12)
+        #expect(advancedBaseline == .ready)
         let next = try ledger.enqueue(streamID: 7, payload: Data("d".utf8))
         #expect(next.sequence == 12)
     }
@@ -91,10 +98,12 @@ struct TerminalReliabilityTests {
     func sameEpochReplay() throws {
         let epoch = UUID()
         var ledger = TerminalInputLedger()
-        #expect(ledger.beginServerEpoch(epoch) == .firstConnection)
+        let firstConnection = ledger.beginServerEpoch(epoch)
+        #expect(firstConnection == .firstConnection)
         _ = try ledger.synchronizeServerInputThrough(streamID: 3, through: 0)
         let pending = try ledger.enqueue(streamID: 3, payload: Data([1, 2]))
-        #expect(ledger.beginServerEpoch(epoch) == .unchanged(framesToResend: [pending]))
+        let reconnect = ledger.beginServerEpoch(epoch)
+        #expect(reconnect == .unchanged(framesToResend: [pending]))
     }
 
     @Test("New epoch makes pending input ambiguous and blocks automatic resend")
@@ -103,18 +112,21 @@ struct TerminalReliabilityTests {
         _ = ledger.beginServerEpoch(UUID())
         _ = try ledger.synchronizeServerInputThrough(streamID: 9, through: 0)
         _ = try ledger.enqueue(streamID: 9, payload: Data([0x0d]))
-        #expect(ledger.beginServerEpoch(UUID()) == .ambiguous(streamIDs: [9]))
+        let epochChange = ledger.beginServerEpoch(UUID())
+        #expect(epochChange == .ambiguous(streamIDs: [9]))
         #expect(throws: TerminalReliabilityError.ambiguousInput) {
             try ledger.enqueue(streamID: 9, payload: Data([1]))
         }
         #expect(ledger.isInputAmbiguous(streamID: 9))
         #expect(ledger.pendingFrames(streamID: 9).count == 1)
-        #expect(ledger.discardAmbiguousInput() == [9])
+        let discardedStreams = ledger.discardAmbiguousInput()
+        #expect(discardedStreams == [9])
         #expect(throws: TerminalReliabilityError.inputBaselineRequired(streamID: 9)) {
             try ledger.enqueue(streamID: 9, payload: Data([1]))
         }
         _ = try ledger.synchronizeServerInputThrough(streamID: 9, through: 14)
-        #expect(try ledger.enqueue(streamID: 9, payload: Data([1])).sequence == 14)
+        let accepted = try ledger.enqueue(streamID: 9, payload: Data([1]))
+        #expect(accepted.sequence == 14)
     }
 
     @Test("Interactive ambiguity explicitly blocks further input")
@@ -123,7 +135,8 @@ struct TerminalReliabilityTests {
         _ = try ledger.synchronizeServerInputThrough(streamID: 12, through: 0)
         _ = try ledger.enqueue(streamID: 12, payload: Data([1]))
 
-        #expect(ledger.markInputAmbiguous() == [12])
+        let ambiguousStreams = ledger.markInputAmbiguous()
+        #expect(ambiguousStreams == [12])
         #expect(throws: TerminalReliabilityError.ambiguousInput) {
             try ledger.enqueue(streamID: 12, payload: Data([2]))
         }
@@ -144,7 +157,8 @@ struct TerminalReliabilityTests {
         #expect(throws: TerminalReliabilityError.inputBaselineRequired(streamID: 3)) {
             try ledger.enqueue(streamID: 3, payload: Data("x".utf8))
         }
-        #expect(try ledger.enqueue(streamID: 4, payload: Data("!".utf8)).sequence == 14)
+        let appended = try ledger.enqueue(streamID: 4, payload: Data("!".utf8))
+        #expect(appended.sequence == 14)
     }
 
     @Test("Terminal EOS cannot erase unresolved ambiguous input")
@@ -156,11 +170,13 @@ struct TerminalReliabilityTests {
 
         // Output EOS retires the terminal lifecycle, but cannot prove whether
         // an unacknowledged input item executed before that terminal exited.
-        #expect(!ledger.discardStreamIfUnambiguous(streamID: 11))
+        let discardedUnambiguousStream = ledger.discardStreamIfUnambiguous(streamID: 11)
+        #expect(!discardedUnambiguousStream)
         #expect(ledger.pendingFrames(streamID: 11) == [pending])
         #expect(ledger.isInputAmbiguous(streamID: 11))
 
-        #expect(ledger.discardAmbiguousInput() == [11])
+        let discardedStreams = ledger.discardAmbiguousInput()
+        #expect(discardedStreams == [11])
         #expect(ledger.pendingFrames(streamID: 11).isEmpty)
     }
 
@@ -171,7 +187,8 @@ struct TerminalReliabilityTests {
         var input = TerminalInputLedger()
         var output = TerminalOutputLedger()
 
-        #expect(input.beginServerEpoch(serverA) == .firstConnection)
+        let firstServerConnection = input.beginServerEpoch(serverA)
+        #expect(firstServerConnection == .firstConnection)
         _ = try input.synchronizeServerInputThrough(streamID: 7, through: 40)
         _ = try input.enqueue(streamID: 7, payload: Data("possibly-ran".utf8))
         input.markInputAmbiguous(streamID: 7)
@@ -184,9 +201,11 @@ struct TerminalReliabilityTests {
         #expect(input.pendingFrames(streamID: 7).isEmpty)
         #expect(!input.isInputAmbiguous(streamID: 7))
         #expect(output.cursor(for: 7) == 0)
-        #expect(input.beginServerEpoch(serverB) == .firstConnection)
+        let secondServerConnection = input.beginServerEpoch(serverB)
+        #expect(secondServerConnection == .firstConnection)
         _ = try input.synchronizeServerInputThrough(streamID: 7, through: 3)
-        #expect(try input.enqueue(streamID: 7, payload: Data("B".utf8)).sequence == 3)
+        let serverBInput = try input.enqueue(streamID: 7, payload: Data("B".utf8))
+        #expect(serverBInput.sequence == 3)
     }
 
     @Test("A paste is reserved as one atomic reliability item")
@@ -223,8 +242,10 @@ struct TerminalReliabilityTests {
         #expect(throws: TerminalReliabilityError.inputBaselineRequired(streamID: 8)) {
             try ledger.enqueue(streamID: 8, payload: Data("y".utf8))
         }
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 8, through: 20) == .ready)
-        #expect(try ledger.enqueue(streamID: 8, payload: Data("y".utf8)).sequence == 21)
+        let resumedBaseline = try ledger.synchronizeServerInputThrough(streamID: 8, through: 20)
+        #expect(resumedBaseline == .ready)
+        let resumedInput = try ledger.enqueue(streamID: 8, payload: Data("y".utf8))
+        #expect(resumedInput.sequence == 21)
     }
 
     @Test("Same-epoch replay excludes only quarantined streams")
@@ -238,7 +259,8 @@ struct TerminalReliabilityTests {
         let safe = try ledger.enqueue(streamID: 2, payload: Data("safe".utf8))
         ledger.markInputAmbiguous(streamID: 1)
 
-        #expect(ledger.beginServerEpoch(epoch) == .unchanged(framesToResend: [safe]))
+        let reconnect = ledger.beginServerEpoch(epoch)
+        #expect(reconnect == .unchanged(framesToResend: [safe]))
         #expect(throws: TerminalReliabilityError.ambiguousInput) {
             try ledger.enqueue(streamID: 1, payload: Data("!".utf8))
         }
@@ -252,9 +274,12 @@ struct TerminalReliabilityTests {
         ledger.markInputAmbiguous(streamID: 6)
         ledger.discardStream(streamID: 6)
 
-        #expect(ledger.beginServerEpoch(UUID()) == .changed)
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 6, through: 100) == .ready)
-        #expect(try ledger.enqueue(streamID: 6, payload: Data("x".utf8)).sequence == 100)
+        let epochChange = ledger.beginServerEpoch(UUID())
+        #expect(epochChange == .changed)
+        let freshBaseline = try ledger.synchronizeServerInputThrough(streamID: 6, through: 100)
+        #expect(freshBaseline == .ready)
+        let freshInput = try ledger.enqueue(streamID: 6, payload: Data("x".utf8))
+        #expect(freshInput.sequence == 100)
     }
 
     @Test("A new epoch drops clean offsets while quarantining pending streams")
@@ -267,9 +292,12 @@ struct TerminalReliabilityTests {
         _ = try ledger.synchronizeServerInputThrough(streamID: 2, through: 0)
         _ = try ledger.enqueue(streamID: 2, payload: Data("pending".utf8))
 
-        #expect(ledger.beginServerEpoch(UUID()) == .ambiguous(streamIDs: [2]))
-        #expect(try ledger.synchronizeServerInputThrough(streamID: 1, through: 0) == .ready)
-        #expect(try ledger.enqueue(streamID: 1, payload: Data("new".utf8)).sequence == 0)
+        let epochChange = ledger.beginServerEpoch(UUID())
+        #expect(epochChange == .ambiguous(streamIDs: [2]))
+        let cleanBaseline = try ledger.synchronizeServerInputThrough(streamID: 1, through: 0)
+        #expect(cleanBaseline == .ready)
+        let cleanInput = try ledger.enqueue(streamID: 1, payload: Data("new".utf8))
+        #expect(cleanInput.sequence == 0)
         #expect(ledger.pendingFrames(streamID: 2).count == 1)
     }
 
@@ -277,7 +305,8 @@ struct TerminalReliabilityTests {
     func outputOrdering() throws {
         var ledger = TerminalOutputLedger()
         let first = try BinaryFrame(kind: .terminalOutput, streamID: 1, sequence: 10, payload: Data("abcd".utf8))
-        #expect(ledger.accept(first) == .deliver(first, reset: false, endOfStream: false))
+        let firstOutcome = try ledger.accept(first)
+        #expect(firstOutcome == .deliver(first, reset: false, endOfStream: false))
 
         let overlap = try BinaryFrame(kind: .terminalOutput, streamID: 1, sequence: 12, payload: Data("cdef".utf8))
         guard case let .deliver(trimmed, reset, endOfStream) = try ledger.accept(overlap) else {
@@ -290,7 +319,8 @@ struct TerminalReliabilityTests {
         #expect(trimmed.payload == Data("ef".utf8))
 
         let gap = try BinaryFrame(kind: .terminalOutput, streamID: 1, sequence: 20, payload: Data([1]))
-        #expect(try ledger.accept(gap) == .gap(expected: 16, received: 20))
+        let gapOutcome = try ledger.accept(gap)
+        #expect(gapOutcome == .gap(expected: 16, received: 20))
     }
 
     @Test("Empty end-of-stream frame is delivered exactly once")
@@ -311,8 +341,10 @@ struct TerminalReliabilityTests {
             payload: Data()
         )
 
-        #expect(try ledger.accept(end) == .endOfStream(streamID: 4, offset: 4))
-        #expect(try ledger.accept(end) == .duplicate)
+        let endOutcome = try ledger.accept(end)
+        #expect(endOutcome == .endOfStream(streamID: 4, offset: 4))
+        let duplicateOutcome = try ledger.accept(end)
+        #expect(duplicateOutcome == .duplicate)
     }
 
     @Test("Tail data and end-of-stream are preserved together")
@@ -326,6 +358,7 @@ struct TerminalReliabilityTests {
             payload: Data("tail".utf8)
         )
 
-        #expect(try ledger.accept(end) == .deliver(end, reset: false, endOfStream: true))
+        let endOutcome = try ledger.accept(end)
+        #expect(endOutcome == .deliver(end, reset: false, endOfStream: true))
     }
 }

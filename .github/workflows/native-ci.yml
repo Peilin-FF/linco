@@ -203,12 +203,16 @@ jobs:
           import sys
 
           lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
-          interesting = [
-              line
-              for line in lines
+          error_indexes = [
+              index
+              for index, line in enumerate(lines)
               if "error:" in line.lower() or "fatal error" in line.lower()
           ]
-          selected = (interesting or lines)[-30:]
+          selected_indexes = []
+          for index in error_indexes:
+              selected_indexes.extend(range(max(0, index - 3), min(len(lines), index + 2)))
+          selected_indexes = list(dict.fromkeys(selected_indexes))[-60:]
+          selected = [lines[index] for index in selected_indexes] if selected_indexes else lines[-30:]
           message = "\n".join(line[:1000] for line in selected)
           escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=LincoCore test failed::{escaped}")
