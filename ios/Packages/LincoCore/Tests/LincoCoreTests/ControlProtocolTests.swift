@@ -17,7 +17,7 @@ struct ControlProtocolTests {
         ]))
     }
 
-    @Test("Read calls omit idempotency keys")
+    @Test("Read calls encode a null idempotency key")
     func readCallConformance() throws {
         let fixture = try V1ConformanceFixture.load()
         let vector = try #require(fixture.controlCases.first { $0.name == "read_call" })

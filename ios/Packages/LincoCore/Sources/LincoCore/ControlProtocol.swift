@@ -218,6 +218,20 @@ public struct CallMessage: Sendable, Equatable, Codable {
         case idempotencyKey = "idempotency_key"
         case deadlineMilliseconds = "deadline_ms"
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(type, forKey: .type)
+        try container.encode(id, forKey: .id)
+        try container.encode(method, forKey: .method)
+        try container.encode(params, forKey: .params)
+        if let idempotencyKey {
+            try container.encode(idempotencyKey, forKey: .idempotencyKey)
+        } else {
+            try container.encodeNil(forKey: .idempotencyKey)
+        }
+        try container.encode(deadlineMilliseconds, forKey: .deadlineMilliseconds)
+    }
 }
 
 public struct CancelMessage: Sendable, Equatable, Codable {
