@@ -1,0 +1,269 @@
+{
+  "protocol_version": 1,
+  "binary_cases": [
+    {
+      "name": "terminal_output_replay",
+      "channel": "interactive",
+      "header": {
+        "kind": "terminal_output",
+        "flags": 2,
+        "stream_id": 16909060,
+        "sequence": 72623859790382856
+      },
+      "payload_hex": "001bff",
+      "encoded_hex": "01010002010203040102030405060708001bff"
+    }
+  ],
+  "control_cases": [
+    {
+      "name": "read_call",
+      "json": {
+        "type": "call",
+        "id": "01922b1c-42a0-7000-8000-000000000001",
+        "method": "file_read",
+        "params": {
+          "workspace_id": "11111111-2222-3333-4444-555555555555",
+          "path": "README.md"
+        },
+        "idempotency_key": null,
+        "deadline_ms": 5000
+      }
+    }
+  ],
+  "server_event_cases": [
+    {
+      "name": "terminal_input_fault",
+      "json": {
+        "type": "terminal_input_fault",
+        "stream_id": 7,
+        "generation": 3,
+        "code": "session_exited",
+        "authoritative_through": 98304,
+        "discard_pending": true
+      }
+    },
+    {
+      "name": "terminal_input_overloaded",
+      "json": {
+        "type": "terminal_input_fault",
+        "stream_id": 8,
+        "generation": 4,
+        "code": "overloaded",
+        "authoritative_through": 65536,
+        "discard_pending": false
+      }
+    }
+  ],
+  "rpc_contract_cases": [
+    {
+      "method": "system_info",
+      "permission": "read",
+      "mutating": false,
+      "request": {},
+      "response": {
+        "name": "linco-server",
+        "version": "1.0.0",
+        "protocol_version": 1,
+        "server_epoch": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "platform": "linux",
+        "architecture": "x86_64"
+      }
+    },
+    {
+      "method": "workspace_list",
+      "permission": "read",
+      "mutating": false,
+      "request": {},
+      "response": {
+        "workspaces": [
+          {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "name": "Linco"
+          }
+        ]
+      }
+    },
+    {
+      "method": "session_list",
+      "permission": "read",
+      "mutating": false,
+      "request": {},
+      "response": {
+        "sessions": [
+          {
+            "id": "22222222-3333-4444-5555-666666666666",
+            "stream_id": 7,
+            "generation": 1,
+            "title": "Codex",
+            "workspace_name": "Linco",
+            "kind": "codex",
+            "state": "ready",
+            "updated_at": 1730000000000
+          }
+        ]
+      }
+    },
+    {
+      "method": "session_start",
+      "permission": "terminal",
+      "mutating": true,
+      "request": {
+        "workspace_id": "11111111-2222-3333-4444-555555555555",
+        "session_id": "22222222-3333-4444-5555-666666666666",
+        "kind": "codex",
+        "cwd": ".",
+        "rows": 24,
+        "columns": 80,
+        "pixel_width": 0,
+        "pixel_height": 0,
+        "environment": {},
+        "agent_arguments": []
+      },
+      "response": {
+        "id": "22222222-3333-4444-5555-666666666666",
+        "stream_id": 7,
+        "generation": 1,
+        "title": "Codex",
+        "workspace_name": "Linco",
+        "kind": "codex",
+        "state": "ready",
+        "updated_at": 1730000000000
+      }
+    },
+    {
+      "method": "session_stop",
+      "permission": "terminal",
+      "mutating": false,
+      "request": {
+        "session_id": "22222222-3333-4444-5555-666666666666",
+        "generation": 1
+      },
+      "response": { "stopped": true }
+    },
+    {
+      "method": "session_resume",
+      "permission": "terminal",
+      "mutating": false,
+      "request": {
+        "stream_id": 7,
+        "generation": 1,
+        "offset": 4096
+      },
+      "response": {
+        "stream_id": 7,
+        "generation": 1,
+        "starting_offset": 4096,
+        "input_through": 98304,
+        "lane": "interactive"
+      }
+    },
+    {
+      "method": "terminal_detach",
+      "permission": "terminal",
+      "mutating": false,
+      "request": {
+        "stream_id": 7,
+        "generation": 1
+      },
+      "response": { "detached": true }
+    },
+    {
+      "method": "terminal_resize",
+      "permission": "terminal",
+      "mutating": false,
+      "request": {
+        "session_id": "22222222-3333-4444-5555-666666666666",
+        "generation": 1,
+        "rows": 30,
+        "columns": 100,
+        "pixel_width": 0,
+        "pixel_height": 0
+      },
+      "response": { "resized": true }
+    },
+    {
+      "method": "file_list",
+      "permission": "read",
+      "mutating": false,
+      "request": {
+        "workspace_id": "11111111-2222-3333-4444-555555555555",
+        "path": "",
+        "cursor": null,
+        "limit": 2
+      },
+      "response": {
+        "path": "",
+        "entries": [
+          {
+            "name": "src",
+            "path": "src",
+            "kind": "directory",
+            "size": null,
+            "modified_at": 1730000000000,
+            "etag": null
+          },
+          {
+            "name": "README.md",
+            "path": "README.md",
+            "kind": "file",
+            "size": 512,
+            "modified_at": 1730000000100,
+            "etag": null
+          }
+        ],
+        "next_cursor": "eyJhZnRlciI6IlJFQURNRS5tZCJ9"
+      }
+    },
+    {
+      "method": "file_read",
+      "permission": "read",
+      "mutating": false,
+      "request": {
+        "workspace_id": "11111111-2222-3333-4444-555555555555",
+        "path": "README.md"
+      },
+      "response": {
+        "url": "https://linco.example/v1/bulk",
+        "authorization_scheme": "LincoCapability",
+        "capability": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "expires_in_ms": 300000
+      }
+    },
+    {
+      "method": "file_write",
+      "permission": "write",
+      "mutating": false,
+      "request": {
+        "workspace_id": "11111111-2222-3333-4444-555555555555",
+        "path": "README.md",
+        "content_length": 18,
+        "expected_revision": "\"sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\""
+      },
+      "response": {
+        "url": "https://linco.example/v1/upload",
+        "method": "PUT",
+        "authorization_scheme": "LincoCapability",
+        "capability": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "if_match": "\"sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"",
+        "content_length": 18,
+        "max_bytes": 8388608,
+        "expires_in_ms": 60000
+      }
+    },
+    {
+      "method": "preview_resolve",
+      "permission": "read",
+      "mutating": false,
+      "request": {
+        "workspace_id": "11111111-2222-3333-4444-555555555555",
+        "path": "dist/index.html"
+      },
+      "response": {
+        "bootstrap_url": "https://linco.example/v1/preview/bootstrap",
+        "authorization_scheme": "LincoCapability",
+        "capability": "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
+        "expires_in_ms": 60000
+      }
+    }
+  ]
+}

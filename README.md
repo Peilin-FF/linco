@@ -1,58 +1,45 @@
-## 这是一款全新的Vibe Coding产品
+# Linco
 
----
+Linco 是一个面向 iPhone 的原生远程开发客户端。iPhone 直接连接部署在 Linux 服务器上的 `linco-server`，无需 SSH 会话，也不需要常驻桌面中转程序。
 
-## Linco 插件(`vendor/HTML-VibeCoding/plugins/`)
+正式发布路径只有三部分：
 
-Linco 的若干能力由随项目 vendored 的 Claude Code 插件提供。它们曾是一个单体插件,现已拆成**三个独立插件**,各管一摊、可单独安装:
+- `ios/`：iOS 17+ 原生 SwiftUI App，包含安全扫码配对、会话管理、低延迟终端、文件编辑和隔离预览。
+- `apps/linco-server/`：Linux 无界面守护进程，负责鉴权、PTY 会话、文件能力授权与预览。
+- `crates/`：跨端二进制协议和可测试的终端/工作区核心。
 
-| 插件 | 作用 |
-|---|---|
-| **linco-html** | 让 claude 默认把"实质性产物"产出为**自包含 HTML**(写到 `当前cwd/artifacts/`),并提供 notebook 渲染引擎(KaTeX、可编辑单元格、表格)。**Linco 预览引擎资源(`assets/`)也在这个插件下**,预览功能依赖它。 |
-| **linco-task-monitor** | 注入"后台长任务用 `-u` + 重定向到项目内 `.log` + 后台 `&`"的工作流指令,让训练/评测等后台任务被 Linco 终端的监控面板实时捕获显示。纯说明,无副作用。 |
-| **linco-shadow-diff** | 「本轮 agent 改动」可视化:用独立影子 git(与项目 `.git` 无关)追踪每轮对话改了哪些文件,Linco 文件树标 A/M/D、点开显红绿 diff。注入说明 + 提供 `shadow.sh` CLI(`begin`/`changed`/`diff`/`status`)供 agent 主动调用。 |
+## 为什么响应快
 
-每个插件各有自己的 SessionStart 钩子,会话启动时全部触发、互不干扰。
+- 终端使用独立的交互 WebSocket，控制消息不会阻塞输入和输出。
+- 原始终端字节使用 16-byte 固定头二进制帧传输，不经过 Base64。
+- 文件和预览走带 Range/ETag 的 HTTPS，不占用实时通道。
+- 服务端始终排空 PTY 并保留有界重放环；iPhone 断线重连后按绝对偏移补齐，避免重复和缺口。
+- WebSocket 禁用大块聚合等待，TCP 开启 `TCP_NODELAY`。
 
-### 几个要点
-- **产物目录** = claude 启动时 cwd 下的 `artifacts/`(不是固定根目录)。可选 `HTML_VIBE_ARTIFACTS_DIR=/abs/path` 钉死(一般不用)。
-- Linco 的预览**不依赖** linco-html 自带的 Python 服务器(`artifacts_server.py`)——Linco 自己在本机起 HTTP 服务器、复刻了 `/__assets/` 与目录首页;它只需要 linco-html 的 `assets/` 引擎资源(见 `src-tauri/src/preview.rs`,优先 `linco-html/assets`,兼容旧的 `html-vibe/assets`)。
-- **shadow diff 大多数时候是全自动的**:用户发消息 → Linco 自动拍基线 → 改文件 → 文件树标记/diff 自动出现。`shadow.sh` 只是给 agent 主动查看/触发用的补充入口。
+## 安全边界
 
-### 安装(关键:装在 claude 实际运行的机器上)
+- 二维码固定服务器 Ed25519 身份；每次握手都必须验证服务端签名。
+- iPhone 使用 Secure Enclave P-256 私钥，私钥不可导出。
+- 配对密钥和 HTTP capability 均为短时、最小权限凭证；上传与预览引导凭证只能消费一次，下载凭证仅在有效期内复用，且凭证不会出现在 URL 或日志中。
+- 文件写入使用强 SHA-256 ETag、`If-Match` 和同目录原子替换；服务端会串行化同一路径的 Linco 提交，并在最终版本不匹配时拒绝覆盖。工作区内其他进程不参与这把跨请求锁，具体边界见部署文档。
+- 服务端只允许访问显式配置的工作区，并拒绝绝对路径、`..` 与符号链接逃逸。
 
-claude 在哪运行,插件就装在哪。Linco 让 claude **跑在远程集群**,所以插件要装到远程服务器(本地用 claude 时则装本地)。Claude Code 插件 = 放到 `~/.claude/plugins/<插件名>/` 即可加载。
+## 本地验证
 
-**本地安装(三个都软链,改 vendor 即生效):**
-```bash
-P=/Users/peilinfeng/linco/vendor/HTML-VibeCoding/plugins
-for p in linco-html linco-task-monitor linco-shadow-diff; do
-  ln -sfn "$P/$p" ~/.claude/plugins/"$p"
-done
+Rust 工作区固定用 Rust 1.85.0 验证：
+
+```sh
+cargo +1.85.0 fmt --all -- --check
+cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo +1.85.0 test --workspace --all-targets --all-features --locked
 ```
 
-**远程集群安装(在每台要用的服务器上,从 Linco 所在 Mac 执行):**
-```bash
-P=/Users/peilinfeng/linco/vendor/HTML-VibeCoding/plugins
-ssh <host> 'mkdir -p ~/.claude/plugins'
-for p in linco-html linco-task-monitor linco-shadow-diff; do
-  rsync -a "$P/$p/" <host>:~/.claude/plugins/"$p"/
-done
+iPhone 工程由 XcodeGen 2.45.4 从 `ios/project.yml` 生成。具体构建方式见 [`ios/README.md`](ios/README.md)，Linux 正式部署见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)，正式发布门禁见 [`docs/release.md`](docs/release.md)。
+
+## 支持的正式拓扑
+
+```text
+iPhone ── HTTPS/WSS ── Caddy ── loopback HTTP/WS ── linco-server ── PTY / workspace
 ```
 
-装好后**重开一个 claude 会话**(SessionStart 钩子才会触发)即可生效。
-
-### 校验已安装
-```bash
-# 本地(三个 hook 都应存在)
-ls ~/.claude/plugins/linco-html/hooks/html-session-start.sh \
-   ~/.claude/plugins/linco-task-monitor/hooks/task-monitor-session-start.sh \
-   ~/.claude/plugins/linco-shadow-diff/hooks/shadow.sh
-# 远程同理:ssh <host> 'ls ~/.claude/plugins/linco-*/hooks/'
-```
-
-### 升级
-改了 `vendor/HTML-VibeCoding/plugins/` 后:本地软链方式自动生效;拷贝/远程方式重跑上面的 `rsync` 即可。
-
-> 兼容性:`preview.rs` 仍保留对旧插件名 `html-vibe/assets` 的回退,已部署旧插件的机器预览不会立即失效;但要用上拆分后的三插件,需按上面重新软链/rsync 到 `linco-*`。
-
+公网部署必须由 Caddy（或等价的可信 TLS 终止层）提供 HTTPS/WSS。`linco-server` 默认只监听 `127.0.0.1:7337`，不应把明文端口暴露到公网。

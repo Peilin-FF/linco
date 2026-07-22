@@ -1,0 +1,120 @@
+name: Linco
+
+options:
+  bundleIdPrefix: app.linco
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Release: Config/Release.xcconfig
+
+packages:
+  LincoCore:
+    path: Packages/LincoCore
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    exactVersion: 1.14.0
+  Runestone:
+    url: https://github.com/simonbs/Runestone.git
+    exactVersion: 0.5.2
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages.git
+    exactVersion: 0.1.10
+
+targets:
+  Linco:
+    type: application
+    platform: iOS
+    sources:
+      - path: LincoApp
+        excludes:
+          - "**/*Tests.swift"
+    resources:
+      - path: Resources/Assets.xcassets
+      - path: Resources/PrivacyInfo.xcprivacy
+    info:
+      path: Resources/Info.plist
+    entitlements:
+      path: Resources/Linco.entitlements
+    dependencies:
+      - package: LincoCore
+      - package: SwiftTerm
+      - package: Runestone
+      - package: TreeSitterLanguages
+        product: TreeSitterBashRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterCSSRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterHTMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJavaScriptRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterJSONRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterMarkdownRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterPythonRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterRustRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterSwiftRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterTOMLRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterTSXRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterTypeScriptRunestone
+      - package: TreeSitterLanguages
+        product: TreeSitterYAMLRunestone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.linco.iphone
+        PRODUCT_NAME: Linco
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        SWIFT_EMIT_LOC_STRINGS: YES
+
+  LincoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: LincoAppTests
+    dependencies:
+      - target: Linco
+      - package: LincoCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.linco.iphone.tests
+        GENERATE_INFOPLIST_FILE: YES
+
+  LincoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: LincoUITests
+    dependencies:
+      - target: Linco
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.linco.iphone.uitests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Linco:
+    build:
+      targets:
+        Linco: all
+        LincoTests: [test]
+        LincoUITests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - LincoTests
+        - LincoUITests

@@ -1,0 +1,17 @@
+[package]
+name = "linco-protocol"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+rust-version.workspace = true
+description = "Versioned low-latency wire protocol shared by Linco Server and native clients"
+
+[dependencies]
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
+
+[dev-dependencies]
+proptest = "1"

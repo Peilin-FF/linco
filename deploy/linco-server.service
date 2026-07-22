@@ -1,0 +1,45 @@
+[Unit]
+Description=Linco native iPhone companion daemon
+Documentation=https://github.com/Peilin-FF/linco/blob/main/docs/DEPLOYMENT.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=30s
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/linco-server/env
+ExecStart=%h/.local/bin/linco-server serve
+WorkingDirectory=%h
+
+Restart=on-failure
+RestartSec=1s
+TimeoutStartSec=15s
+TimeoutStopSec=30s
+KillMode=mixed
+
+# Keep the user's workspaces, CLI credentials, network, and PTY devices available while
+# denying service-level privilege escalation and access to host administration surfaces.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+LimitCORE=0
+LimitNOFILE=65536
+TasksMax=512
+
+[Install]
+WantedBy=default.target

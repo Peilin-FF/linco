@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "apps/linco-server",
+    "crates/linco-core",
+    "crates/linco-protocol",
+]
+exclude = ["src-tauri"]
+default-members = [
+    "apps/linco-server",
+    "crates/linco-core",
+    "crates/linco-protocol",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+rust-version = "1.85"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

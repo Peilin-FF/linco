@@ -1,0 +1,38 @@
+[package]
+name = "linco-server"
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+rust-version.workspace = true
+description = "Linux headless daemon for the Linco iPhone client"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", features = ["http1", "http2", "json", "tokio", "ws"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+ed25519-dalek = "2"
+futures-util = "0.3"
+hmac = "0.12"
+http-body-util = "0.1"
+http = "1"
+linco-core = { path = "../../crates/linco-core" }
+linco-protocol = { path = "../../crates/linco-protocol" }
+mime_guess = "2"
+p256 = { version = "0.13", features = ["ecdsa"] }
+percent-encoding = "2"
+qrcode = { version = "0.14", default-features = false }
+rand = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1", features = ["serde", "v4", "v5"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

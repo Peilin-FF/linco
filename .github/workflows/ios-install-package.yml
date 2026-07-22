@@ -1,0 +1,159 @@
+name: iPhone Install Package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iphone-install-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-ipa:
+    name: Signed registered-device IPA
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 45
+    environment: ios-signing
+    env:
+      XCODEGEN_VERSION: 2.45.4
+      XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode 26 and iOS 26 SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcode_app="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = []
+          for path in Path("/Applications").glob("Xcode_*.app"):
+              match = re.fullmatch(r"Xcode_(\d+(?:\.\d+)*)\.app", path.name)
+              if not match:
+                  continue
+              version = tuple(int(part) for part in match.group(1).split("."))
+              if version[0] >= 26:
+                  candidates.append((version, str(path)))
+          if candidates:
+              print(max(candidates)[1])
+          PY
+          )"
+          if [[ -z "$xcode_app" ]]; then
+            echo "::error::The runner does not contain Xcode 26 or newer."
+            exit 1
+          fi
+          sudo xcode-select --switch "$xcode_app/Contents/Developer"
+          xcodebuild -version
+          test "$(xcodebuild -version | awk '/^Xcode / { split($2, version, "."); print version[1]; exit }')" -ge 26
+          test "$(xcrun --sdk iphoneos --show-sdk-version | cut -d. -f1)" -ge 26
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          destination="$RUNNER_TEMP/xcodegen-dist"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  ${archive}" | shasum -a 256 --check
+          ditto -x -k "$archive" "$destination"
+          echo "$destination/xcodegen/bin" >> "$GITHUB_PATH"
+          "$destination/xcodegen/bin/xcodegen" --version | grep -F "$XCODEGEN_VERSION"
+
+      - name: Build, export, and verify registered-device IPA
+        id: package
+        shell: bash
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+          IOS_DEVICE_UDID: ${{ secrets.IOS_DEVICE_UDID }}
+          IOS_SIGNING_IDENTITY: ${{ secrets.IOS_SIGNING_IDENTITY }}
+          IOS_BUILD_NUMBER: ${{ github.run_number }}
+          LINCO_OUTPUT_DIR: ${{ github.workspace }}/artifacts/iphone
+        run: bash ios/Scripts/build-signed-ipa.sh
+
+      - name: Encrypt install package for private delivery
+        id: encrypted_package
+        shell: bash
+        env:
+          IPA_PATH: ${{ steps.package.outputs.ipa_path }}
+          IPA_CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+          IOS_ARTIFACT_PASSWORD: ${{ secrets.IOS_ARTIFACT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ ${#IOS_ARTIFACT_PASSWORD} -lt 20 ]]; then
+            echo "::error::IOS_ARTIFACT_PASSWORD must be a random secret of at least 20 characters."
+            exit 2
+          fi
+          case "$IPA_PATH" in
+            "$GITHUB_WORKSPACE"/artifacts/iphone/*.ipa) ;;
+            *) echo "::error::Unexpected IPA output path."; exit 2 ;;
+          esac
+          case "$IPA_CHECKSUM_PATH" in
+            "$GITHUB_WORKSPACE"/artifacts/iphone/*.ipa.sha256) ;;
+            *) echo "::error::Unexpected checksum output path."; exit 2 ;;
+          esac
+          test -f "$IPA_PATH"
+          test -f "$IPA_CHECKSUM_PATH"
+
+          plaintext_archive="$RUNNER_TEMP/Linco-install-package.tar.gz"
+          encrypted_dir="$GITHUB_WORKSPACE/artifacts/encrypted"
+          encrypted_path="$encrypted_dir/Linco-${GITHUB_RUN_NUMBER}-adhoc.tar.gz.enc"
+          mkdir -p "$encrypted_dir"
+          tar -czf "$plaintext_archive" \
+            -C "$(dirname "$IPA_PATH")" \
+            "$(basename "$IPA_PATH")" \
+            "$(basename "$IPA_CHECKSUM_PATH")"
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000 -md sha256 \
+            -pass env:IOS_ARTIFACT_PASSWORD \
+            -in "$plaintext_archive" \
+            -out "$encrypted_path"
+          chmod 0600 "$encrypted_path"
+          (
+            cd "$encrypted_dir"
+            shasum -a 256 "$(basename "$encrypted_path")" > "$(basename "$encrypted_path").sha256"
+          )
+          rm -f -- "$plaintext_archive" "$IPA_PATH" "$IPA_CHECKSUM_PATH"
+
+          printf 'encrypted_path=%s\n' "$encrypted_path" >> "$GITHUB_OUTPUT"
+          printf 'encrypted_checksum_path=%s\n' "$encrypted_path.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Remove any plaintext package material
+        if: always()
+        shell: bash
+        env:
+          IPA_PATH: ${{ steps.package.outputs.ipa_path }}
+          IPA_CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+        run: |
+          set -euo pipefail
+          for candidate in "$IPA_PATH" "$IPA_CHECKSUM_PATH"; do
+            case "$candidate" in
+              "$GITHUB_WORKSPACE"/artifacts/iphone/*) rm -f -- "$candidate" ;;
+              "") ;;
+              *) echo "Refusing to remove unexpected path: $candidate" >&2 ;;
+            esac
+          done
+          rm -f -- "$RUNNER_TEMP/Linco-install-package.tar.gz"
+
+      - name: Upload encrypted install package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Linco-iPhone-${{ github.run_number }}
+          path: |
+            ${{ steps.encrypted_package.outputs.encrypted_path }}
+            ${{ steps.encrypted_package.outputs.encrypted_checksum_path }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

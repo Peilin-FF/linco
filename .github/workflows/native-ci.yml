@@ -1,0 +1,294 @@
+name: Native CI
+
+on:
+  push:
+    branches:
+      - main
+      - native-iphone-rc
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  release-metadata:
+    name: Release metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      CADDY_VERSION: 2.11.4
+      CADDY_SHA512: 8220d1f013b6f27510247b2360c9e0ca9f018feebd82515f07635318b34ff9777ccc8fd0b6e6f2486ce3a33fe389fbb7db12d05baa474f4587509fb4f5ebf1c9
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Require aligned native versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' ios/Config/Base.xcconfig)"
+          build_number="$(sed -nE 's/^[[:space:]]*CURRENT_PROJECT_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' ios/Config/Base.xcconfig)"
+          [[ "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$build_number" =~ ^[1-9][0-9]*$ ]]
+
+          manifests=(
+            apps/linco-server/Cargo.toml
+            crates/linco-core/Cargo.toml
+            crates/linco-protocol/Cargo.toml
+          )
+          for manifest in "${manifests[@]}"; do
+            package_version="$(sed -nE 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' "$manifest" | head -n 1)"
+            if [[ "$package_version" != "$app_version" ]]; then
+              echo "::error file=${manifest}::package version ${package_version:-<missing>} does not match iOS MARKETING_VERSION $app_version"
+              exit 1
+            fi
+          done
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$app_version" ]]; then
+            echo "::error::release tag $GITHUB_REF_NAME does not match native version v$app_version"
+            exit 1
+          fi
+
+          echo "Validated native version $app_version (iOS build $build_number)."
+
+      - name: Validate systemd user unit
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0755 "$HOME/.local/bin" "$HOME/.config/linco-server"
+          install -m 0755 /bin/true "$HOME/.local/bin/linco-server"
+          install -m 0600 deploy/linco-server.env.example "$HOME/.config/linco-server/env"
+          systemd-analyze --user verify deploy/linco-server.service
+
+      - name: Validate pinned Caddy configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/caddy.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
+          echo "${CADDY_SHA512}  ${archive}" | shasum -a 512 --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP" caddy
+          "$RUNNER_TEMP/caddy" adapt --config deploy/Caddyfile --adapter caddyfile --validate >/dev/null
+
+  rust:
+    name: Rust workspace
+    needs: release-metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust 1.85 with lint components
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          toolchain: 1.85.0
+          components: rustfmt, clippy
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: . -> target
+
+      - name: Check formatting
+        run: cargo +1.85.0 fmt --all -- --check
+
+      - name: Lint all targets
+        run: cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Test workspace
+        run: cargo +1.85.0 test --workspace --all-targets --all-features --locked
+
+      - name: Build release daemon
+        run: cargo +1.85.0 build --release -p linco-server --locked
+
+  ios:
+    name: Native iOS
+    needs: release-metadata
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      XCODEGEN_VERSION: 2.45.4
+      XCODEGEN_SHA256: 090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bdbef
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Select an App Store eligible Apple toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xcode_app="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = []
+          for path in Path("/Applications").glob("Xcode_*.app"):
+              match = re.fullmatch(r"Xcode_(\d+(?:\.\d+)*)\.app", path.name)
+              if not match:
+                  continue
+              version = tuple(int(part) for part in match.group(1).split("."))
+              if version[0] >= 26:
+                  candidates.append((version, str(path)))
+          if candidates:
+              print(max(candidates)[1])
+          PY
+          )"
+          if [[ -z "$xcode_app" ]]; then
+            echo "::error::The runner does not contain Xcode 26 or newer."
+            exit 1
+          fi
+          sudo xcode-select --switch "$xcode_app/Contents/Developer"
+
+          xcode_version="$(xcodebuild -version | awk '/^Xcode / { print $2; exit }')"
+          ios_sdk_version="$(xcrun --sdk iphoneos --show-sdk-version)"
+          xcode_major="${xcode_version%%.*}"
+          ios_sdk_major="${ios_sdk_version%%.*}"
+          if (( xcode_major < 26 || ios_sdk_major < 26 )); then
+            echo "::error::App Store builds require Xcode 26+ and the iOS 26+ SDK; found Xcode $xcode_version / iOS SDK $ios_sdk_version."
+            exit 1
+          fi
+
+          xcodebuild -version
+          swift --version
+          echo "Using iOS SDK $ios_sdk_version."
+
+      - name: Install pinned XcodeGen
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          destination="$RUNNER_TEMP/xcodegen-dist"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  ${archive}" | shasum -a 256 --check
+          ditto -x -k "$archive" "$destination"
+          echo "$destination/xcodegen/bin" >> "$GITHUB_PATH"
+          "$destination/xcodegen/bin/xcodegen" --version | grep -F "$XCODEGEN_VERSION"
+
+      - name: Test LincoCore
+        run: swift test --package-path ios/Packages/LincoCore --parallel
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate --spec project.yml
+
+      - name: Install verified Swift package lock
+        run: bash ios/Scripts/install-package-lock.sh
+
+      - name: Resolve only locked Swift packages
+        run: >-
+          xcodebuild
+          -project ios/Linco.xcodeproj
+          -scheme Linco
+          -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages"
+          -disableAutomaticPackageResolution
+          -onlyUsePackageVersionsFromResolvedFile
+          -resolvePackageDependencies
+
+      - name: Select an available iPhone simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          simulator_udid="$(python3 - <<'PY'
+          import json
+          import subprocess
+
+          payload = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "simctl", "list", "devices", "available", "-j"],
+                  text=True,
+              )
+          )
+          runtimes = [
+              key
+              for key in payload.get("devices", {})
+              if key.startswith("com.apple.CoreSimulator.SimRuntime.iOS-")
+          ]
+          for runtime in sorted(runtimes, reverse=True):
+              for device in payload["devices"][runtime]:
+                  if device.get("isAvailable", True) and device.get("name", "").startswith("iPhone"):
+                      print(device["udid"])
+                      raise SystemExit(0)
+          raise SystemExit("No available iPhone simulator is installed on the runner")
+          PY
+          )"
+          echo "IOS_SIMULATOR_UDID=$simulator_udid" >> "$GITHUB_ENV"
+          xcrun simctl boot "$simulator_udid" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_udid" -b
+
+      - name: Build iPhone app without code signing
+        run: >-
+          xcodebuild
+          -project ios/Linco.xcodeproj
+          -scheme Linco
+          -configuration Debug
+          -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/LincoDerivedData"
+          -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages"
+          -disableAutomaticPackageResolution
+          -onlyUsePackageVersionsFromResolvedFile
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=
+          COMPILER_INDEX_STORE_ENABLE=NO
+          build
+
+      - name: Build Release app for the iPhone device SDK
+        run: >-
+          xcodebuild
+          -project ios/Linco.xcodeproj
+          -scheme Linco
+          -configuration Release
+          -sdk iphoneos
+          -destination 'generic/platform=iOS'
+          -derivedDataPath "$RUNNER_TEMP/LincoReleaseDerivedData"
+          -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages"
+          -disableAutomaticPackageResolution
+          -onlyUsePackageVersionsFromResolvedFile
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=
+          COMPILER_INDEX_STORE_ENABLE=NO
+          build
+
+      - name: Run iPhone unit and UI tests
+        run: >-
+          xcodebuild
+          -project ios/Linco.xcodeproj
+          -scheme Linco
+          -configuration Debug
+          -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_UDID}"
+          -derivedDataPath "$RUNNER_TEMP/LincoDerivedData"
+          -clonedSourcePackagesDirPath "$RUNNER_TEMP/LincoSourcePackages"
+          -disableAutomaticPackageResolution
+          -onlyUsePackageVersionsFromResolvedFile
+          -parallel-testing-enabled NO
+          CODE_SIGNING_ALLOWED=NO
+          CODE_SIGNING_REQUIRED=NO
+          CODE_SIGN_IDENTITY=
+          COMPILER_INDEX_STORE_ENABLE=NO
+          test
