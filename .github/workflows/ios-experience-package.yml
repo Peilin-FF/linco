@@ -7,7 +7,7 @@ permissions:
   actions: read
   artifact-metadata: write
   attestations: write
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -137,6 +137,285 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: ${{ steps.package.outputs.ipa_path }}
+
+      - name: Publish digest-verified iPhone experience pre-release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_PATH: ${{ steps.package.outputs.ipa_path }}
+          IPA_CHECKSUM_PATH: ${{ steps.package.outputs.checksum_path }}
+          IPA_MANIFEST_PATH: ${{ steps.package.outputs.manifest_path }}
+          IPA_INSTRUCTIONS_PATH: ${{ steps.package.outputs.instructions_path }}
+          MARKETING_VERSION: ${{ steps.package.outputs.marketing_version }}
+          BUILD_NUMBER: ${{ steps.package.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null 2>&1
+          for candidate in "$IPA_PATH" "$IPA_CHECKSUM_PATH" "$IPA_MANIFEST_PATH" "$IPA_INSTRUCTIONS_PATH"; do
+            case "$candidate" in
+              "$GITHUB_WORKSPACE"/artifacts/iphone-experience/*) ;;
+              *) echo "::error::Unexpected release asset path: $candidate"; exit 2 ;;
+            esac
+            test -f "$candidate"
+          done
+          [[ "$MARKETING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$BUILD_NUMBER" =~ ^[1-9][0-9]*$ ]]
+
+          release_tag="iphone-experience-v${MARKETING_VERSION}-build-${BUILD_NUMBER}"
+          release_title="Linco iPhone Experience ${MARKETING_VERSION} (${BUILD_NUMBER})"
+          printf -v release_notes '%s\n\n%s\n\n%s\n%s\n%s\n' \
+            'Personal-device experience build. This IPA must be re-signed before installation.' \
+            'Verified Release / iphoneos / arm64 build; no Apple identity or provisioning profile is included.' \
+            "Source: ${GITHUB_SHA}" \
+            "Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            'Requirements: iOS 17+, Developer Mode, and local Personal Team or Ad Hoc signing.'
+
+          temporary_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$temporary_dir"' EXIT
+          tag_json="$temporary_dir/tag.json"
+          tag_error="$temporary_dir/tag.error"
+          release_json="$temporary_dir/release.json"
+          releases_json="$temporary_dir/releases.json"
+          missing_assets="$temporary_dir/missing-assets.txt"
+          assets=("$IPA_PATH" "$IPA_CHECKSUM_PATH" "$IPA_MANIFEST_PATH" "$IPA_INSTRUCTIONS_PATH")
+
+          optional_api_get() {
+            local endpoint="$1"
+            local destination="$2"
+            local error_file="$3"
+            local api_status
+            if gh api "$endpoint" > "$destination" 2> "$error_file"; then
+              return 0
+            else
+              api_status=$?
+            fi
+            if grep -Eq 'HTTP 404|status code: 404' "$error_file"; then
+              return 1
+            fi
+            cat "$error_file" >&2
+            exit "$api_status"
+          }
+
+          verify_release_assets() {
+            local metadata_path="$1"
+            local missing_path="$2"
+            shift 2
+            python3 - "$metadata_path" "$missing_path" "$release_tag" "$@" <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+
+          metadata_path, missing_path, expected_tag, *local_paths = sys.argv[1:]
+          with open(metadata_path, encoding="utf-8") as handle:
+              release = json.load(handle)
+
+          if release.get("tag_name") != expected_tag:
+              raise SystemExit("Release tag metadata does not match the requested tag")
+          if release.get("draft"):
+              raise SystemExit("Existing iPhone experience release must not be a draft")
+          if not release.get("prerelease"):
+              raise SystemExit("Existing iPhone experience release must remain a pre-release")
+
+          local_names = [os.path.basename(path) for path in local_paths]
+          if len(set(local_names)) != len(local_names):
+              raise SystemExit("Local release asset names must be unique")
+
+          remote_assets = release.get("assets") or []
+          unexpected = sorted(
+              str(asset.get("name"))
+              for asset in remote_assets
+              if asset.get("name") not in local_names
+          )
+          if unexpected:
+              raise SystemExit(
+                  "Release contains unexpected assets: " + ", ".join(unexpected)
+              )
+
+          missing = []
+          for path, name in zip(local_paths, local_names):
+              matches = [asset for asset in remote_assets if asset.get("name") == name]
+              if not matches:
+                  missing.append(path)
+                  continue
+              if len(matches) != 1:
+                  raise SystemExit(f"Release contains duplicate asset name: {name}")
+
+              size = os.path.getsize(path)
+              digest = "sha256:" + hashlib.sha256(open(path, "rb").read()).hexdigest()
+              remote = matches[0]
+              if remote.get("size") != size or remote.get("digest") != digest:
+                  raise SystemExit(
+                      f"Published release asset differs from the verified local file: {name}"
+                  )
+
+          with open(missing_path, "w", encoding="utf-8", newline="\n") as handle:
+              for path in missing:
+                  handle.write(path + "\n")
+          PY
+          }
+
+          find_release_by_tag() {
+            local pages_path="$1"
+            local metadata_path="$2"
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$pages_path"
+            python3 - "$pages_path" "$metadata_path" "$release_tag" <<'PY'
+          import json
+          import sys
+
+          pages_path, metadata_path, expected_tag = sys.argv[1:]
+          with open(pages_path, encoding="utf-8") as handle:
+              pages = json.load(handle)
+          releases = [release for page in pages for release in page]
+          matches = [release for release in releases if release.get("tag_name") == expected_tag]
+          if len(matches) > 1:
+              raise SystemExit("Multiple releases unexpectedly use the same experience tag")
+          if not matches:
+              with open(metadata_path, "w", encoding="utf-8", newline="\n") as handle:
+                  handle.write("{}\n")
+              print("missing:")
+              raise SystemExit(0)
+
+          release = matches[0]
+          release_id = release.get("id")
+          if not isinstance(release_id, int):
+              raise SystemExit("Experience release metadata has no numeric ID")
+          with open(metadata_path, "w", encoding="utf-8", newline="\n") as handle:
+              json.dump(release, handle, ensure_ascii=False)
+              handle.write("\n")
+          state = "draft" if release.get("draft") else "published"
+          print(f"{state}:{release_id}")
+          PY
+          }
+
+          validate_interrupted_draft() {
+            local metadata_path="$1"
+            python3 - \
+              "$metadata_path" \
+              "$release_tag" \
+              "$release_title" \
+              "$GITHUB_SHA" \
+              "$tag_exists" <<'PY'
+          import json
+          import sys
+
+          metadata_path, expected_tag, expected_title, expected_sha, tag_exists = sys.argv[1:]
+          with open(metadata_path, encoding="utf-8") as handle:
+              release = json.load(handle)
+          if release.get("tag_name") != expected_tag:
+              raise SystemExit("Interrupted draft tag does not match the requested release")
+          if not release.get("draft") or not release.get("prerelease"):
+              raise SystemExit("Only an interrupted pre-release draft may be recovered")
+          if release.get("name") != expected_title:
+              raise SystemExit("Interrupted draft title does not match this workflow")
+          if f"Source: {expected_sha}" not in (release.get("body") or ""):
+              raise SystemExit("Interrupted draft does not identify this source commit")
+          if tag_exists != "true" and release.get("target_commitish") != expected_sha:
+              raise SystemExit("Interrupted draft targets an unexpected source commit")
+          PY
+          }
+
+          tag_exists=false
+          if optional_api_get \
+            "repos/${GITHUB_REPOSITORY}/git/ref/tags/${release_tag}" \
+            "$tag_json" \
+            "$tag_error"; then
+            tag_exists=true
+            resolved_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq '.sha')"
+            if [[ "$resolved_tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::Existing experience tag resolves to an unexpected commit."
+              exit 2
+            fi
+          fi
+
+          release_record="$(find_release_by_tag "$releases_json" "$release_json")"
+          release_state="${release_record%%:*}"
+          release_id="${release_record#*:}"
+          release_exists=false
+          case "$release_state" in
+            draft)
+              validate_interrupted_draft "$release_json"
+              echo "Removing interrupted unpublished draft ${release_tag} before a clean retry."
+              gh api \
+                --method DELETE \
+                --silent \
+                "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+              ;;
+            published)
+              release_exists=true
+              if [[ "$tag_exists" != true ]]; then
+                echo "::error::Published experience release has no matching Git tag."
+                exit 2
+              fi
+              ;;
+            missing) ;;
+            *)
+              echo "::error::Unexpected experience release state: $release_state"
+              exit 2
+              ;;
+          esac
+
+          if [[ "$release_exists" == true ]]; then
+            verify_release_assets "$release_json" "$missing_assets" "${assets[@]}"
+            if [[ -s "$missing_assets" ]]; then
+              assets_to_upload=()
+              asset_count=0
+              while IFS= read -r missing_asset; do
+                if [[ -n "$missing_asset" ]]; then
+                  assets_to_upload+=("$missing_asset")
+                  asset_count=$((asset_count + 1))
+                fi
+              done < "$missing_assets"
+              if (( asset_count == 0 )); then
+                echo "::error::Missing-asset list could not be parsed."
+                exit 2
+              fi
+              gh release upload "$release_tag" \
+                "${assets_to_upload[@]}" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+          elif [[ "$tag_exists" == true ]]; then
+            gh release create "$release_tag" \
+              "${assets[@]}" \
+              --prerelease \
+              --verify-tag \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$release_tag" \
+              "${assets[@]}" \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --repo "$GITHUB_REPOSITORY"
+          fi
+
+          resolved_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq '.sha')"
+          if [[ "$resolved_tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Published experience tag resolves to an unexpected commit."
+            exit 2
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" > "$release_json"
+          verify_release_assets "$release_json" "$missing_assets" "${assets[@]}"
+          if [[ -s "$missing_assets" ]]; then
+            echo "::error::Published experience release is missing one or more assets."
+            exit 2
+          fi
+
+          release_url="$(python3 - "$release_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              print(json.load(handle)["html_url"])
+          PY
+          )"
+          printf 'release_url=%s\n' "$release_url" >> "$GITHUB_OUTPUT"
+          printf '### iPhone experience pre-release\n\n[%s](%s)\n' "$release_tag" "$release_url" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload iPhone experience package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

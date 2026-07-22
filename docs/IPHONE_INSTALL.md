@@ -30,8 +30,8 @@ AltStore 是第三方开源项目，不是 Apple 产品。它需要代表你向 
 ## 生成 Windows 真机体验包
 
 1. 打开 GitHub **Actions → iPhone Experience Package → Run workflow**。
-2. 选择 `main` 分支并运行。
-3. 下载 `Linco-iPhone-Experience-<run number>` artifact 并解压；包内同时附带版本清单、SHA-256 和离线安装说明。
+2. 选择 `main` 分支并运行。成功后会同时生成 14 天保留的 Actions artifact，以及明确标注为 Pre-release 的持久下载资产。
+3. 从 [Linco Releases](https://github.com/Peilin-FF/linco/releases) 打开对应的 **Linco iPhone Experience**，下载 `Linco-<version>-<build>-resignable.ipa`、同名 `.sha256`、JSON 版本清单和离线安装说明；也可以下载 `Linco-iPhone-Experience-<run number>` artifact。
 4. 用 PowerShell 验证 IPA；只有输出 `OK` 才继续：
 
 ```powershell

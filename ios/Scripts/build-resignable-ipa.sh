@@ -366,6 +366,8 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'checksum_path=%s\n' "$final_checksum" >> "$GITHUB_OUTPUT"
   printf 'manifest_path=%s\n' "$final_manifest" >> "$GITHUB_OUTPUT"
   printf 'instructions_path=%s\n' "$final_instructions" >> "$GITHUB_OUTPUT"
+  printf 'marketing_version=%s\n' "$marketing_version" >> "$GITHUB_OUTPUT"
+  printf 'build_number=%s\n' "$build_number" >> "$GITHUB_OUTPUT"
 fi
 
 echo "Validated re-signable iPhone package: $final_ipa"
