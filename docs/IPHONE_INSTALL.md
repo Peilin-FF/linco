@@ -61,15 +61,16 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -md sha256 \
   -in Linco-<run number>-adhoc.tar.gz.enc \
   -out Linco-install-package.tar.gz
 tar -xzf Linco-install-package.tar.gz
+shasum -a 256 -c ./*.ipa.sha256
 ```
 
-OpenSSL 会安全地提示输入 `IOS_ARTIFACT_PASSWORD`；不要把口令写在命令行参数或脚本里。解压后会得到签名 IPA 及其内部 SHA-256 校验文件。
+OpenSSL 会安全地提示输入 `IOS_ARTIFACT_PASSWORD`；不要把口令写在命令行参数或脚本里。解压后会得到签名 IPA 及其内部 SHA-256 校验文件；只有最后一条校验命令报告 `OK` 才继续安装。
 
 流水线会拒绝通配符 App ID、过期或非 Ad Hoc profile、错误 Team/Bundle ID、目标 UDID 不在 profile 中、证书不属于 profile、签名或 entitlements 不匹配，以及 Xcode/iOS SDK 低于 26 的构建机。证书只导入 runner 的临时钥匙串，任务结束时会删除；明文 IPA 会在上传前删除。
 
 ## 安装到手机
 
-测试 iPhone 必须包含在 Ad Hoc profile 中，并开启 Developer Mode。在 Mac 上使用 Xcode 的 **Devices and Simulators** 或 Apple Configurator 安装导出的 IPA。安装后先完成服务器扫码配对，再执行真机验收清单。
+测试 iPhone 必须运行 iOS 17.0 或更新版本、包含在 Ad Hoc profile 中，并开启 Developer Mode。在 Mac 上使用 Xcode 的 **Devices and Simulators** 或 Apple Configurator 安装导出的 IPA。安装后先完成服务器扫码配对，再执行真机验收清单。
 
 ## 真机验收最低清单
 
