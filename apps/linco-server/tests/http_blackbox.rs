@@ -1374,7 +1374,7 @@ async fn real_websocket_routes_pair_authenticate_and_revoke_blocked_lanes() {
     let nonreading_command = b"ping -n 30 127.0.0.1 >NUL\r\n".as_slice();
     #[cfg(target_os = "linux")]
     let nonreading_command =
-        b"trap '' HUP; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
+        b"trap '' HUP; stty -icanon -echo min 1 time 0 || exit 97; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
             .as_slice();
     #[cfg(all(not(windows), not(target_os = "linux")))]
     let nonreading_command = b"sleep 30\n".as_slice();
@@ -1398,6 +1398,27 @@ async fn real_websocket_routes_pair_authenticate_and_revoke_blocked_lanes() {
         }
         other => panic!("expected command input acknowledgement, got {other:?}"),
     }
+    #[cfg(target_os = "linux")]
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let replay = harness
+                .state
+                .terminal
+                .snapshot(stream_id, terminal_info.generation, 64 * 1024)
+                .await
+                .expect("snapshot Linux non-reading terminal readiness");
+            if replay
+                .data
+                .windows(b"LINCO-WATCHDOG-READY".len())
+                .any(|window| window == b"LINCO-WATCHDOG-READY")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Linux terminal did not enter noncanonical non-reading mode");
 
     // Model a fresh iPhone process: the output cursor may restart independently, but input must
     // begin at the server-authoritative offset. StreamOpened precedes Result on the same lane.

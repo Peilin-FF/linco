@@ -1346,7 +1346,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn input_watchdog_bounds_nonreading_real_pty_and_unblocks_resume() {
         let nonreading_command =
-            b"trap '' HUP; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
+            b"trap '' HUP; stty -icanon -echo min 1 time 0 || exit 97; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
                 .to_vec();
         let (_temp, backend, info, stream_id) =
             exercise_linux_nonreading_pty(nonreading_command, b"LINCO-WATCHDOG-READY").await;
@@ -1388,7 +1388,7 @@ mod tests {
                     .build()
                     .unwrap();
                 let (escaped_process, temp) = runtime.block_on(async {
-                    let command = b"trap '' HUP; setsid sh -c 'trap \"\" HUP; printf \"LINCO-ESCAPED-PID-%s\\n\" \"$$\"; printf \"LINCO-ESCAPED-%s\\n\" ACTIVE; exec sleep 120' & (exec sleep 300)\n".to_vec();
+                    let command = b"trap '' HUP; stty -icanon -echo min 1 time 0 || exit 97; setsid sh -c 'trap \"\" HUP; printf \"LINCO-ESCAPED-PID-%s\\n\" \"$$\"; printf \"LINCO-ESCAPED-%s\\n\" ACTIVE; exec sleep 120' & (exec sleep 300)\n".to_vec();
                     let (temp, backend, info, stream_id) = exercise_linux_nonreading_pty(
                         command,
                         b"LINCO-ESCAPED-ACTIVE",
