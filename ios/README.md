@@ -44,7 +44,7 @@ The checked-in source of truth is `project.yml`; do not commit a generated `.xco
 
 The Secure Enclave pairing path must additionally be verified on a physical iPhone; the simulator is suitable for protocol, URL construction, reconnect/heartbeat timing, and UI tests.
 
-For a signed registered-device IPA, use the protected `iPhone Install Package` workflow and follow [`../docs/IPHONE_INSTALL.md`](../docs/IPHONE_INSTALL.md). Signing material must remain in the `ios-signing` GitHub environment and must never be committed.
+For a Windows-side, locally re-signable Release IPA, use the `iPhone Experience Package` workflow. For a signed registered-device IPA, use the protected `iPhone Install Package` workflow. Follow [`../docs/IPHONE_INSTALL.md`](../docs/IPHONE_INSTALL.md) for both routes. Signing material must remain in the `ios-signing` GitHub environment and must never be committed.
 
 ## Dependency lock
 
