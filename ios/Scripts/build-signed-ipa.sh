@@ -41,6 +41,7 @@ ios_dir="$(cd -- "$script_dir/.." && pwd)"
 repo_root="$(cd -- "$ios_dir/.." && pwd)"
 output_dir="${LINCO_OUTPUT_DIR:-$repo_root/artifacts/iphone}"
 build_number="${IOS_BUILD_NUMBER:-1}"
+marketing_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' "$ios_dir/Config/Base.xcconfig")"
 team_id="$IOS_TEAM_ID"
 bundle_id="$IOS_BUNDLE_ID"
 device_udid="$IOS_DEVICE_UDID"
@@ -50,6 +51,10 @@ export_method="${IOS_EXPORT_METHOD:-release-testing}"
 
 if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
   echo "IOS_BUILD_NUMBER must be a positive integer." >&2
+  exit 2
+fi
+if [[ ! "$marketing_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Unable to determine a valid MARKETING_VERSION." >&2
   exit 2
 fi
 if [[ "$export_method" != "release-testing" ]]; then
@@ -88,6 +93,7 @@ export_path="$temporary_root/export"
 derived_data="$temporary_root/DerivedData"
 package_cache="$temporary_root/SourcePackages"
 export_options="$temporary_root/ExportOptions.plist"
+versioned_info_plist="$temporary_root/Info.plist"
 verification_dir="$temporary_root/verify"
 embedded_profile_plist="$temporary_root/embedded-profile.plist"
 signed_entitlements_plist="$temporary_root/signed-entitlements.plist"
@@ -114,6 +120,25 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+python3 - \
+  "$ios_dir/Resources/Info.plist" \
+  "$versioned_info_plist" \
+  "$marketing_version" \
+  "$build_number" \
+  "$bundle_id" <<'PY'
+import plistlib
+import sys
+
+source, destination, marketing_version, build_number, bundle_id = sys.argv[1:]
+with open(source, "rb") as handle:
+    info = plistlib.load(handle)
+info["CFBundleShortVersionString"] = marketing_version
+info["CFBundleVersion"] = build_number
+info["CFBundleIdentifier"] = bundle_id
+with open(destination, "wb") as handle:
+    plistlib.dump(info, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+PY
 
 decode_secret() {
   environment_name="$1"
@@ -281,7 +306,9 @@ xcodebuild archive \
   -disableAutomaticPackageResolution \
   -onlyUsePackageVersionsFromResolvedFile \
   DEVELOPMENT_TEAM="$team_id" \
+  LINCO_INFOPLIST_FILE="$versioned_info_plist" \
   PRODUCT_BUNDLE_IDENTIFIER="$bundle_id" \
+  MARKETING_VERSION="$marketing_version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY="$signing_identity_hash" \
@@ -338,9 +365,11 @@ if [[ "$exported_identity_hash" != "$signing_identity_hash" ]]; then
   exit 1
 fi
 actual_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Info.plist")"
+actual_marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist")"
 actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist")"
-if [[ "$actual_bundle" != "$bundle_id" || "$actual_build" != "$build_number" ]]; then
-  echo "Exported application metadata does not match the requested bundle/build." >&2
+if [[ "$actual_bundle" != "$bundle_id" || "$actual_marketing_version" != "$marketing_version" || \
+      "$actual_build" != "$build_number" ]]; then
+  echo "Exported application metadata mismatch: expected bundle '$bundle_id' / version '$marketing_version' / build '$build_number'; found bundle '$actual_bundle' / version '$actual_marketing_version' / build '$actual_build'." >&2
   exit 1
 fi
 
@@ -385,7 +414,6 @@ if expected_device.upper() not in devices:
     raise SystemExit("Embedded profile does not authorize IOS_DEVICE_UDID")
 PY
 
-marketing_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' "$ios_dir/Config/Base.xcconfig")"
 mkdir -p -- "$output_dir"
 final_ipa="$output_dir/Linco-${marketing_version}-${build_number}-adhoc.ipa"
 install -m 0600 "$ipa_path" "$final_ipa"

@@ -130,7 +130,52 @@ jobs:
         env:
           IOS_BUILD_NUMBER: ${{ github.run_number }}
           LINCO_OUTPUT_DIR: ${{ github.workspace }}/artifacts/iphone-experience
-        run: bash ios/Scripts/build-resignable-ipa.sh
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/linco-iphone-experience-package.log"
+          set +e
+          bash ios/Scripts/build-resignable-ipa.sh 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            python3 - "$log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          lines = [ansi.sub("", line) for line in lines]
+          markers = (
+              "error:",
+              "failed",
+              "failure",
+              "mismatch",
+              "unexpected",
+              "unable to",
+              "does not",
+              "not signed",
+          )
+          indexes = [
+              index
+              for index, line in enumerate(lines)
+              if any(marker in line.lower() for marker in markers)
+          ]
+          selected_indexes = []
+          for index in indexes:
+              selected_indexes.extend(range(max(0, index - 2), min(len(lines), index + 3)))
+          selected_indexes = list(dict.fromkeys(selected_indexes))[-35:]
+          selected = (
+              [lines[index] for index in selected_indexes]
+              if selected_indexes
+              else lines[-35:]
+          )
+          message = "\n".join(line[:900] for line in selected)[-3_700:]
+          escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=iPhone experience package failed::{escaped}")
+          PY
+            exit "$status"
+          fi
 
       - name: Attest IPA build provenance
         id: attest

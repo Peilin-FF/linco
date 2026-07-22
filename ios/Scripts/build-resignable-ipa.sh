@@ -21,6 +21,7 @@ repo_root="$(cd -- "$ios_dir/.." && pwd)"
 output_dir="${LINCO_OUTPUT_DIR:-$repo_root/artifacts/iphone-experience}"
 build_number="${IOS_BUILD_NUMBER:-1}"
 bundle_id="${IOS_BUNDLE_ID:-app.linco.iphone}"
+marketing_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' "$ios_dir/Config/Base.xcconfig")"
 
 if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
   echo "IOS_BUILD_NUMBER must be a positive integer." >&2
@@ -28,6 +29,10 @@ if [[ ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$bundle_id" =~ ^[A-Za-z0-9][A-Za-z0-9.-]+$ ]] || [[ "$bundle_id" == *"*"* ]]; then
   echo "IOS_BUNDLE_ID must be an explicit reverse-DNS identifier without wildcards." >&2
+  exit 2
+fi
+if [[ ! "$marketing_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Unable to determine a valid MARKETING_VERSION." >&2
   exit 2
 fi
 
@@ -119,6 +124,7 @@ derived_data="$temporary_root/DerivedData"
 package_cache="$temporary_root/SourcePackages"
 package_root="$temporary_root/package"
 verification_root="$temporary_root/verification"
+versioned_info_plist="$temporary_root/Info.plist"
 
 cleanup() {
   status=$?
@@ -130,6 +136,25 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+
+python3 - \
+  "$ios_dir/Resources/Info.plist" \
+  "$versioned_info_plist" \
+  "$marketing_version" \
+  "$build_number" \
+  "$bundle_id" <<'PY'
+import plistlib
+import sys
+
+source, destination, marketing_version, build_number, bundle_id = sys.argv[1:]
+with open(source, "rb") as handle:
+    info = plistlib.load(handle)
+info["CFBundleShortVersionString"] = marketing_version
+info["CFBundleVersion"] = build_number
+info["CFBundleIdentifier"] = bundle_id
+with open(destination, "wb") as handle:
+    plistlib.dump(info, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+PY
 
 (
   cd "$ios_dir"
@@ -157,7 +182,9 @@ xcodebuild \
   -clonedSourcePackagesDirPath "$package_cache" \
   -disableAutomaticPackageResolution \
   -onlyUsePackageVersionsFromResolvedFile \
+  LINCO_INFOPLIST_FILE="$versioned_info_plist" \
   PRODUCT_BUNDLE_IDENTIFIER="$bundle_id" \
+  MARKETING_VERSION="$marketing_version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   CODE_SIGNING_ALLOWED=NO \
   CODE_SIGNING_REQUIRED=NO \
@@ -172,14 +199,16 @@ if [[ ! -d "$app_path" || ! -f "$app_path/Info.plist" ]]; then
 fi
 
 actual_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Info.plist")"
+actual_marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_path/Info.plist")"
 actual_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_path/Info.plist")"
 minimum_ios="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$app_path/Info.plist")"
 platform_name="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$app_path/Info.plist")"
 executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Info.plist")"
 executable_path="$app_path/$executable_name"
 
-if [[ "$actual_bundle" != "$bundle_id" || "$actual_build" != "$build_number" ]]; then
-  echo "Built application metadata does not match the requested bundle/build." >&2
+if [[ "$actual_bundle" != "$bundle_id" || "$actual_marketing_version" != "$marketing_version" || \
+      "$actual_build" != "$build_number" ]]; then
+  echo "Built application metadata mismatch: expected bundle '$bundle_id' / version '$marketing_version' / build '$build_number'; found bundle '$actual_bundle' / version '$actual_marketing_version' / build '$actual_build'." >&2
   exit 1
 fi
 if [[ "$minimum_ios" != "17.0" || "$platform_name" != "iphoneos" ]]; then
@@ -219,12 +248,6 @@ if find "$app_path" -name embedded.mobileprovision -print -quit | grep -q .; the
 fi
 validate_resignable_code_tree "$app_path"
 
-marketing_version="$(sed -nE 's/^[[:space:]]*MARKETING_VERSION[[:space:]]*=[[:space:]]*([^[:space:]]+).*$/\1/p' "$ios_dir/Config/Base.xcconfig")"
-if [[ -z "$marketing_version" ]]; then
-  echo "Unable to determine MARKETING_VERSION." >&2
-  exit 1
-fi
-
 mkdir -p -- "$package_root/Payload" "$verification_root" "$output_dir"
 ditto "$app_path" "$package_root/Payload/Linco.app"
 
@@ -245,14 +268,16 @@ if [[ "$app_count" != "1" || ! -d "$verified_app" || ! -x "$verified_app/$execut
   exit 1
 fi
 verified_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$verified_app/Info.plist")"
+verified_marketing_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$verified_app/Info.plist")"
 verified_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$verified_app/Info.plist")"
 verified_minimum_ios="$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$verified_app/Info.plist")"
 verified_platform="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$verified_app/Info.plist")"
 verified_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$verified_app/Info.plist")"
-if [[ "$verified_bundle" != "$bundle_id" || "$verified_build" != "$build_number" || \
+if [[ "$verified_bundle" != "$bundle_id" || "$verified_marketing_version" != "$marketing_version" || \
+      "$verified_build" != "$build_number" || \
       "$verified_minimum_ios" != "17.0" || "$verified_platform" != "iphoneos" || \
       "$verified_executable" != "$executable_name" ]]; then
-  echo "Packaged IPA changed the verified application metadata." >&2
+  echo "Packaged IPA metadata mismatch: expected bundle '$bundle_id' / version '$marketing_version' / build '$build_number' / minimum iOS '17.0' / platform 'iphoneos' / executable '$executable_name'; found bundle '$verified_bundle' / version '$verified_marketing_version' / build '$verified_build' / minimum iOS '$verified_minimum_ios' / platform '$verified_platform' / executable '$verified_executable'." >&2
   exit 1
 fi
 verified_executable_path="$verified_app/$verified_executable"
