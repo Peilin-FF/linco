@@ -189,7 +189,32 @@ jobs:
           "$destination/xcodegen/bin/xcodegen" --version | grep -F "$XCODEGEN_VERSION"
 
       - name: Test LincoCore
-        run: swift test --package-path ios/Packages/LincoCore --parallel
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/linco-core-test.log"
+          set +e
+          swift test --package-path ios/Packages/LincoCore --parallel 2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            python3 - "$log" <<'PY'
+          from pathlib import Path
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          interesting = [
+              line
+              for line in lines
+              if "error:" in line.lower() or "fatal error" in line.lower()
+          ]
+          selected = (interesting or lines)[-30:]
+          message = "\n".join(line[:1000] for line in selected)
+          escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=LincoCore test failed::{escaped}")
+          PY
+            exit "$status"
+          fi
 
       - name: Generate Xcode project
         working-directory: ios
