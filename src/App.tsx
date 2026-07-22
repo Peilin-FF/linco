@@ -5,6 +5,7 @@ import {
   TerminalSquare,
   FolderTree,
   GitBranch,
+  PencilRuler,
   Settings as SettingsIcon,
   Plus,
   Activity,
@@ -19,6 +20,7 @@ import TerminalView, { type TerminalHandle } from './components/TerminalView'
 import ChatInput from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'
+import DrawingView from './components/DrawingView'
 import AgentTaskOutput from './components/AgentTaskOutput'
 import SessionRail, { type RailSession, type SessionStatus } from './components/SessionRail'
 import SessionHistory from './components/SessionHistory'
@@ -62,7 +64,7 @@ import { usageRecordTurn, type UsageAgentContext } from '@/lib/usage'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 
-type ViewId = 'chat' | 'terminal' | 'preview' | 'files' | 'git'
+type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'files' | 'git'
 
 const ENABLE_BACKGROUND_PREWARM = false
 
@@ -87,6 +89,7 @@ const VIEWS: { id: ViewId; labelKey: string; icon: typeof Eye }[] = [
   { id: 'chat', labelKey: 'view.chat', icon: MessagesSquare },
   { id: 'terminal', labelKey: 'view.terminal', icon: TerminalSquare },
   { id: 'preview', labelKey: 'view.preview', icon: Eye },
+  { id: 'drawing', labelKey: 'view.drawing', icon: PencilRuler },
   { id: 'files', labelKey: 'view.files', icon: FolderTree },
   { id: 'git', labelKey: 'view.git', icon: GitBranch }
 ]
@@ -481,7 +484,9 @@ export default function App(): JSX.Element {
   // 无活动会话时不留左栏空位。
   const hasActiveChat = chatSessions.some((s) => s.id === activeChatId)
   const chatSplitActive =
-    chatSplitOpen && hasActiveChat && (view === 'terminal' || view === 'preview')
+    chatSplitOpen &&
+    hasActiveChat &&
+    (view === 'terminal' || view === 'preview' || view === 'drawing')
 
   // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
   // 每个 连接+agent+工作目录 各一个会话:切到新项目/切 Codex=新会话(agent 在后台
@@ -939,6 +944,7 @@ export default function App(): JSX.Element {
           <button
             key={id}
             onClick={() => setView(id)}
+            title={t(labelKey)}
             className={`no-drag flex items-center gap-1.5 rounded-lg px-3 py-1 text-[13px] transition-colors ${
               id === view
                 ? 'bg-canvas text-ink shadow-sm'
@@ -946,7 +952,7 @@ export default function App(): JSX.Element {
             }`}
           >
             <Icon size={15} />
-            <span>{t(labelKey)}</span>
+            <span className="hidden min-[1080px]:inline">{t(labelKey)}</span>
             {/* 终端 tab:有 agent 后台任务在跑时显示绿点计数 */}
             {id === 'terminal' && tasks.length > 0 && (
               <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-semibold text-white">
@@ -956,7 +962,7 @@ export default function App(): JSX.Element {
           </button>
         ))}
         {/* 左分栏开关:终端/预览视图显示,放顶部视图栏(在视图按钮右边),不挡视图内工具栏。 */}
-        {(view === 'terminal' || view === 'preview') && (
+        {(view === 'terminal' || view === 'preview' || view === 'drawing') && (
           <button
             onClick={() => setChatSplitOpen((o) => !o)}
             title={chatSplitOpen ? t('app.chatPane.collapse') : t('app.chatPane.expand')}
@@ -1273,6 +1279,20 @@ export default function App(): JSX.Element {
                 host={host}
                 cwd={cwd}
                 previewPath={previewPath}
+                onSubmitToAgent={submitToAgent}
+              />
+            </div>
+          )}
+          {/* Draw.io is mounted only while visible. This releases its iframe timers and
+              compositor resources as soon as the user leaves the drawing view. */}
+          {remoteDataReady && view === 'drawing' && (
+            <div
+              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              className="absolute right-0 top-0 bottom-0 z-10"
+            >
+              <DrawingView
+                host={host}
+                cwd={cwd}
                 onSubmitToAgent={submitToAgent}
               />
             </div>
