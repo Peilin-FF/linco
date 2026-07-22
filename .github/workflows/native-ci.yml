@@ -158,10 +158,23 @@ jobs:
           ansi = re.compile(r"\x1b\[[0-9;]*m")
           lines = [ansi.sub("", line) for line in lines]
           status = int(sys.argv[2])
-          selected = lines[-80:]
+          panic_indexes = [
+              index
+              for index, line in enumerate(lines)
+              if "panicked at" in line.lower() or line.lstrip().startswith("error:")
+          ]
+          selected_indexes = []
+          for index in panic_indexes[:12]:
+              selected_indexes.extend(range(max(0, index - 1), min(len(lines), index + 4)))
+          selected_indexes = list(dict.fromkeys(selected_indexes))
+          selected = [lines[index] for index in selected_indexes]
+          if selected:
+              selected.extend(["--- test summary ---", *lines[-25:]])
+          else:
+              selected = lines[-80:]
           prefix = "Rust tests exceeded the 10 minute diagnostic limit.\n" if status == 124 else ""
           details = "\n".join(line[:700] for line in selected)
-          message = (prefix + details[-3_500:])[:3_800]
+          message = (prefix + details)[:3_800]
           escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=Rust workspace tests failed::{escaped}")
           PY

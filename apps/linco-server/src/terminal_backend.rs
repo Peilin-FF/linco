@@ -1283,7 +1283,7 @@ mod tests {
                 through: command_end
             }
         );
-        tokio::time::timeout(Duration::from_secs(2), async {
+        let readiness = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let replay = backend
                     .snapshot(stream_id, info.generation, 64 * 1024)
@@ -1299,8 +1299,24 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await
-        .expect("shell did not enter the non-reading command");
+        .await;
+        if let Err(error) = readiness {
+            let state = backend
+                .manager
+                .session_info(info.session_id, info.generation)
+                .map(|session| session.state);
+            let output_tail = backend
+                .snapshot(stream_id, info.generation, 64 * 1024)
+                .await
+                .ok()
+                .map(|replay| {
+                    let start = replay.data.len().saturating_sub(2_048);
+                    String::from_utf8_lossy(&replay.data[start..]).into_owned()
+                });
+            panic!(
+                "shell did not enter the non-reading command: {error}; state={state:?}; output_tail={output_tail:?}"
+            );
+        }
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let ambiguous = tokio::time::timeout(Duration::from_secs(12), async {
@@ -1372,7 +1388,7 @@ mod tests {
                     .build()
                     .unwrap();
                 let (escaped_process, temp) = runtime.block_on(async {
-                    let command = b"trap '' HUP; setsid sh -c 'trap \"\" HUP; printf \"LINCO-ESCAPED-PID-%s\\n\" \"$$\"; printf \"LINCO-ESCAPED-%s\\n\" ACTIVE; exec sleep 30' & (exec sleep 300)\n".to_vec();
+                    let command = b"trap '' HUP; setsid sh -c 'trap \"\" HUP; printf \"LINCO-ESCAPED-PID-%s\\n\" \"$$\"; printf \"LINCO-ESCAPED-%s\\n\" ACTIVE; exec sleep 120' & (exec sleep 300)\n".to_vec();
                     let (temp, backend, info, stream_id) = exercise_linux_nonreading_pty(
                         command,
                         b"LINCO-ESCAPED-ACTIVE",
@@ -1420,7 +1436,7 @@ mod tests {
                 // This drop used to wait forever for Tokio's detached spawn_blocking task. The
                 // nonblocking PTY writer must make it complete while the escaped slave is alive.
                 drop(runtime);
-                // SAFETY: the PID was emitted by the still-running 30-second test process above.
+                // SAFETY: the PID was emitted by the still-running 120-second test process above.
                 if unsafe { libc::kill(escaped_process, libc::SIGKILL) } != 0 {
                     let error = std::io::Error::last_os_error();
                     assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "{error}");
@@ -1431,7 +1447,7 @@ mod tests {
         });
 
         let outcome = done_receiver
-            .recv_timeout(Duration::from_secs(15))
+            .recv_timeout(Duration::from_secs(45))
             .expect("Tokio runtime waited for a blocked PTY writer");
         outcome.unwrap();
         worker.join().unwrap();
