@@ -132,7 +132,7 @@ final class WireSchemaTests: XCTestCase {
             "capability": .string("opaque-secret"),
             "if_match": .string("\"sha256-deadbeef\""),
             "content_length": .unsignedInteger(42),
-            "max_bytes": .unsignedInteger(8 * 1_024 * 1_024),
+            "max_bytes": .unsignedInteger(UInt64(8 * 1_024 * 1_024)),
             "expires_in_ms": .unsignedInteger(60_000)
         ])
 

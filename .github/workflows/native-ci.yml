@@ -112,7 +112,30 @@ jobs:
         run: cargo +1.85.0 fmt --all -- --check
 
       - name: Lint all targets
-        run: cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/linco-rust-clippy.log"
+          set +e
+          cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings \
+            2>&1 | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if (( status != 0 )); then
+            python3 - "$log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+          ansi = re.compile(r"\x1b\[[0-9;]*m")
+          details = "\n".join(ansi.sub("", line)[:700] for line in lines[-100:])
+          message = details[-3_800:]
+          escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+          print(f"::error title=Rust workspace lint failed::{escaped}")
+          PY
+            exit "$status"
+          fi
 
       - name: Test workspace
         shell: bash

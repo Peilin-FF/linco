@@ -1385,9 +1385,8 @@ mod tests {
                         .expect("snapshot escaped process marker");
                     let output = String::from_utf8_lossy(&replay.data);
                     let escaped_process = output
-                        .split("LINCO-ESCAPED-PID-")
-                        .filter_map(|suffix| suffix.lines().next()?.trim().parse::<libc::pid_t>().ok())
-                        .next_back()
+                        .rsplit("LINCO-ESCAPED-PID-")
+                        .find_map(|suffix| suffix.lines().next()?.trim().parse::<libc::pid_t>().ok())
                         .expect("escaped process did not publish its PID");
 
                     let resumed = tokio::time::timeout(
