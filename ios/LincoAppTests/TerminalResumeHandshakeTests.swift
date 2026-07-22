@@ -15,9 +15,13 @@ final class TerminalResumeHandshakeTests: XCTestCase {
             inputThrough: 98_304
         )
 
-        XCTAssertFalse(handshake.acceptsResult(baseline))
-        XCTAssertTrue(handshake.registerOpened(baseline))
-        XCTAssertTrue(handshake.acceptsResult(baseline))
+        let acceptedBeforeOpen = handshake.acceptsResult(baseline)
+        let registered = handshake.registerOpened(baseline)
+        let acceptedAfterOpen = handshake.acceptsResult(baseline)
+
+        XCTAssertFalse(acceptedBeforeOpen)
+        XCTAssertTrue(registered)
+        XCTAssertTrue(acceptedAfterOpen)
     }
 
     func testStaleGenerationCannotSatisfyANewerResume() {
@@ -33,8 +37,11 @@ final class TerminalResumeHandshakeTests: XCTestCase {
             inputThrough: 10
         )
 
-        XCTAssertFalse(handshake.registerOpened(stale))
-        XCTAssertFalse(handshake.acceptsResult(stale))
+        let registered = handshake.registerOpened(stale)
+        let accepted = handshake.acceptsResult(stale)
+
+        XCTAssertFalse(registered)
+        XCTAssertFalse(accepted)
     }
 
     func testResultMustMatchTheExactOpenedInputCursor() {
@@ -56,7 +63,10 @@ final class TerminalResumeHandshakeTests: XCTestCase {
             inputThrough: 701
         )
 
-        XCTAssertTrue(handshake.registerOpened(opened))
-        XCTAssertFalse(handshake.acceptsResult(mismatchedResult))
+        let registered = handshake.registerOpened(opened)
+        let accepted = handshake.acceptsResult(mismatchedResult)
+
+        XCTAssertTrue(registered)
+        XCTAssertFalse(accepted)
     }
 }

@@ -1244,9 +1244,16 @@ mod tests {
         });
     }
 
-    #[cfg(not(windows))]
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn input_watchdog_bounds_nonreading_real_pty_and_unblocks_resume() {
+    #[cfg(target_os = "linux")]
+    async fn exercise_linux_nonreading_pty(
+        nonreading_command: Vec<u8>,
+        ready_marker: &'static [u8],
+    ) -> (
+        tempfile::TempDir,
+        CoreTerminalBackend,
+        linco_core::TerminalSessionInfo,
+        u32,
+    ) {
         let temp = tempfile::tempdir().unwrap();
         let backend = CoreTerminalBackend::new(TerminalConfig {
             replay_bytes: 64 * 1024,
@@ -1266,10 +1273,6 @@ mod tests {
             .await
             .unwrap();
 
-        #[cfg(windows)]
-        let nonreading_command = b"ping -n 30 127.0.0.1 >NUL\r\n".to_vec();
-        #[cfg(not(windows))]
-        let nonreading_command = b"sleep 30\n".to_vec();
         let command_end = nonreading_command.len() as u64;
         assert_eq!(
             backend
@@ -1280,6 +1283,24 @@ mod tests {
                 through: command_end
             }
         );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let replay = backend
+                    .snapshot(stream_id, info.generation, 64 * 1024)
+                    .await
+                    .expect("snapshot readiness marker");
+                if replay
+                    .data
+                    .windows(ready_marker.len())
+                    .any(|window| window == ready_marker)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("shell did not enter the non-reading command");
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         let ambiguous = tokio::time::timeout(Duration::from_secs(12), async {
@@ -1302,6 +1323,33 @@ mod tests {
         .expect("terminal input watchdog did not bound the blocked PTY write");
         assert!(ambiguous >= command_end);
 
+        (temp, backend, info, stream_id)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn input_watchdog_bounds_nonreading_real_pty_and_unblocks_resume() {
+        let nonreading_command =
+            b"trap '' HUP; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
+                .to_vec();
+        let (_temp, backend, info, stream_id) =
+            exercise_linux_nonreading_pty(nonreading_command, b"LINCO-WATCHDOG-READY").await;
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let session = backend
+                    .manager
+                    .session_info(info.session_id, info.generation)
+                    .expect("watchdog generation remains registered");
+                if matches!(session.state, linco_core::TerminalSessionState::Exited(_)) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("watchdog did not terminate the foreground PTY process group");
+
         let resumed = tokio::time::timeout(
             Duration::from_secs(1),
             backend.input_through(stream_id, info.generation),
@@ -1310,6 +1358,84 @@ mod tests {
         .expect("resume remained blocked behind the timed-out input transaction");
         assert!(resumed.is_err(), "ambiguous generation must not resume");
         backend.shutdown().await;
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn input_watchdog_runtime_does_not_wait_for_an_escaped_slave_holder() {
+        let (done_sender, done_receiver) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let (escaped_process, temp) = runtime.block_on(async {
+                    let command = b"trap '' HUP; setsid sh -c 'trap \"\" HUP; printf \"LINCO-ESCAPED-PID-%s\\n\" \"$$\"; printf \"LINCO-ESCAPED-%s\\n\" ACTIVE; exec sleep 30' & (exec sleep 300)\n".to_vec();
+                    let (temp, backend, info, stream_id) = exercise_linux_nonreading_pty(
+                        command,
+                        b"LINCO-ESCAPED-ACTIVE",
+                    )
+                    .await;
+
+                    let replay = backend
+                        .snapshot(stream_id, info.generation, 64 * 1024)
+                        .await
+                        .expect("snapshot escaped process marker");
+                    let output = String::from_utf8_lossy(&replay.data);
+                    let escaped_process = output
+                        .split("LINCO-ESCAPED-PID-")
+                        .filter_map(|suffix| suffix.lines().next()?.trim().parse::<libc::pid_t>().ok())
+                        .next_back()
+                        .expect("escaped process did not publish its PID");
+
+                    let resumed = tokio::time::timeout(
+                        Duration::from_secs(1),
+                        backend.input_through(stream_id, info.generation),
+                    )
+                    .await
+                    .expect("resume remained blocked after bounded nonblocking input");
+                    assert!(resumed.is_err(), "ambiguous generation must not resume");
+                    backend.shutdown().await;
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        loop {
+                            let session = backend
+                                .manager
+                                .session_info(info.session_id, info.generation)
+                                .expect("escaped-holder generation remains registered");
+                            if matches!(
+                                session.state,
+                                linco_core::TerminalSessionState::Exited(_)
+                            ) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .expect("session did not converge after its root process exited");
+                    (escaped_process, temp)
+                });
+
+                // This drop used to wait forever for Tokio's detached spawn_blocking task. The
+                // nonblocking PTY writer must make it complete while the escaped slave is alive.
+                drop(runtime);
+                // SAFETY: the PID was emitted by the still-running 30-second test process above.
+                if unsafe { libc::kill(escaped_process, libc::SIGKILL) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    assert_eq!(error.raw_os_error(), Some(libc::ESRCH), "{error}");
+                }
+                drop(temp);
+            }));
+            let _ = done_sender.send(outcome);
+        });
+
+        let outcome = done_receiver
+            .recv_timeout(Duration::from_secs(15))
+            .expect("Tokio runtime waited for a blocked PTY writer");
+        outcome.unwrap();
+        worker.join().unwrap();
     }
 
     #[tokio::test]

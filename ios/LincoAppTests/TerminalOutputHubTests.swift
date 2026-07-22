@@ -2,15 +2,18 @@ import Foundation
 import XCTest
 @testable import Linco
 
-@MainActor
 final class TerminalOutputHubTests: XCTestCase {
+    @MainActor
     func testSnapshotResetReachesActiveSubscriberSynchronously() {
         let hub = TerminalOutputHub()
         var received: [TerminalOutputUpdate] = []
         let subscription = hub.subscribe(to: 7) { received.append($0) }
 
-        XCTAssertTrue(hub.deliver(Data("old".utf8), for: 7, reset: false))
-        XCTAssertTrue(hub.deliver(Data("snapshot".utf8), for: 7, reset: true))
+        let deliveredOld = hub.deliver(Data("old".utf8), for: 7, reset: false)
+        let deliveredSnapshot = hub.deliver(Data("snapshot".utf8), for: 7, reset: true)
+
+        XCTAssertTrue(deliveredOld)
+        XCTAssertTrue(deliveredSnapshot)
 
         XCTAssertEqual(received, [
             TerminalOutputUpdate(data: Data("old".utf8), reset: false),
@@ -19,6 +22,7 @@ final class TerminalOutputHubTests: XCTestCase {
         hub.unsubscribe(subscription)
     }
 
+    @MainActor
     func testDeliveryAcknowledgesConsumerBeforeProducerContinues() {
         let hub = TerminalOutputHub()
         var order: [String] = []
@@ -27,21 +31,32 @@ final class TerminalOutputHubTests: XCTestCase {
         }
 
         order.append("producer-before")
-        XCTAssertTrue(hub.deliver(Data([0x41]), for: 9, reset: false))
+        let delivered = hub.deliver(Data([0x41]), for: 9, reset: false)
         order.append("producer-after")
 
+        XCTAssertTrue(delivered)
         XCTAssertEqual(order, ["producer-before", "consumer", "producer-after"])
-        XCTAssertEqual(hub.subscriberCount(for: 9), 1)
+        let subscriberCount = hub.subscriberCount(for: 9)
+        XCTAssertEqual(subscriberCount, 1)
         hub.unsubscribe(subscription)
     }
 
+    @MainActor
     func testInactiveStreamHasNoBufferAndReportsUndeliveredBytes() {
         let hub = TerminalOutputHub()
 
-        XCTAssertFalse(hub.deliver(Data(repeating: 0x41, count: 256 * 1_024), for: 11, reset: false))
-        XCTAssertEqual(hub.subscriberCount(for: 11), 0)
+        let delivered = hub.deliver(
+            Data(repeating: 0x41, count: 256 * 1_024),
+            for: 11,
+            reset: false
+        )
+        let subscriberCount = hub.subscriberCount(for: 11)
+
+        XCTAssertFalse(delivered)
+        XCTAssertEqual(subscriberCount, 0)
     }
 
+    @MainActor
     func testUnsubscribeStopsDelivery() {
         let hub = TerminalOutputHub()
         let subscription = hub.subscribe(to: 13) { _ in
@@ -49,6 +64,7 @@ final class TerminalOutputHubTests: XCTestCase {
         }
         hub.unsubscribe(subscription)
 
-        XCTAssertFalse(hub.deliver(Data([0x41]), for: 13, reset: false))
+        let delivered = hub.deliver(Data([0x41]), for: 13, reset: false)
+        XCTAssertFalse(delivered)
     }
 }

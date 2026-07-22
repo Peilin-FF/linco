@@ -1372,7 +1372,11 @@ async fn real_websocket_routes_pair_authenticate_and_revoke_blocked_lanes() {
 
     #[cfg(windows)]
     let nonreading_command = b"ping -n 30 127.0.0.1 >NUL\r\n".as_slice();
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    let nonreading_command =
+        b"trap '' HUP; sleep 300 & (printf 'LINCO-WATCHDOG-%s\\n' READY; exec sleep 300)\n"
+            .as_slice();
+    #[cfg(all(not(windows), not(target_os = "linux")))]
     let nonreading_command = b"sleep 30\n".as_slice();
     let command_frame = BinaryFrame::new(
         BinaryKind::TerminalInput,

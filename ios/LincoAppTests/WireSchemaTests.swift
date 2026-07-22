@@ -61,9 +61,21 @@ final class WireSchemaTests: XCTestCase {
         var state = FilePaginationState()
         state.reset(workspaceID: workspaceID, path: "Sources")
 
-        XCTAssertTrue(state.apply(first, workspaceID: workspaceID, path: "Sources", appending: false))
+        let appliedFirst = state.apply(
+            first,
+            workspaceID: workspaceID,
+            path: "Sources",
+            appending: false
+        )
+        XCTAssertTrue(appliedFirst)
         XCTAssertTrue(state.hasMore)
-        XCTAssertTrue(state.apply(second, workspaceID: workspaceID, path: "Sources", appending: true))
+        let appliedSecond = state.apply(
+            second,
+            workspaceID: workspaceID,
+            path: "Sources",
+            appending: true
+        )
+        XCTAssertTrue(appliedSecond)
         XCTAssertEqual(state.entries.map(\.name), ["App.swift", "Model.swift"])
         XCTAssertFalse(state.hasMore)
     }

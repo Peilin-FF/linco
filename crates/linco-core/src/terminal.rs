@@ -1,9 +1,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Read, Write};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Weak};
 use std::thread;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
@@ -15,6 +19,18 @@ use uuid::Uuid;
 use crate::{ByteRing, CoreError, RingRange, RingReplayError, WorkspaceRoot};
 
 const PROTOCOL_MAX_TERMINAL_CHUNK: usize = 32 * 1024;
+
+#[cfg(target_os = "linux")]
+const LINUX_SESSION_KILL_PASSES: usize = 8;
+
+#[cfg(target_os = "linux")]
+const LINUX_SESSION_KILL_RESCAN_DELAY: Duration = Duration::from_millis(10);
+
+#[cfg(target_os = "linux")]
+const LINUX_PTY_WRITE_TIMEOUT: Duration = Duration::from_secs(4);
+
+#[cfg(target_os = "linux")]
+const LINUX_PTY_READ_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone)]
 pub struct TerminalConfig {
@@ -313,10 +329,14 @@ struct Session {
     kind: SessionKind,
     cwd: PathBuf,
     process_id: Option<u32>,
+    #[cfg(target_os = "linux")]
+    process_start_time: Option<u64>,
     created_at_ms: u64,
     start_identity: StartIdentity,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
+    #[cfg(target_os = "linux")]
+    poll_handle: OwnedFd,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     ring: Mutex<ByteRing>,
     state: Mutex<TerminalSessionState>,
@@ -346,6 +366,11 @@ impl Drop for ProcessPermit {
 impl TerminalManager {
     pub fn new(config: TerminalConfig) -> Result<Self, CoreError> {
         config.validate()?;
+        #[cfg(target_os = "linux")]
+        linux_require_pidfd_support().map_err(|source| CoreError::Io {
+            operation: "probe safe Linux terminal process termination",
+            source,
+        })?;
         Ok(Self {
             inner: Arc::new(Inner {
                 config,
@@ -458,6 +483,13 @@ impl TerminalManager {
                 operation: "open",
                 message: error.to_string(),
             })?;
+        #[cfg(target_os = "linux")]
+        let poll_handle = prepare_linux_nonblocking_pty(pair.master.as_ref()).map_err(|error| {
+            CoreError::Pty {
+                operation: "configure bounded terminal I/O",
+                message: error.to_string(),
+            }
+        })?;
         let command = build_command(&self.inner.config, &request, &cwd)?;
         let mut child = pair
             .slave
@@ -492,16 +524,55 @@ impl TerminalManager {
         };
         let killer = child.clone_killer();
         let process_id = child.process_id();
+        #[cfg(target_os = "linux")]
+        let process_start_time = match process_id {
+            Some(process_id) => {
+                let process_id = libc::pid_t::try_from(process_id).map_err(|_| CoreError::Io {
+                    operation: "capture terminal process identity",
+                    source: std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "terminal process id does not fit pid_t",
+                    ),
+                })?;
+                match linux_process_status(process_id) {
+                    Ok(Some(status)) => Some(status.start_time),
+                    Ok(None) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(CoreError::Io {
+                            operation: "capture terminal process identity",
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                "terminal process disappeared before its Linux identity was captured",
+                            ),
+                        });
+                    }
+                    Err(source) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(CoreError::Io {
+                            operation: "capture terminal process identity",
+                            source,
+                        });
+                    }
+                }
+            }
+            None => None,
+        };
         let session = Arc::new(Session {
             id: request.session_id,
             generation,
             kind: request.kind,
             cwd,
             process_id,
+            #[cfg(target_os = "linux")]
+            process_start_time,
             created_at_ms: unix_time_ms(),
             start_identity,
             master: Mutex::new(Some(pair.master)),
             writer: Mutex::new(Some(writer)),
+            #[cfg(target_os = "linux")]
+            poll_handle,
             killer: Mutex::new(killer),
             ring: Mutex::new(
                 ByteRing::new(self.inner.config.ring_capacity_bytes)
@@ -552,18 +623,24 @@ impl TerminalManager {
         if data.is_empty() {
             return Ok(());
         }
-        let mut writer_guard = session.writer.lock();
-        let writer = writer_guard
-            .as_mut()
-            .ok_or(CoreError::SessionExited(session_id))?;
-        writer.write_all(data).map_err(|source| CoreError::Io {
-            operation: "write terminal input",
-            source,
-        })?;
-        writer.flush().map_err(|source| CoreError::Io {
-            operation: "flush terminal input",
-            source,
-        })
+
+        #[cfg(target_os = "linux")]
+        return session.write_linux_input(data);
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut writer_guard = session.writer.lock();
+            let writer = writer_guard
+                .as_mut()
+                .ok_or(CoreError::SessionExited(session_id))?;
+            writer.write_all(data).map_err(|source| CoreError::Io {
+                operation: "write terminal input",
+                source,
+            })?;
+            // A native PTY is unbuffered at the Rust layer; avoiding an unconstrained trait-object
+            // flush keeps the same hard bound as the nonblocking writes above.
+            Ok(())
+        }
     }
 
     pub fn resize(
@@ -757,8 +834,173 @@ impl Session {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn write_linux_input(&self, data: &[u8]) -> Result<(), CoreError> {
+        let deadline = Instant::now() + LINUX_PTY_WRITE_TIMEOUT;
+        let mut writer_guard = self.writer.lock();
+        let writer = writer_guard
+            .as_mut()
+            .ok_or(CoreError::SessionExited(self.id))?;
+        let mut written = 0;
+        while written < data.len() {
+            match writer.write(&data[written..]) {
+                Ok(0) => {
+                    return Err(CoreError::Io {
+                        operation: "write terminal input",
+                        source: std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "PTY writer accepted zero bytes",
+                        ),
+                    });
+                }
+                Ok(count) => written += count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    let ready = self
+                        .wait_linux_pty(libc::POLLOUT, deadline)
+                        .map_err(|source| CoreError::Io {
+                            operation: "wait for terminal input capacity",
+                            source,
+                        })?;
+                    if !ready {
+                        return Err(CoreError::Io {
+                            operation: "write terminal input",
+                            source: std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "PTY input remained blocked for four seconds",
+                            ),
+                        });
+                    }
+                }
+                Err(source) => {
+                    return Err(CoreError::Io {
+                        operation: "write terminal input",
+                        source,
+                    });
+                }
+            }
+        }
+        // A native PTY is unbuffered. Avoid a trait-object `flush` here because an arbitrary
+        // implementation could block outside the deadline enforced above.
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_linux_pty(&self, events: libc::c_short, deadline: Instant) -> std::io::Result<bool> {
+        let mut descriptor = libc::pollfd {
+            fd: self.poll_handle.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let timeout_ms = i32::try_from(remaining.as_millis().max(1)).unwrap_or(i32::MAX);
+            // SAFETY: descriptor points to one initialized pollfd for the duration of the call.
+            let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if result > 0 {
+                if descriptor.revents & libc::POLLNVAL != 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "PTY poll handle became invalid",
+                    ));
+                }
+                return Ok(true);
+            }
+            if result == 0 {
+                return Ok(false);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
     fn kill(&self) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(process_id) = self.process_id {
+            let session_leader = libc::pid_t::try_from(process_id).map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "terminal process id does not fit pid_t",
+                )
+            })?;
+            return self.kill_linux_session(session_leader, self.process_start_time);
+        }
+
         self.killer.lock().kill()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn kill_linux_session(
+        &self,
+        expected_session: libc::pid_t,
+        expected_start_time: Option<u64>,
+    ) -> std::io::Result<()> {
+        if expected_session <= 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to signal an invalid terminal session id",
+            ));
+        }
+        if unix_session_id(0)? == Some(expected_session) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "refusing to signal the Linco server session",
+            ));
+        }
+
+        // A reaped child PID can eventually be recycled. If the numeric session leader exists,
+        // require the /proc start time captured immediately after spawn to still match before
+        // treating it as our session. When the leader is absent, Linux keeps the SID allocated
+        // while any of its process groups still have members; enumerating those members below is
+        // therefore safe and is also what handles leaderless foreground/background groups.
+        if let (Some(expected), Some(observed)) =
+            (expected_start_time, linux_process_status(expected_session)?)
+        {
+            if observed.start_time != expected {
+                return Ok(());
+            }
+        }
+
+        let mut first_error = None;
+        for pass in 0..LINUX_SESSION_KILL_PASSES {
+            let members = linux_live_session_processes(expected_session)?;
+            if members.is_empty() {
+                return Ok(());
+            }
+
+            // A pidfd binds the signal target before we revalidate SID + start time. That avoids
+            // both PID and process-group reuse races while repeated scans catch children forked
+            // after an earlier /proc snapshot.
+            for member in members {
+                if let Err(error) = linux_kill_session_process(member, expected_session) {
+                    first_error.get_or_insert(error);
+                }
+            }
+
+            if pass + 1 < LINUX_SESSION_KILL_PASSES {
+                thread::sleep(LINUX_SESSION_KILL_RESCAN_DELAY);
+            }
+        }
+
+        let remaining = linux_live_session_processes(expected_session)?;
+        if remaining.is_empty() {
+            Ok(())
+        } else if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "{} Linux terminal session process(es) remained after bounded termination",
+                    remaining.len()
+                ),
+            ))
+        }
     }
 
     /// Closing the control handles after the child is reaped is required for ConPTY to deliver
@@ -785,6 +1027,243 @@ impl Session {
             });
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_linux_nonblocking_pty(master: &dyn MasterPty) -> std::io::Result<OwnedFd> {
+    let descriptor = master.as_raw_fd().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "native Linux PTY did not expose a file descriptor",
+        )
+    })?;
+    // SAFETY: descriptor is owned by master and remains valid for these fcntl calls.
+    let flags = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // O_NONBLOCK is shared by the master's duplicated reader and writer handles. The reader uses
+    // poll below; the writer therefore has a kernel-enforced upper bound even if a slave holder
+    // escapes the original process session.
+    if unsafe { libc::fcntl(descriptor, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: F_DUPFD_CLOEXEC returns a new owned descriptor on success.
+    let poll_descriptor = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 0) };
+    if poll_descriptor < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: poll_descriptor was created above and ownership transfers to OwnedFd exactly once.
+    Ok(unsafe { OwnedFd::from_raw_fd(poll_descriptor) })
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct LinuxProcessStatus {
+    session_id: libc::pid_t,
+    start_time: u64,
+    state: u8,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+struct LinuxSessionProcess {
+    process_id: libc::pid_t,
+    start_time: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_status(process_id: libc::pid_t) -> std::io::Result<Option<LinuxProcessStatus>> {
+    let stat = match std::fs::read(format!("/proc/{process_id}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    parse_linux_process_status(process_id, &stat).map(Some)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_linux_process_status(
+    process_id: libc::pid_t,
+    stat: &[u8],
+) -> std::io::Result<LinuxProcessStatus> {
+    // The comm field is parenthesized and may contain spaces or parentheses, so split after its
+    // final closing delimiter. The remaining zero-based fields start at Linux proc field 3.
+    let close = stat
+        .windows(2)
+        .rposition(|window| window == b") ")
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("malformed /proc/{process_id}/stat command field"),
+            )
+        })?;
+    let suffix = std::str::from_utf8(&stat[close + 2..]).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("non-ASCII fields in /proc/{process_id}/stat: {error}"),
+        )
+    })?;
+    let fields: Vec<_> = suffix.split_whitespace().collect();
+    if fields.len() <= 19 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("truncated /proc/{process_id}/stat record"),
+        ));
+    }
+    let session_id = fields[3].parse::<libc::pid_t>().map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid session id in /proc/{process_id}/stat: {error}"),
+        )
+    })?;
+    let start_time = fields[19].parse::<u64>().map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid start time in /proc/{process_id}/stat: {error}"),
+        )
+    })?;
+    let state = fields[0].as_bytes().first().copied().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("missing state in /proc/{process_id}/stat"),
+        )
+    })?;
+    Ok(LinuxProcessStatus {
+        session_id,
+        start_time,
+        state,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_live_session_processes(
+    expected_session: libc::pid_t,
+) -> std::io::Result<Vec<LinuxSessionProcess>> {
+    let mut members = Vec::new();
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(process_id) = name.parse::<libc::pid_t>() else {
+            continue;
+        };
+        if process_id <= 1
+            || !matches!(
+                unix_session_id(process_id),
+                Ok(Some(session_id)) if session_id == expected_session
+            )
+        {
+            continue;
+        }
+        let Some(status) = linux_process_status(process_id)? else {
+            continue;
+        };
+        if status.session_id != expected_session || matches!(status.state, b'Z' | b'X' | b'x') {
+            continue;
+        }
+        members.push(LinuxSessionProcess {
+            process_id,
+            start_time: status.start_time,
+        });
+    }
+    members.sort_unstable_by_key(|member| member.process_id);
+    Ok(members)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_kill_session_process(
+    member: LinuxSessionProcess,
+    expected_session: libc::pid_t,
+) -> std::io::Result<()> {
+    let Some(pidfd) = linux_open_pidfd(member.process_id)? else {
+        return Ok(());
+    };
+    let Some(status) = linux_process_status(member.process_id)? else {
+        return Ok(());
+    };
+    if status.start_time != member.start_time
+        || status.session_id != expected_session
+        || matches!(status.state, b'Z' | b'X' | b'x')
+    {
+        return Ok(());
+    }
+    linux_signal_pidfd(&pidfd, libc::SIGKILL)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_open_pidfd(process_id: libc::pid_t) -> std::io::Result<Option<OwnedFd>> {
+    // SAFETY: pidfd_open copies the numeric PID and flags; it does not dereference user memory.
+    let raw_fd = unsafe { libc::syscall(libc::SYS_pidfd_open, process_id, 0_u32) };
+    if raw_fd >= 0 {
+        let raw_fd = i32::try_from(raw_fd).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "pidfd_open returned a descriptor that does not fit RawFd",
+            )
+        })?;
+        // SAFETY: a successful pidfd_open returns a new owned file descriptor.
+        return Ok(Some(unsafe { OwnedFd::from_raw_fd(raw_fd) }));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn unix_session_id(process: libc::pid_t) -> std::io::Result<Option<libc::pid_t>> {
+    // SAFETY: getsid only reads kernel process metadata for the supplied positive PID.
+    let session = unsafe { libc::getsid(process) };
+    if session >= 0 {
+        return Ok(Some(session));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_signal_pidfd(pidfd: &OwnedFd, signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: pidfd is owned and valid; a null siginfo with zero flags requests a plain signal.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0_u32,
+        )
+    };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_require_pidfd_support() -> std::io::Result<()> {
+    // Probe both syscalls with signal 0 so an unsupported kernel or seccomp profile is rejected at
+    // startup, before Linco can create a PTY that it cannot terminate safely.
+    let process_id = unsafe { libc::getpid() };
+    let pidfd = linux_open_pidfd(process_id)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the Linco process disappeared during pidfd capability detection",
+        )
+    })?;
+    linux_signal_pidfd(&pidfd, 0)
 }
 
 fn spawn_session_threads(
@@ -851,6 +1330,34 @@ fn spawn_session_threads(
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    #[cfg(target_os = "linux")]
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        let deadline = Instant::now() + LINUX_PTY_READ_POLL_INTERVAL;
+                        match session.wait_linux_pty(libc::POLLIN, deadline) {
+                            Ok(true) => {}
+                            Ok(false) => match exit_receiver.try_recv() {
+                                Ok(status) => {
+                                    early_status = Some(status.ok());
+                                    break;
+                                }
+                                Err(mpsc::TryRecvError::Empty) => {}
+                                Err(mpsc::TryRecvError::Disconnected) => break,
+                            },
+                            Err(error) => {
+                                match exit_receiver.try_recv() {
+                                    Ok(status) => early_status = Some(status.ok()),
+                                    Err(mpsc::TryRecvError::Empty) => {
+                                        io_error = Some(error.to_string());
+                                        let _ = session.kill();
+                                    }
+                                    Err(mpsc::TryRecvError::Disconnected) => {
+                                        io_error = Some(error.to_string());
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
                     Err(error) => {
                         match exit_receiver.try_recv() {
                             Ok(status) => early_status = Some(status.ok()),
@@ -1000,6 +1507,24 @@ fn unix_time_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_proc_stat_parser_ignores_non_utf8_command_names() {
+        let mut stat = b"123 (linco-".to_vec();
+        stat.push(0xff);
+        stat.extend_from_slice(b"-) name) ");
+        let mut fields = vec!["S", "1", "2", "123"];
+        fields.extend(std::iter::repeat_n("0", 15));
+        fields.push("456");
+        stat.extend_from_slice(fields.join(" ").as_bytes());
+
+        let status = parse_linux_process_status(123, &stat).unwrap();
+
+        assert_eq!(status.session_id, 123);
+        assert_eq!(status.start_time, 456);
+        assert_eq!(status.state, b'S');
+    }
 
     #[test]
     fn stale_generation_is_rejected_without_touching_the_session() {

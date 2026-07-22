@@ -5,12 +5,15 @@ final class LincoSmokeTests: XCTestCase {
         continueAfterFailure = false
     }
 
+    @MainActor
     func testAppLaunchesIntoAnActionableScreen() {
         let app = XCUIApplication()
         app.launch()
 
         let pairingButton = app.buttons["pair-server"]
         let newSessionButton = app.buttons["new-session"]
-        XCTAssertTrue(pairingButton.waitForExistence(timeout: 5) || newSessionButton.waitForExistence(timeout: 1))
+        let hasActionableScreen = pairingButton.waitForExistence(timeout: 5)
+            || newSessionButton.waitForExistence(timeout: 1)
+        XCTAssertTrue(hasActionableScreen)
     }
 }

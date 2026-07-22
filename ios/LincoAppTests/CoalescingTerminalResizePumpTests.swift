@@ -1,8 +1,8 @@
 import XCTest
 @testable import Linco
 
-@MainActor
 final class CoalescingTerminalResizePumpTests: XCTestCase {
+    @MainActor
     func testBurstKeepsOnlyNewestSizeBehindInFlightResize() async {
         let firstEntered = ResizePumpLatch()
         let releaseFirst = ResizePumpLatch()
@@ -31,6 +31,7 @@ final class CoalescingTerminalResizePumpTests: XCTestCase {
         XCTAssertEqual(values, [first, newest])
     }
 
+    @MainActor
     func testLatestValueMatchingInFlightSizeSuppressesRedundantSend() async {
         let firstEntered = ResizePumpLatch()
         let releaseFirst = ResizePumpLatch()
@@ -55,10 +56,12 @@ final class CoalescingTerminalResizePumpTests: XCTestCase {
         await pump.waitUntilDrained()
 
         let values = await recorder.snapshot()
+        let isAccepting = pump.isAccepting
         XCTAssertEqual(values, [original])
-        XCTAssertFalse(pump.isAccepting)
+        XCTAssertFalse(isAccepting)
     }
 
+    @MainActor
     func testReplacementSurfaceWinsAfterOldInFlightResize() async {
         let streamCoordinator = TerminalResizeStreamCoordinator()
         let oldEntered = ResizePumpLatch()

@@ -137,7 +137,8 @@ jobs:
           status = int(sys.argv[2])
           selected = lines[-80:]
           prefix = "Rust tests exceeded the 10 minute diagnostic limit.\n" if status == 124 else ""
-          message = prefix + "\n".join(line[:1000] for line in selected)
+          details = "\n".join(line[:700] for line in selected)
+          message = (prefix + details[-3_500:])[:3_800]
           escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=Rust workspace tests failed::{escaped}")
           PY
@@ -376,29 +377,31 @@ jobs:
           log_lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
           ansi = re.compile(r"\x1b\[[0-9;]*m")
           log_lines = [ansi.sub("", line) for line in log_lines]
-          markers = (
-              "error:",
+          error_indexes = []
+          for index, line in enumerate(log_lines):
+              lowered = line.lower()
+              if lowered.lstrip().startswith("error:") or ": error:" in lowered:
+                  error_indexes.append(index)
+          fallback_markers = (
               "failed",
               "failure",
               "assertion",
               "xctassert",
               "testing failed",
-              "test case",
-              "test suite",
           )
-          indexes = [
+          indexes = error_indexes or [
               index
               for index, line in enumerate(log_lines)
-              if any(marker in line.lower() for marker in markers)
+              if any(marker in line.lower() for marker in fallback_markers)
           ]
           selected_indexes = []
           for index in indexes:
-              selected_indexes.extend(range(max(0, index - 3), min(len(log_lines), index + 4)))
-          selected_indexes = list(dict.fromkeys(selected_indexes))[-50:]
+              selected_indexes.extend(range(max(0, index - 2), min(len(log_lines), index + 3)))
+          selected_indexes = list(dict.fromkeys(selected_indexes))[-30:]
           selected_lines = (
               [log_lines[index] for index in selected_indexes]
               if selected_indexes
-              else log_lines[-50:]
+              else log_lines[-30:]
           )
 
           summary_path = Path(sys.argv[2])
@@ -409,11 +412,13 @@ jobs:
                   summary = json.dumps(json.loads(raw_summary), indent=2, ensure_ascii=False)
               except json.JSONDecodeError:
                   summary = raw_summary
-          sections = []
+          diagnostics = "\n".join(line[:700] for line in selected_lines)
+          sections = ["xcodebuild diagnostics:\n" + diagnostics[-3_200:]]
           if summary:
-              sections.append("xcresult summary:\n" + summary[-24_000:])
-          sections.append("xcodebuild diagnostics:\n" + "\n".join(line[:1000] for line in selected_lines))
-          message = "\n\n".join(sections)
+              sections.append("xcresult summary:\n" + summary[-500:])
+          # GitHub truncates check annotations at 4096 decoded characters. Keep the actual
+          # compiler errors first and leave headroom for workflow-command escaping.
+          message = "\n\n".join(sections)[:3_800]
           escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
           print(f"::error title=iPhone tests failed::{escaped}")
           PY

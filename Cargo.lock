@@ -836,6 +836,7 @@ name = "linco-core"
 version = "1.0.0"
 dependencies = [
  "bytes",
+ "libc",
  "linco-protocol",
  "parking_lot",
  "portable-pty",
@@ -869,6 +870,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
+ "libc",
  "linco-core",
  "linco-protocol",
  "mime_guess",

@@ -4,7 +4,7 @@ The supported production topology is iPhone -> Caddy HTTPS/WSS -> `linco-server`
 
 ## Prerequisites
 
-- A 64-bit systemd Linux host with unprivileged user namespaces enabled, the Rust 1.85.0 toolchain, and the validated Caddy 2.11.4 release.
+- A 64-bit systemd Linux host with unprivileged user namespaces enabled, `pidfd_open(2)` and `pidfd_send_signal(2)` available (upstream Linux 5.3 or newer), the Rust 1.85.0 toolchain, and the validated Caddy 2.11.4 release. `linco-server` refuses to start when the kernel or a seccomp profile blocks the pidfd calls because safe PTY cleanup cannot then be guaranteed.
 - A DNS A/AAAA record such as `linco.example.com` pointing at the host.
 - Inbound TCP 80 and 443. Port 7337 stays bound to loopback and must not be opened publicly.
 - Working `claude` and/or `codex` executables for the service user.

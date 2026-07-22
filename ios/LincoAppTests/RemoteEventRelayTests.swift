@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import Linco
 
-@MainActor
 final class RemoteEventRelayTests: XCTestCase {
+    @MainActor
     func testDeliveryWaitsForConsumerAcknowledgement() async {
         let relay = RemoteEventRelay()
         let entered = AsyncLatch()

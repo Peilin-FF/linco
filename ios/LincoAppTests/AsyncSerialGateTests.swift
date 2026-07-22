@@ -1,8 +1,8 @@
 import XCTest
 @testable import Linco
 
-@MainActor
 final class AsyncSerialGateTests: XCTestCase {
+    @MainActor
     func testAsyncOperationsRemainFIFOAcrossSuspension() async throws {
         let gate = AsyncSerialGate()
         let firstEntered = SerialGateLatch()
@@ -35,6 +35,7 @@ final class AsyncSerialGateTests: XCTestCase {
         XCTAssertEqual(completed, ["detach-start", "detach-end", "resume"])
     }
 
+    @MainActor
     func testPendingPingNeverBlocksApplicationSend() async throws {
         let outbound = WebSocketOutboundCoordinator()
         let pingEntered = SerialGateLatch()
@@ -60,6 +61,7 @@ final class AsyncSerialGateTests: XCTestCase {
         try await ping.value
     }
 
+    @MainActor
     func testCancelledWaiterDoesNotSendOrPoisonQueue() async throws {
         let gate = AsyncSerialGate()
         let firstEntered = SerialGateLatch()

@@ -2,8 +2,8 @@ import Foundation
 import XCTest
 @testable import Linco
 
-@MainActor
 final class OrderedTerminalInputPumpTests: XCTestCase {
+    @MainActor
     func testPasteBurstsStayOrderedAndAcceptedBytesDrainAfterClose() async {
         let firstEntered = InputPumpLatch()
         let releaseFirst = InputPumpLatch()
@@ -28,10 +28,12 @@ final class OrderedTerminalInputPumpTests: XCTestCase {
         await pump.waitUntilDrained()
 
         let values = await recorder.snapshot()
+        let isAccepting = pump.isAccepting
         XCTAssertEqual(values, ["A", "B", "C"])
-        XCTAssertFalse(pump.isAccepting)
+        XCTAssertFalse(isAccepting)
     }
 
+    @MainActor
     func testSceneDrainRegistryWaitsForAcceptedInput() async {
         let entered = InputPumpLatch()
         let release = InputPumpLatch()
@@ -65,6 +67,7 @@ final class OrderedTerminalInputPumpTests: XCTestCase {
         XCTAssertTrue(completedAfterRelease)
     }
 
+    @MainActor
     func testSceneBoundaryDrainsEarlierInputAndRejectsLaterDelegateItem() async {
         let entered = InputPumpLatch()
         let release = InputPumpLatch()
@@ -93,7 +96,8 @@ final class OrderedTerminalInputPumpTests: XCTestCase {
         registry.pauseAcceptance(streamIDs: [12])
         pump.enqueue(Data("after-background".utf8))
 
-        XCTAssertEqual(rejected.values.map(\.reason), [.acceptancePaused])
+        let rejectionReasons = rejected.values.map(\.reason)
+        XCTAssertEqual(rejectionReasons, [.acceptancePaused])
         await release.open()
         await registry.waitUntilDrained(streamIDs: [12])
         let backgroundValues = await sent.snapshot()
@@ -106,6 +110,7 @@ final class OrderedTerminalInputPumpTests: XCTestCase {
         XCTAssertEqual(foregroundValues, ["before-background", "foreground"])
     }
 
+    @MainActor
     func testQueueBudgetIncludesInFlightBytesAndRejectsWholeNewItem() async {
         let entered = InputPumpLatch()
         let release = InputPumpLatch()
@@ -129,10 +134,8 @@ final class OrderedTerminalInputPumpTests: XCTestCase {
         pump.enqueue(Data("F".utf8))
         pump.closeAndDrain()
 
-        XCTAssertEqual(
-            rejected.values,
-            [.init(itemBytes: 2, maximumQueuedBytes: 4)]
-        )
+        let rejections = rejected.values
+        XCTAssertEqual(rejections, [.init(itemBytes: 2, maximumQueuedBytes: 4)])
         await release.open()
         await pump.waitUntilDrained()
         let sentValues = await sent.snapshot()
