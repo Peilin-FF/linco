@@ -42,7 +42,7 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
   const [batchConfirm, setBatchConfirm] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   // 项目名 = cwd 末段(用于头部标注「当前项目」)
-  const projectName = cwd ? cwd.replace(/\/+$/, '').split('/').pop() || cwd : ''
+  const projectName = cwd ? cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd : ''
 
   const refresh = useCallback(async () => {
     if (!cwd) {

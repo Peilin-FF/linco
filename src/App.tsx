@@ -1288,8 +1288,7 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-          {/* Draw.io is mounted only while visible. This releases its iframe timers and
-              compositor resources as soon as the user leaves the drawing view. */}
+          {/* PowerPoint preview polling is active only while the drawing view is visible. */}
           {remoteDataReady && view === 'drawing' && (
             <div
               style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}

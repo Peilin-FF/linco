@@ -66,12 +66,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0:
-            - 新增类 Word 的 LaTeX 编辑器，支持可视化编辑、源码编辑和 PDF 预览
-            - Windows 和 macOS 安装包内置 TinyTeX，本地编译无需额外安装 TeX 发行版
-            - 新增 Overleaf Git 项目克隆、拉取和发布，令牌通过系统 Git 凭据助手保存
-            - 改进远程 RPC、终端会话恢复与 PTY 进程清理
-            - 包含原生 iPhone 客户端与 headless Linco server 的首个稳定版本
+            Linco 1.0.1:
+            - 绘图工作区改为 PowerPoint Live，实时同步当前幻灯片并支持 Linco 批注后局部修改
+            - LaTeX 工作区按 Overleaf 模型识别主文档，子文件不再误报缺失 document 环境
+            - LaTeX Source 内置 JetBrains Mono，并改进源码诊断、文件切换和跨文件引用体验
+            - Codex 历史仅显示当前项目的直接会话，并修复 Windows 会话恢复
+            - Codex TUI 滚轮直接控制终端回滚，不再进入需要按 q 退出的 transcript pager
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

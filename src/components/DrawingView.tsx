@@ -1,24 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent
+} from 'react'
 import {
   Bot,
-  FilePlus2,
-  FolderOpen,
+  Circle as CircleIcon,
+  ExternalLink,
   Loader2,
-  Radio,
+  MessageSquareText,
+  MousePointer2,
+  Pencil,
+  Presentation,
   RefreshCw,
-  Save
+  Trash2,
+  Undo2
 } from 'lucide-react'
-import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
-import { baseName, readFile, writeFile } from '@/lib/fs'
-import { onRemoteFsChange } from '@/lib/watch'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@/lib/i18n'
-import {
-  onDrawioLiveCommand,
-  respondDrawioLive,
-  type DrawioLiveCommand,
-  type DrawioLiveCommandEvent,
-  type DrawioLiveOperation
-} from '@/lib/drawioLive'
 
 interface DrawingViewProps {
   host?: string
@@ -26,367 +28,270 @@ interface DrawingViewProps {
   onSubmitToAgent?: (text: string) => void
 }
 
-type SaveState = 'loading' | 'ready' | 'dirty' | 'saving' | 'saved' | 'error'
-
-interface DrawioMessage {
-  event?: string
-  xml?: string
-  exit?: boolean
-  error?: string | null
-  data?: unknown
-  bounds?: unknown
-  modelBounds?: unknown
-  scale?: number
-  message?: unknown
+interface PowerPointLiveStatus {
+  ready: boolean
+  file_path: string
+  preview_path: string
+  slide_index: number
+  slide_count: number
+  shape_count: number
+  slide_width: number
+  slide_height: number
+  canvas_preset: string
+  preview_pixel_width: number
+  preview_pixel_height: number
+  updated_at: number
 }
 
-interface PendingEditorRequest {
-  event: string
-  resolve: (message: DrawioMessage) => void
-  reject: (reason: Error) => void
-  timer: number
+interface Point {
+  x: number
+  y: number
 }
 
-interface PendingSave {
-  host?: string
-  path: string
-  revision: number
-  xml: string
+interface AnnotationBase {
+  id: string
+  color: string
+  width: number
 }
 
-const EMPTY_DIAGRAM =
-  '<mxfile host="Linco"><diagram id="linco-page-1" name="Page-1"><mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0"><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>'
+interface PenAnnotation extends AnnotationBase {
+  type: 'pen'
+  points: Point[]
+}
 
-const pathKey = (host?: string, cwd?: string): string =>
-  `linco:drawing:${host || 'local'}:${cwd || ''}`
+interface EllipseAnnotation extends AnnotationBase {
+  type: 'ellipse'
+  start: Point
+  end: Point
+}
 
-function joinPath(root: string | undefined, name: string, remote: boolean): string {
+interface TextAnnotation extends AnnotationBase {
+  type: 'text'
+  point: Point
+  text: string
+}
+
+type Annotation = PenAnnotation | EllipseAnnotation | TextAnnotation
+type DraftAnnotation = PenAnnotation | EllipseAnnotation
+type AnnotationTool = 'pointer' | 'pen' | 'ellipse' | 'text'
+
+interface TextEditorState {
+  id: string
+  point: Point
+  color: string
+  value: string
+}
+
+const ANNOTATION_COLORS = ['#dc2626', '#2563eb', '#059669', '#111827'] as const
+const ANNOTATION_WIDTH = 0.004
+
+function joinPath(root: string | undefined, name: string): string {
   if (!root) return name
-  const separator = remote ? '/' : root.includes('\\') ? '\\' : '/'
+  const separator = root.includes('\\') ? '\\' : '/'
   return `${root.replace(/[\\/]+$/, '')}${separator}${name}`
 }
 
-function initialPath(host?: string, cwd?: string): string {
-  const fallback = joinPath(cwd, 'diagram.drawio', !!host)
-  try {
-    return window.localStorage.getItem(pathKey(host, cwd)) || fallback
-  } catch {
-    return fallback
+function pointsToMillimeters(points: number): number {
+  return Math.round((points / 72) * 25.4)
+}
+
+function annotationId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function clamp(value: number, minimum = 0, maximum = 1): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+function pointerPoint(event: ReactPointerEvent<HTMLCanvasElement>): Point {
+  const bounds = event.currentTarget.getBoundingClientRect()
+  return {
+    x: clamp((event.clientX - bounds.left) / Math.max(bounds.width, 1)),
+    y: clamp((event.clientY - bounds.top) / Math.max(bounds.height, 1))
   }
 }
 
-function comparablePath(path: string, remote: boolean): string {
-  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
-  return remote ? normalized : normalized.toLowerCase()
+function roundedRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+): void {
+  const safeRadius = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + safeRadius, y)
+  context.lineTo(x + width - safeRadius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius)
+  context.lineTo(x + width, y + height - safeRadius)
+  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height)
+  context.lineTo(x + safeRadius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius)
+  context.lineTo(x, y + safeRadius)
+  context.quadraticCurveTo(x, y, x + safeRadius, y)
+  context.closePath()
 }
 
-function decodeMessage(data: unknown): DrawioMessage | null {
-  if (typeof data === 'string') {
-    try {
-      return JSON.parse(data) as DrawioMessage
-    } catch {
-      return null
+function wrapComment(
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
+  const lines: string[] = []
+  for (const paragraph of text.split(/\r?\n/)) {
+    if (!paragraph) {
+      lines.push('')
+      continue
     }
-  }
-  return data && typeof data === 'object' ? (data as DrawioMessage) : null
-}
-
-function requestIdFromMessage(message: DrawioMessage): string | null {
-  if (!message.message || typeof message.message !== 'object') return null
-  const echoed = message.message as {
-    requestId?: unknown
-    message?: { requestId?: unknown }
-  }
-  const requestId = echoed.requestId ?? echoed.message?.requestId
-  return typeof requestId === 'string' ? requestId : null
-}
-
-function parseExportPayload(data: unknown): Record<string, unknown> {
-  if (data && typeof data === 'object') return data as Record<string, unknown>
-  if (typeof data !== 'string') throw new Error('draw.io returned no export data')
-  let text = data
-  if (text.startsWith('data:')) {
-    const comma = text.indexOf(',')
-    if (comma < 0) throw new Error('draw.io returned an invalid data URI')
-    const header = text.slice(0, comma)
-    const payload = text.slice(comma + 1)
-    text = header.includes(';base64') ? window.atob(payload) : decodeURIComponent(payload)
-  }
-  const parsed = JSON.parse(text) as unknown
-  if (!parsed || typeof parsed !== 'object') throw new Error('draw.io returned invalid JSON')
-  return parsed as Record<string, unknown>
-}
-
-function graphRoot(document: XMLDocument): Element {
-  if (document.querySelector('parsererror')) throw new Error('The drawing XML is invalid')
-  const model = document.querySelector('mxGraphModel')
-  const root = model?.querySelector('root')
-  if (!root) throw new Error('The drawing has no editable mxGraphModel')
-  return root
-}
-
-function directCell(root: Element, id: string): Element | null {
-  return (
-    Array.from(root.querySelectorAll('mxCell')).find(
-      (cell) => cell.getAttribute('id') === id
-    ) || null
-  )
-}
-
-function defaultParentId(root: Element): string {
-  const layer = Array.from(root.children).find(
-    (child) =>
-      child.tagName === 'mxCell' &&
-      child.getAttribute('parent') === '0' &&
-      child.getAttribute('id') !== '0'
-  )
-  return layer?.getAttribute('id') || '1'
-}
-
-function geometryFor(document: XMLDocument, cell: Element): Element {
-  let geometry = Array.from(cell.children).find((child) => child.tagName === 'mxGeometry')
-  if (!geometry) {
-    geometry = document.createElement('mxGeometry')
-    geometry.setAttribute('as', 'geometry')
-    cell.appendChild(geometry)
-  }
-  return geometry
-}
-
-function mutateDrawingXml(xml: string, operation: DrawioLiveOperation): string {
-  const document = new DOMParser().parseFromString(xml, 'application/xml')
-  const root = graphRoot(document)
-
-  if (operation.type === 'clear') {
-    for (const child of Array.from(root.children)) {
-      const cell = child.tagName === 'mxCell' ? child : child.querySelector('mxCell')
-      const keep =
-        cell?.getAttribute('id') === '0' ||
-        (cell?.getAttribute('parent') === '0' && !cell.hasAttribute('vertex'))
-      if (!keep) child.remove()
-    }
-  } else if (operation.type === 'shape') {
-    if (!operation.id) throw new Error('A live shape requires an id')
-    if (directCell(root, operation.id)) throw new Error(`Cell id already exists: ${operation.id}`)
-    const cell = document.createElement('mxCell')
-    cell.setAttribute('id', operation.id)
-    cell.setAttribute('value', operation.label || '')
-    cell.setAttribute('style', operation.style || '')
-    cell.setAttribute('vertex', '1')
-    cell.setAttribute('parent', defaultParentId(root))
-    const geometry = geometryFor(document, cell)
-    geometry.setAttribute('x', String(operation.x ?? 0))
-    geometry.setAttribute('y', String(operation.y ?? 0))
-    geometry.setAttribute('width', String(operation.width ?? 120))
-    geometry.setAttribute('height', String(operation.height ?? 60))
-    root.appendChild(cell)
-  } else if (operation.type === 'edge') {
-    if (!operation.id || !operation.source || !operation.target) {
-      throw new Error('A live edge requires id, source, and target')
-    }
-    if (directCell(root, operation.id)) throw new Error(`Cell id already exists: ${operation.id}`)
-    if (!directCell(root, operation.source) || !directCell(root, operation.target)) {
-      throw new Error(`Missing edge endpoint: ${operation.source} -> ${operation.target}`)
-    }
-    const cell = document.createElement('mxCell')
-    cell.setAttribute('id', operation.id)
-    cell.setAttribute('value', operation.label || '')
-    cell.setAttribute('style', operation.style || '')
-    cell.setAttribute('edge', '1')
-    cell.setAttribute('parent', defaultParentId(root))
-    cell.setAttribute('source', operation.source)
-    cell.setAttribute('target', operation.target)
-    const geometry = geometryFor(document, cell)
-    geometry.setAttribute('relative', '1')
-    if (operation.waypoints?.length) {
-      const points = document.createElement('Array')
-      points.setAttribute('as', 'points')
-      for (const waypoint of operation.waypoints) {
-        const point = document.createElement('mxPoint')
-        point.setAttribute('x', String(waypoint.x))
-        point.setAttribute('y', String(waypoint.y))
-        points.appendChild(point)
+    let line = ''
+    const tokens = paragraph.match(/\S+\s*/g) || [paragraph]
+    for (const token of tokens) {
+      const candidate = line + token
+      if (line && context.measureText(candidate).width > maxWidth) {
+        lines.push(line.trimEnd())
+        line = ''
       }
-      geometry.appendChild(points)
+      if (context.measureText(token).width <= maxWidth) {
+        line += token
+        continue
+      }
+      for (const character of Array.from(token)) {
+        const characterCandidate = line + character
+        if (line && context.measureText(characterCandidate).width > maxWidth) {
+          lines.push(line.trimEnd())
+          line = character
+        } else {
+          line = characterCandidate
+        }
+      }
     }
-    root.appendChild(cell)
-  } else if (operation.type === 'update') {
-    if (!operation.id) throw new Error('A live update requires an id')
-    const cell = directCell(root, operation.id)
-    if (!cell) throw new Error(`Cell not found: ${operation.id}`)
-    if (operation.label !== undefined) cell.setAttribute('value', operation.label)
-    if (operation.style !== undefined) cell.setAttribute('style', operation.style)
-    if (
-      operation.x !== undefined ||
-      operation.y !== undefined ||
-      operation.width !== undefined ||
-      operation.height !== undefined
-    ) {
-      const geometry = geometryFor(document, cell)
-      if (operation.x !== undefined) geometry.setAttribute('x', String(operation.x))
-      if (operation.y !== undefined) geometry.setAttribute('y', String(operation.y))
-      if (operation.width !== undefined) geometry.setAttribute('width', String(operation.width))
-      if (operation.height !== undefined) geometry.setAttribute('height', String(operation.height))
-    }
+    if (line) lines.push(line.trimEnd())
   }
-
-  return new XMLSerializer().serializeToString(document)
+  return lines.slice(0, 8)
 }
 
-function drawingLayout(xml: string): Array<Record<string, unknown>> {
-  const document = new DOMParser().parseFromString(xml, 'application/xml')
-  const root = graphRoot(document)
-  const cells: Array<Record<string, unknown>> = []
-  for (const child of Array.from(root.children)) {
-    const cell =
-      child.tagName === 'mxCell'
-        ? child
-        : Array.from(child.children).find((item) => item.tagName === 'mxCell')
-    const id = cell?.getAttribute('id')
-    if (!cell || !id || id === '0') continue
-    const geometry = Array.from(cell.children).find(
-      (item) => item.tagName === 'mxGeometry'
-    )
-    const points = geometry
-      ? Array.from(geometry.querySelectorAll('Array[as="points"] > mxPoint')).map(
-          (point) => ({
-            x: Number(point.getAttribute('x') || 0),
-            y: Number(point.getAttribute('y') || 0)
-          })
-        )
-      : []
-    const style = cell.getAttribute('style') || ''
-    const styleRotation = style.match(/(?:^|;)rotation=([-+]?\d+(?:\.\d+)?)(?:;|$)/)
-    const rotation = Number(styleRotation?.[1] || 0)
-    const x = Number(geometry?.getAttribute('x') || 0)
-    const y = Number(geometry?.getAttribute('y') || 0)
-    const width = Number(geometry?.getAttribute('width') || 0)
-    const height = Number(geometry?.getAttribute('height') || 0)
-    const radians = (rotation * Math.PI) / 180
-    const visualWidth = Math.abs(width * Math.cos(radians)) + Math.abs(height * Math.sin(radians))
-    const visualHeight = Math.abs(width * Math.sin(radians)) + Math.abs(height * Math.cos(radians))
-    const visualGeometry = {
-      x: x + (width - visualWidth) / 2,
-      y: y + (height - visualHeight) / 2,
-      width: visualWidth,
-      height: visualHeight
+function drawAnnotation(
+  context: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  annotation: Annotation
+): void {
+  const scale = Math.min(canvasWidth, canvasHeight)
+  const lineWidth = Math.max(2, annotation.width * scale)
+  context.save()
+  context.strokeStyle = annotation.color
+  context.fillStyle = annotation.color
+  context.lineWidth = lineWidth
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+
+  if (annotation.type === 'pen') {
+    if (annotation.points.length === 1) {
+      const point = annotation.points[0]
+      context.beginPath()
+      context.arc(point.x * canvasWidth, point.y * canvasHeight, lineWidth / 2, 0, Math.PI * 2)
+      context.fill()
+    } else if (annotation.points.length > 1) {
+      context.beginPath()
+      annotation.points.forEach((point, index) => {
+        const x = point.x * canvasWidth
+        const y = point.y * canvasHeight
+        if (index === 0) context.moveTo(x, y)
+        else context.lineTo(x, y)
+      })
+      context.stroke()
     }
-    cells.push({
-      id,
-      type:
-        cell.getAttribute('edge') === '1'
-          ? 'edge'
-          : cell.getAttribute('vertex') === '1'
-            ? 'node'
-            : 'layer',
-      label: child.getAttribute('label') || cell.getAttribute('value') || '',
-      parent: cell.getAttribute('parent'),
-      source: cell.getAttribute('source'),
-      target: cell.getAttribute('target'),
-      style,
-      rotation,
-      visual_geometry: visualGeometry,
-      geometry: geometry
-        ? {
-            x,
-            y,
-            width,
-            height,
-            relative: geometry.getAttribute('relative') === '1',
-            ...(points.length ? { points } : {})
-          }
-        : null
+  } else if (annotation.type === 'ellipse') {
+    const left = Math.min(annotation.start.x, annotation.end.x) * canvasWidth
+    const top = Math.min(annotation.start.y, annotation.end.y) * canvasHeight
+    const width = Math.abs(annotation.end.x - annotation.start.x) * canvasWidth
+    const height = Math.abs(annotation.end.y - annotation.start.y) * canvasHeight
+    context.beginPath()
+    context.ellipse(
+      left + width / 2,
+      top + height / 2,
+      Math.max(width / 2, lineWidth),
+      Math.max(height / 2, lineWidth),
+      0,
+      0,
+      Math.PI * 2
+    )
+    context.stroke()
+  } else {
+    const fontSize = Math.max(13, canvasHeight * 0.026)
+    const padding = fontSize * 0.55
+    const lineHeight = fontSize * 1.28
+    const maxTextWidth = canvasWidth * 0.32
+    context.font = `600 ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
+    const lines = wrapComment(context, annotation.text, maxTextWidth)
+    const textWidth = Math.max(fontSize * 4, ...lines.map((line) => context.measureText(line).width))
+    const boxWidth = Math.min(maxTextWidth + padding * 2, textWidth + padding * 2)
+    const boxHeight = Math.max(lineHeight + padding * 2, lines.length * lineHeight + padding * 2)
+    const requestedX = annotation.point.x * canvasWidth
+    const requestedY = annotation.point.y * canvasHeight
+    const x = Math.min(requestedX, canvasWidth - boxWidth - lineWidth)
+    const y = Math.min(requestedY, canvasHeight - boxHeight - lineWidth)
+
+    roundedRect(context, Math.max(lineWidth, x), Math.max(lineWidth, y), boxWidth, boxHeight, fontSize * 0.35)
+    context.fillStyle = 'rgba(255, 250, 225, 0.97)'
+    context.fill()
+    context.strokeStyle = annotation.color
+    context.lineWidth = Math.max(1.5, lineWidth * 0.65)
+    context.stroke()
+    context.fillStyle = annotation.color
+    context.textBaseline = 'top'
+    lines.forEach((line, index) => {
+      context.fillText(
+        line,
+        Math.max(lineWidth, x) + padding,
+        Math.max(lineWidth, y) + padding + index * lineHeight,
+        maxTextWidth
+      )
     })
   }
-  return cells
+  context.restore()
 }
 
-interface LayoutBox {
-  x: number
-  y: number
-  width: number
-  height: number
+function renderAnnotations(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  annotations: Annotation[]
+): void {
+  for (const annotation of annotations) {
+    drawAnnotation(context, width, height, annotation)
+  }
 }
 
-function isLayoutBox(value: unknown): value is LayoutBox {
-  if (!value || typeof value !== 'object') return false
-  const box = value as Partial<LayoutBox>
-  return [box.x, box.y, box.width, box.height].every(
-    (item) => typeof item === 'number' && Number.isFinite(item)
-  )
-}
-
-function containsBox(outer: LayoutBox, inner: LayoutBox, tolerance = 1): boolean {
+function AnnotationToolButton({
+  active,
+  disabled = false,
+  title,
+  onClick,
+  children
+}: {
+  active?: boolean
+  disabled?: boolean
+  title: string
+  onClick: () => void
+  children: JSX.Element
+}): JSX.Element {
   return (
-    inner.x >= outer.x - tolerance &&
-    inner.y >= outer.y - tolerance &&
-    inner.x + inner.width <= outer.x + outer.width + tolerance &&
-    inner.y + inner.height <= outer.y + outer.height + tolerance
+    <button
+      type="button"
+      aria-label={title}
+      aria-pressed={active === undefined ? undefined : active}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-30 ${
+        active === true ? 'bg-ink text-white' : 'text-ink-muted hover:bg-black/7 hover:text-ink'
+      }`}
+    >
+      {children}
+    </button>
   )
-}
-
-function overlapArea(left: LayoutBox, right: LayoutBox): number {
-  const width = Math.max(
-    0,
-    Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x)
-  )
-  const height = Math.max(
-    0,
-    Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y)
-  )
-  return width * height
-}
-
-function auditDrawingLayout(cells: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  const warnings: Array<Record<string, unknown>> = []
-  const largeNodes = cells.filter((cell) => {
-    if (
-      cell.type !== 'node' ||
-      !isLayoutBox(cell.geometry) ||
-      !isLayoutBox(cell.visual_geometry)
-    ) {
-      return false
-    }
-    return cell.geometry.width * cell.geometry.height >= 12000
-  })
-
-  for (const cell of largeNodes) {
-    const rotation = typeof cell.rotation === 'number' ? cell.rotation : 0
-    if (Math.abs(rotation % 180) > 1) {
-      warnings.push({
-        code: 'rotated-large-shape',
-        severity: 'warning',
-        cells: [cell.id],
-        message: `Large shape ${String(cell.id)} is rotated ${rotation} degrees; verify its visual bounds instead of its raw geometry.`,
-        geometry: cell.geometry,
-        visual_geometry: cell.visual_geometry
-      })
-    }
-  }
-
-  for (let leftIndex = 0; leftIndex < largeNodes.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < largeNodes.length; rightIndex += 1) {
-      const left = largeNodes[leftIndex]
-      const right = largeNodes[rightIndex]
-      const leftBox = left.visual_geometry as LayoutBox
-      const rightBox = right.visual_geometry as LayoutBox
-      if (containsBox(leftBox, rightBox) || containsBox(rightBox, leftBox)) continue
-      const overlap = overlapArea(leftBox, rightBox)
-      const smallerArea = Math.min(
-        leftBox.width * leftBox.height,
-        rightBox.width * rightBox.height
-      )
-      if (smallerArea <= 0 || overlap / smallerArea < 0.05) continue
-      warnings.push({
-        code: 'large-shape-crossing',
-        severity: 'warning',
-        cells: [left.id, right.id],
-        message: `Large shapes ${String(left.id)} and ${String(right.id)} cross without containment.`,
-        overlap_area: overlap
-      })
-    }
-  }
-  return warnings
 }
 
 export default function DrawingView({
@@ -394,689 +299,481 @@ export default function DrawingView({
   cwd,
   onSubmitToAgent
 }: DrawingViewProps): JSX.Element {
-  const { t, lang } = useI18n()
-  const iframeRef = useRef<HTMLIFrameElement>(null)
-  const editorReadyRef = useRef(false)
-  const documentReadyRef = useRef(false)
-  const xmlRef = useRef(EMPTY_DIAGRAM)
-  const pathRef = useRef(initialPath(host, cwd))
-  const hostRef = useRef(host)
-  const pendingRef = useRef<PendingSave | null>(null)
-  const saveTimerRef = useRef<number | null>(null)
-  const externalTimerRef = useRef<number | null>(null)
-  const writeChainRef = useRef<Promise<void>>(Promise.resolve())
-  const revisionRef = useRef(0)
-  const ownWriteAtRef = useRef(0)
-  const loadGenerationRef = useRef(0)
-  const editorRequestSeqRef = useRef(0)
-  const editorRequestsRef = useRef<Map<string, PendingEditorRequest>>(new Map())
-  const liveQueueRef = useRef<Promise<void>>(Promise.resolve())
-  const handleLiveCommandRef = useRef<
-    (event: DrawioLiveCommandEvent) => Promise<void>
-  >(async () => {})
-
-  const [path, setPath] = useState(() => initialPath(host, cwd))
-  const [pathDraft, setPathDraft] = useState(path)
-  const [frameKey, setFrameKey] = useState(0)
-  const [saveState, setSaveState] = useState<SaveState>('loading')
+  const { t } = useI18n()
+  const [status, setStatus] = useState<PowerPointLiveStatus | null>(null)
   const [error, setError] = useState('')
-  const [liveActive, setLiveActive] = useState(false)
-  const [liveOperation, setLiveOperation] = useState('')
-  const [liveOperationCount, setLiveOperationCount] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [tool, setTool] = useState<AnnotationTool>('pointer')
+  const [color, setColor] = useState<string>(ANNOTATION_COLORS[0])
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [draft, setDraft] = useState<DraftAnnotation | null>(null)
+  const [textEditor, setTextEditor] = useState<TextEditorState | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
+  const annotationStore = useRef(new Map<string, Annotation[]>())
 
-  const editorUrl = useMemo(() => {
-    const params = new URLSearchParams({
-      embed: '1',
-      proto: 'json',
-      spin: '1',
-      libraries: '1',
-      noSaveBtn: '1',
-      noExitBtn: '1',
-      suppressNewWindows: '1',
-      lang: lang === 'zh' ? 'zh' : 'en'
-    })
-    return `https://embed.diagrams.net/?${params.toString()}`
-  }, [lang])
-
-  const postToEditor = (message: Record<string, unknown>): void => {
-    iframeRef.current?.contentWindow?.postMessage(JSON.stringify(message), '*')
-  }
-
-  const requestEditor = (
-    message: Record<string, unknown>,
-    expectedEvent: string,
-    timeoutMs = 15000
-  ): Promise<DrawioMessage> => {
-    const requestId = `linco-drawio-${Date.now()}-${++editorRequestSeqRef.current}`
-    return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => {
-        editorRequestsRef.current.delete(requestId)
-        reject(new Error(`draw.io did not answer the ${expectedEvent} request`))
-      }, timeoutMs)
-      editorRequestsRef.current.set(requestId, {
-        event: expectedEvent,
-        resolve,
-        reject,
-        timer
-      })
-      postToEditor({ ...message, requestId })
-    })
-  }
-
-  const editorLoadMessage = (xml: string): Record<string, unknown> => ({
-    action: 'load',
-    autosave: 1,
-    saveAndExit: '0',
-    modified: 'unsavedChanges',
-    title: baseName(pathRef.current) || 'diagram.drawio',
-    exportProtocol: true,
-    xml
-  })
-
-  const loadEditorDocument = (): void => {
-    if (!editorReadyRef.current || !documentReadyRef.current) return
-    postToEditor(editorLoadMessage(xmlRef.current))
-  }
-
-  const flushSave = (): void => {
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current)
-      saveTimerRef.current = null
-    }
-    const pending = pendingRef.current
-    if (!pending) return
-    pendingRef.current = null
-    setSaveState('saving')
-    writeChainRef.current = writeChainRef.current
-      .catch(() => {})
-      .then(() => writeFile(pending.path, pending.xml, pending.host))
-      .then(() => {
-        ownWriteAtRef.current = Date.now()
-        if (pending.revision === revisionRef.current && !pendingRef.current) {
-          setSaveState('saved')
-          setError('')
-        }
-      })
-      .catch((reason: unknown) => {
-        setSaveState('error')
-        setError(reason instanceof Error ? reason.message : String(reason))
-      })
-  }
-
-  const queueSave = (xml: string, immediate = false): void => {
-    xmlRef.current = xml
-    revisionRef.current += 1
-    pendingRef.current = {
-      host: hostRef.current,
-      path: pathRef.current,
-      revision: revisionRef.current,
-      xml
-    }
-    setSaveState('dirty')
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
-    if (immediate) {
-      flushSave()
-    } else {
-      saveTimerRef.current = window.setTimeout(flushSave, 500)
-    }
-  }
-
-  const openPath = (nextPath: string): void => {
-    const trimmed = nextPath.trim()
-    if (!trimmed || trimmed === pathRef.current) return
-    flushSave()
-    pathRef.current = trimmed
-    setPath(trimmed)
-    setPathDraft(trimmed)
+  const refresh = useCallback(async (): Promise<void> => {
     try {
-      window.localStorage.setItem(pathKey(hostRef.current, cwd), trimmed)
-    } catch {
-      // Local storage is optional; the drawing file remains authoritative.
-    }
-    documentReadyRef.current = false
-    void loadFromDisk(false)
-  }
-
-  const loadFromDisk = async (allowBlank: boolean): Promise<void> => {
-    const generation = ++loadGenerationRef.current
-    const target = pathRef.current
-    setSaveState('loading')
-    setError('')
-    try {
-      const xml = await readFile(target, hostRef.current)
-      if (generation !== loadGenerationRef.current || target !== pathRef.current) return
-      xmlRef.current = xml || EMPTY_DIAGRAM
-      documentReadyRef.current = true
-      setSaveState('ready')
-      loadEditorDocument()
+      const next = await invoke<PowerPointLiveStatus | null>('powerpoint_live_status')
+      setStatus((current) =>
+        current?.updated_at === next?.updated_at && current?.ready === next?.ready
+          ? current
+          : next
+      )
+      setError('')
     } catch (reason) {
-      if (generation !== loadGenerationRef.current || target !== pathRef.current) return
-      if (allowBlank) {
-        xmlRef.current = EMPTY_DIAGRAM
-        documentReadyRef.current = true
-        setSaveState('ready')
-        loadEditorDocument()
-      } else {
-        documentReadyRef.current = false
-        setSaveState('error')
-        setError(reason instanceof Error ? reason.message : String(reason))
-      }
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setLoading(false)
     }
-  }
-
-  useEffect(() => {
-    hostRef.current = host
-    const nextPath = initialPath(host, cwd)
-    pathRef.current = nextPath
-    setPath(nextPath)
-    setPathDraft(nextPath)
-    documentReadyRef.current = false
-    void loadFromDisk(true)
-    // loadFromDisk reads all mutable values from refs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host, cwd])
-
-  useEffect(() => {
-    const onMessage = (event: MessageEvent): void => {
-      if (event.source !== iframeRef.current?.contentWindow) return
-      const message = decodeMessage(event.data)
-      if (!message?.event) return
-
-      const requestId = requestIdFromMessage(message)
-      const pendingEntry = requestId
-        ? ([requestId, editorRequestsRef.current.get(requestId)] as const)
-        : Array.from(editorRequestsRef.current.entries()).find(
-            ([, pending]) => pending.event === message.event
-          )
-      if (pendingEntry) {
-        const [pendingId, pending] = pendingEntry
-        if (pending && pending.event === message.event) {
-          editorRequestsRef.current.delete(pendingId)
-          window.clearTimeout(pending.timer)
-          if (message.error) pending.reject(new Error(message.error))
-          else pending.resolve(message)
-        }
-      }
-
-      if (message.event === 'init') {
-        editorReadyRef.current = true
-        loadEditorDocument()
-        return
-      }
-
-      if ((message.event === 'autosave' || message.event === 'save') && message.xml) {
-        queueSave(message.xml, message.event === 'save')
-        if (message.event === 'save') {
-          postToEditor({ action: 'status', messageKey: 'allChangesSaved', modified: false })
-        }
-        return
-      }
-
-      if (message.event === 'exit' && message.xml) queueSave(message.xml, true)
-    }
-    window.addEventListener('message', onMessage)
-    return () => {
-      window.removeEventListener('message', onMessage)
-      for (const pending of editorRequestsRef.current.values()) {
-        window.clearTimeout(pending.timer)
-        pending.reject(new Error('draw.io editor closed'))
-      }
-      editorRequestsRef.current.clear()
-    }
-    // Message handling deliberately uses refs to avoid listener churn.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     let disposed = false
-    let unlisten: (() => void) | undefined
-    onRemoteFsChange((change) => {
-      if (disposed || (change.host || '') !== (hostRef.current || '')) return
-      const current = comparablePath(pathRef.current, !!hostRef.current)
-      if (!change.paths.some((item) => comparablePath(item, !!hostRef.current) === current)) {
-        return
-      }
-      if (Date.now() - ownWriteAtRef.current < 1200) return
-      if (externalTimerRef.current !== null) window.clearTimeout(externalTimerRef.current)
-      externalTimerRef.current = window.setTimeout(async () => {
-        try {
-          const xml = await readFile(pathRef.current, hostRef.current)
-          if (xml && xml !== xmlRef.current) {
-            xmlRef.current = xml
-            revisionRef.current += 1
-            setSaveState('ready')
-            loadEditorDocument()
-          }
-        } catch {
-          // A rename often arrives as delete + create; the next event retries it.
-        }
-      }, 250)
-    })
-      .then((stop) => {
-        if (disposed) stop()
-        else unlisten = stop
-      })
-      .catch(() => {})
+    const poll = async (): Promise<void> => {
+      if (!disposed) await refresh()
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 500)
     return () => {
       disposed = true
-      unlisten?.()
-      if (externalTimerRef.current !== null) window.clearTimeout(externalTimerRef.current)
+      window.clearInterval(timer)
     }
-  }, [])
+  }, [refresh])
+
+  const targetPath = joinPath(cwd, 'figure.pptx')
+  const presentationPath = status?.file_path || targetPath
+  const slideIndex = status?.slide_index || 1
+  const slideKey = `${presentationPath}\n${slideIndex}`
 
   useEffect(() => {
-    return () => {
-      if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
-      const pending = pendingRef.current
-      if (pending) {
-        void writeChainRef.current
-          .catch(() => {})
-          .then(() => writeFile(pending.path, pending.xml, pending.host))
-          .catch(() => {})
-      }
-    }
-  }, [])
+    setAnnotations(annotationStore.current.get(slideKey) || [])
+    setDraft(null)
+    setTextEditor(null)
+  }, [slideKey])
 
-  const chooseFile = async (): Promise<void> => {
-    if (host) {
-      document.getElementById('drawing-path')?.focus()
+  const replaceAnnotations = useCallback(
+    (next: Annotation[]): void => {
+      annotationStore.current.set(slideKey, next)
+      setAnnotations(next)
+    },
+    [slideKey]
+  )
+
+  const updateAnnotations = useCallback(
+    (update: (current: Annotation[]) => Annotation[]): void => {
+      setAnnotations((current) => {
+        const next = update(current)
+        annotationStore.current.set(slideKey, next)
+        return next
+      })
+    },
+    [slideKey]
+  )
+
+  const visibleAnnotations = draft ? [...annotations, draft] : annotations
+  const renderVisibleCanvas = useCallback((): void => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const bounds = canvas.getBoundingClientRect()
+    if (bounds.width < 1 || bounds.height < 1) return
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+    const pixelWidth = Math.round(bounds.width * pixelRatio)
+    const pixelHeight = Math.round(bounds.height * pixelRatio)
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth
+      canvas.height = pixelHeight
+    }
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)
+    context.clearRect(0, 0, bounds.width, bounds.height)
+    renderAnnotations(context, bounds.width, bounds.height, visibleAnnotations)
+  }, [visibleAnnotations])
+
+  useEffect(() => {
+    renderVisibleCanvas()
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const observer = new ResizeObserver(renderVisibleCanvas)
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [renderVisibleCanvas])
+
+  const activate = async (): Promise<void> => {
+    try {
+      await invoke('powerpoint_live_activate')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }
+
+  const commitTextEditor = useCallback((): void => {
+    if (!textEditor) return
+    const value = textEditor.value.trim()
+    if (value) {
+      updateAnnotations((current) => {
+        if (current.some((annotation) => annotation.id === textEditor.id)) return current
+        return [
+          ...current,
+          {
+            id: textEditor.id,
+            type: 'text',
+            point: textEditor.point,
+            text: value,
+            color: textEditor.color,
+            width: ANNOTATION_WIDTH
+          }
+        ]
+      })
+    }
+    setTextEditor(null)
+  }, [textEditor, updateAnnotations])
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    if (event.button !== 0 || tool === 'pointer') return
+    const point = pointerPoint(event)
+    if (tool === 'text') {
+      event.preventDefault()
       return
     }
-    const selected = await openDialog({
-      multiple: false,
-      directory: false,
-      defaultPath: path,
-      filters: [{ name: 'draw.io', extensions: ['drawio', 'xml'] }]
-    })
-    if (typeof selected === 'string') openPath(selected)
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDraft(
+      tool === 'pen'
+        ? {
+            id: annotationId(),
+            type: 'pen',
+            points: [point],
+            color,
+            width: ANNOTATION_WIDTH
+          }
+        : {
+            id: annotationId(),
+            type: 'ellipse',
+            start: point,
+            end: point,
+            color,
+            width: ANNOTATION_WIDTH
+          }
+    )
   }
 
-  const createDrawing = async (): Promise<void> => {
-    let target: string | null
-    if (host) {
-      const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
-      target = joinPath(cwd, `diagram-${stamp}.drawio`, true)
-    } else {
-      target = await saveDialog({
-        defaultPath: joinPath(cwd, 'diagram.drawio', false),
-        filters: [{ name: 'draw.io', extensions: ['drawio'] }]
-      })
+  const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    if (!draft) return
+    event.preventDefault()
+    const point = pointerPoint(event)
+    setDraft((current) => {
+      if (!current) return null
+      if (current.type === 'pen') {
+        const previous = current.points[current.points.length - 1]
+        if (previous && Math.hypot(point.x - previous.x, point.y - previous.y) < 0.0015) {
+          return current
+        }
+        return { ...current, points: [...current.points, point] }
+      }
+      return { ...current, end: point }
+    })
+  }
+
+  const handlePointerUp = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    if (!draft) return
+    event.preventDefault()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
-    if (!target) return
-    flushSave()
-    pathRef.current = target
-    setPath(target)
-    setPathDraft(target)
+    const completed = draft
+    setDraft(null)
+    const meaningful =
+      completed.type === 'pen'
+        ? completed.points.length > 1
+        : Math.abs(completed.end.x - completed.start.x) > 0.006 &&
+          Math.abs(completed.end.y - completed.start.y) > 0.006
+    if (meaningful) updateAnnotations((current) => [...current, completed])
+  }
+
+  const handleCanvasClick = (event: ReactPointerEvent<HTMLCanvasElement>): void => {
+    if (tool !== 'text') return
+    event.preventDefault()
+    commitTextEditor()
+    setTextEditor({ id: annotationId(), point: pointerPoint(event), color, value: '' })
+  }
+
+  const exportAnnotatedPng = (snapshot: Annotation[]): string => {
+    const image = imageRef.current
+    const width = status?.preview_pixel_width || image?.naturalWidth || 1600
+    const height = status?.preview_pixel_height || image?.naturalHeight || 1011
+
+    const createCanvas = (includePreview: boolean): HTMLCanvasElement => {
+      const output = document.createElement('canvas')
+      output.width = width
+      output.height = height
+      const context = output.getContext('2d')
+      if (!context) throw new Error('Canvas 2D is unavailable')
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, width, height)
+      if (includePreview && image?.complete && image.naturalWidth > 0) {
+        context.drawImage(image, 0, 0, width, height)
+      }
+      renderAnnotations(context, width, height, snapshot)
+      return output
+    }
+
     try {
-      window.localStorage.setItem(pathKey(hostRef.current, cwd), target)
+      return createCanvas(true).toDataURL('image/png').split(',', 2)[1]
     } catch {
-      // Local storage is optional; the drawing file remains authoritative.
-    }
-    xmlRef.current = EMPTY_DIAGRAM
-    documentReadyRef.current = true
-    loadEditorDocument()
-    queueSave(EMPTY_DIAGRAM, true)
-  }
-
-  const reloadEditor = (): void => {
-    editorReadyRef.current = false
-    documentReadyRef.current = false
-    setFrameKey((value) => value + 1)
-    void loadFromDisk(true)
-  }
-
-  const waitForEditor = async (timeoutMs = 15000): Promise<void> => {
-    const started = Date.now()
-    while (!editorReadyRef.current || !documentReadyRef.current) {
-      if (Date.now() - started > timeoutMs) {
-        throw new Error('The draw.io editor is not ready')
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      return createCanvas(false).toDataURL('image/png').split(',', 2)[1]
     }
   }
 
-  const exportCanvasModel = async (): Promise<{
-    xml: string
-    model: Record<string, unknown>
-  }> => {
-    await waitForEditor()
-    const response = await requestEditor(
-      {
-        action: 'export',
-        format: 'json',
-        includeData: true,
-        compressed: false,
-        allPages: true
-      },
-      'export',
-      30000
-    )
-    const model = parseExportPayload(response.data)
-    const exportedXml = typeof model.data === 'string' ? model.data : response.xml
-    if (!exportedXml) throw new Error('draw.io did not return editable XML')
-    return { xml: exportedXml, model }
-  }
-
-  const loadLiveXml = async (xml: string): Promise<void> => {
-    await waitForEditor()
-    await requestEditor(editorLoadMessage(xml), 'load', 20000)
-    xmlRef.current = xml
-    queueSave(xml)
-  }
-
-  const openLivePath = async (filePath?: string): Promise<void> => {
-    const target = filePath?.trim()
-    if (target && target !== pathRef.current) {
-      flushSave()
-      pathRef.current = target
-      setPath(target)
-      setPathDraft(target)
-      try {
-        window.localStorage.setItem(pathKey(hostRef.current, cwd), target)
-      } catch {
-        // The file path is still held by the active drawing session.
-      }
-      documentReadyRef.current = false
-      await loadFromDisk(true)
-    }
-    await waitForEditor()
-  }
-
-  const modelSummary = (
-    xml: string,
-    model: Record<string, unknown>,
-    maxCells = 500
-  ): Record<string, unknown> => {
-    const pages = Array.isArray(model.pages) ? model.pages : []
-    const cells = pages.flatMap((page) => {
-      if (!page || typeof page !== 'object') return []
-      const pageCells = (page as { cells?: unknown }).cells
-      return Array.isArray(pageCells) ? pageCells : []
-    })
-    const topologyById = new Map(
-      cells
-        .filter((cell): cell is Record<string, unknown> => !!cell && typeof cell === 'object')
-        .map((cell) => [String(cell.id || ''), cell])
-    )
-    const layout = drawingLayout(xml).map((cell) => ({
-      ...topologyById.get(String(cell.id || '')),
-      ...cell
-    }))
-    const layoutWarnings = auditDrawingLayout(layout)
-    return {
-      path: pathRef.current,
-      graph_ready: editorReadyRef.current && documentReadyRef.current,
-      pages: pages.length,
-      total: layout.length,
-      cells: layout.slice(0, maxCells),
-      truncated: layout.length > maxCells,
-      layout_warnings: layoutWarnings,
-      layout_warning_count: layoutWarnings.length,
-      control_scope: 'Linco draw.io embed API only'
-    }
-  }
-
-  const applyLiveOperation = async (
-    operation: DrawioLiveOperation
-  ): Promise<Record<string, unknown>> => {
-    if (operation.type === 'wait') {
-      const ms = Math.max(0, Math.min(10000, operation.ms ?? 0))
-      await new Promise((resolve) => window.setTimeout(resolve, ms))
-      return { type: 'wait', waited_ms: ms }
-    }
-    if (operation.type === 'fit') {
-      const response = await requestEditor(
+  const submitToAgent = async (): Promise<void> => {
+    if (!onSubmitToAgent || submitting) return
+    let snapshot = annotations
+    const pendingComment = textEditor?.value.trim()
+    if (textEditor && pendingComment && !snapshot.some((item) => item.id === textEditor.id)) {
+      snapshot = [
+        ...snapshot,
         {
-          action: 'fit',
-          border: 24,
-          maxScale:
-            operation.zoom_percent === undefined
-              ? 1
-              : Math.max(0.1, Math.min(8, operation.zoom_percent / 100))
-        },
-        'fit'
-      )
-      return {
-        type: 'fit',
-        scale: response.scale,
-        bounds: response.modelBounds || response.bounds
-      }
+          id: textEditor.id,
+          type: 'text',
+          point: textEditor.point,
+          text: pendingComment,
+          color: textEditor.color,
+          width: ANNOTATION_WIDTH
+        }
+      ]
+      replaceAnnotations(snapshot)
+      setTextEditor(null)
     }
 
-    const snapshot = await exportCanvasModel()
-    const nextXml = mutateDrawingXml(snapshot.xml, operation)
-    await loadLiveXml(nextXml)
-    return {
-      type: operation.type,
-      id: operation.id,
-      path: pathRef.current,
-      visible: true
+    if (snapshot.length === 0) {
+      onSubmitToAgent(t('drawing.powerpoint.agentPrompt', { path: presentationPath }))
+      return
     }
-  }
 
-  const screenshotLiveCanvas = async (width = 1600): Promise<Record<string, unknown>> => {
-    const response = await requestEditor(
-      {
-        action: 'export',
-        format: 'png',
-        width: Math.max(200, Math.min(4000, width)),
-        border: 16,
-        currentPage: true,
-        transparent: false
-      },
-      'export',
-      30000
-    )
-    if (typeof response.data !== 'string') throw new Error('draw.io did not return a PNG')
-    const comma = response.data.indexOf(',')
-    return {
-      data: comma >= 0 ? response.data.slice(comma + 1) : response.data,
-      mime_type: 'image/png',
-      path: pathRef.current,
-      bounds: response.modelBounds || response.bounds,
-      scale: response.scale
-    }
-  }
-
-  const executeLiveCommand = async (
-    command: DrawioLiveCommand
-  ): Promise<Record<string, unknown>> => {
-    if (command.type === 'launch') {
-      await openLivePath(command.file_path)
-      setLiveActive(true)
-      setLiveOperation('ready')
-      const snapshot = await exportCanvasModel()
-      return modelSummary(snapshot.xml, snapshot.model, 0)
-    }
-    if (command.type === 'status') {
-      const snapshot = await exportCanvasModel()
-      return {
-        ...modelSummary(snapshot.xml, snapshot.model, 0),
-        live: liveActive,
-        operations_applied: liveOperationCount
-      }
-    }
-    if (command.type === 'operation') {
-      if (!command.operation) throw new Error('Missing live drawing operation')
-      setLiveActive(true)
-      setLiveOperation(command.operation.type)
-      const result = await applyLiveOperation(command.operation)
-      setLiveOperationCount((count) => count + 1)
-      return result
-    }
-    if (command.type === 'inspect') {
-      const snapshot = await exportCanvasModel()
-      return modelSummary(snapshot.xml, snapshot.model, command.max_cells || 500)
-    }
-    if (command.type === 'screenshot') {
-      return screenshotLiveCanvas(command.width)
-    }
-    if (command.type === 'save') {
-      const snapshot = await exportCanvasModel()
-      const outputPath = command.output_path?.trim() || pathRef.current
-      await writeFile(outputPath, snapshot.xml, hostRef.current)
-      ownWriteAtRef.current = Date.now()
-      if (outputPath === pathRef.current) {
-        xmlRef.current = snapshot.xml
-        revisionRef.current += 1
-        pendingRef.current = null
-        setSaveState('saved')
-      }
-      setLiveOperation('saved')
-      return {
-        output_path: outputPath,
-        bytes: new TextEncoder().encode(snapshot.xml).byteLength,
-        saved_from_visible_session: true
-      }
-    }
-    throw new Error(`Unsupported draw.io Live command: ${command.type}`)
-  }
-
-  handleLiveCommandRef.current = async (event: DrawioLiveCommandEvent): Promise<void> => {
+    setSubmitting(true)
     try {
-      const result = await executeLiveCommand(event.command)
-      setError('')
-      await respondDrawioLive(event.id, result)
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason)
-      setLiveOperation('error')
-      setError(message)
-      await respondDrawioLive(event.id, undefined, message).catch(() => {})
-    }
-  }
-
-  useEffect(() => {
-    let disposed = false
-    let unlisten: (() => void) | undefined
-    onDrawioLiveCommand((event) => {
-      if (disposed) return
-      liveQueueRef.current = liveQueueRef.current
-        .catch(() => {})
-        .then(() => handleLiveCommandRef.current(event))
-    })
-      .then((stop) => {
-        if (disposed) stop()
-        else unlisten = stop
+      const pngBase64 = exportAnnotatedPng(snapshot)
+      const annotationPath = await invoke<string>('powerpoint_live_save_annotation', {
+        presentationPath,
+        slideIndex,
+        pngBase64
       })
-      .catch(() => {})
-    return () => {
-      disposed = true
-      unlisten?.()
+      const comments = snapshot
+        .filter((annotation): annotation is TextAnnotation => annotation.type === 'text')
+        .map((annotation, index) => `${index + 1}. ${annotation.text}`)
+        .join('\n')
+      const markCount = snapshot.filter((annotation) => annotation.type !== 'text').length
+      onSubmitToAgent(
+        t('drawing.powerpoint.annotationAgentPrompt', {
+          path: presentationPath,
+          slide: slideIndex,
+          preview: status?.preview_path || '',
+          annotation: annotationPath,
+          comments: comments || t('drawing.annotation.noTextComments'),
+          marks: markCount
+        })
+      )
+      setTool('pointer')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setSubmitting(false)
     }
-  }, [])
-
-  const submitToAgent = (): void => {
-    if (!onSubmitToAgent) return
-    onSubmitToAgent(t('drawing.agentPrompt', { path: pathRef.current }))
   }
 
-  const stateLabel = error
-    ? t('drawing.status.error')
-    : t(`drawing.status.${saveState}`)
+  const previewUrl = status?.preview_path
+    ? `${convertFileSrc(status.preview_path)}?v=${status.updated_at}`
+    : ''
+  const canvasSize = status
+    ? `${pointsToMillimeters(status.slide_width)} × ${pointsToMillimeters(status.slide_height)} mm`
+    : '182 × 115 mm'
+
+  if (host) {
+    return (
+      <div className="flex h-full items-center justify-center bg-white px-8 text-center text-sm text-ink-muted">
+        {t('drawing.powerpoint.remoteUnsupported')}
+      </div>
+    )
+  }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-black/8 px-2">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-canvas shadow-card ring-1 ring-black/5">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-black/8 px-2">
+        <Presentation size={16} className="shrink-0 text-ink-muted" />
         <button
-          onClick={() => void createDrawing()}
+          type="button"
+          onClick={() => void refresh()}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title={t('drawing.new')}
+          title={t('drawing.powerpoint.refresh')}
         >
-          <FilePlus2 size={15} />
+          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
         </button>
         <button
-          onClick={() => void chooseFile()}
-          className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title={host ? t('drawing.openRemote') : t('drawing.open')}
-        >
-          <FolderOpen size={15} />
-        </button>
-        <button
-          onClick={() => queueSave(xmlRef.current, true)}
-          disabled={!documentReadyRef.current}
+          type="button"
+          onClick={() => void activate()}
+          disabled={!status?.ready}
           className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink disabled:opacity-35"
-          title={t('common.save')}
+          title={t('drawing.powerpoint.open')}
         >
-          <Save size={15} />
+          <ExternalLink size={15} />
         </button>
-        <button
-          onClick={reloadEditor}
-          className="rounded-md p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title={t('drawing.reload')}
-        >
-          <RefreshCw size={15} />
-        </button>
-        <form
-          className="mx-1 min-w-0 flex-1"
-          onSubmit={(event) => {
-            event.preventDefault()
-            openPath(pathDraft)
-          }}
-        >
-          <input
-            id="drawing-path"
-            value={pathDraft}
-            onChange={(event) => setPathDraft(event.target.value)}
-            onBlur={() => openPath(pathDraft)}
-            spellCheck={false}
-            aria-label={t('drawing.path')}
-            className="h-7 w-full min-w-0 rounded-md border border-black/8 bg-sidebar/70 px-2 font-mono text-[11px] text-ink outline-none focus:border-accent/40 focus:bg-canvas"
-          />
-        </form>
-        {liveActive && (
-          <span
-            className="flex h-6 shrink-0 items-center gap-1 rounded-md bg-emerald-50 px-1.5 text-[11px] text-emerald-700 ring-1 ring-emerald-200"
-            title={t('drawing.live.hint')}
-          >
-            <Radio
-              size={12}
-              className={
-                liveOperation !== 'ready' &&
-                liveOperation !== 'saved' &&
-                liveOperation !== 'error'
-                  ? 'animate-pulse'
-                  : ''
-              }
-            />
-            <span>{t('drawing.live')}</span>
-            <span className="font-mono text-[10px] text-emerald-600">
-              {liveOperationCount}
-            </span>
+        <div className="min-w-0 flex-1 truncate rounded-md border border-black/8 bg-sidebar/70 px-2 py-1 font-mono text-[11px] text-ink-muted">
+          {presentationPath}
+        </div>
+        <span className="shrink-0 font-mono text-[10px] text-ink-faint">{canvasSize}</span>
+        {status && (
+          <span className="shrink-0 text-[11px] text-ink-faint">
+            {t('drawing.powerpoint.slideStatus', {
+              slide: status.slide_index,
+              total: status.slide_count,
+              shapes: status.shape_count
+            })}
           </span>
         )}
-        <span
-          className={`flex shrink-0 items-center gap-1 text-[11px] ${
-            error ? 'text-red-500' : 'text-ink-faint'
-          }`}
-          title={error || stateLabel}
-        >
-          {(saveState === 'loading' || saveState === 'saving') && (
-            <Loader2 size={12} className="animate-spin" />
-          )}
-          <span className="hidden 2xl:inline">{stateLabel}</span>
-        </span>
         {onSubmitToAgent && (
           <button
-            onClick={submitToAgent}
-            className="ml-1 flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 text-[12px] font-medium text-accent hover:bg-accent/10"
+            type="button"
+            onClick={() => void submitToAgent()}
+            disabled={submitting}
+            className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-accent hover:bg-accent/10 disabled:opacity-45"
             title={t('drawing.submitToAgent.hint')}
           >
-            <Bot size={15} />
+            {submitting ? <Loader2 size={15} className="animate-spin" /> : <Bot size={15} />}
             <span>{t('drawing.submitToAgent')}</span>
           </button>
         )}
       </div>
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-white [contain:strict]">
-        <iframe
-          key={`${frameKey}:${editorUrl}`}
-          ref={iframeRef}
-          title={t('drawing.editorTitle')}
-          src={editorUrl}
-          className="absolute inset-0 h-full w-full border-0 bg-white [backface-visibility:hidden] [transform:translateZ(0)]"
-          allow="clipboard-read; clipboard-write"
-        />
-        {saveState === 'error' && error && (
-          <div className="pointer-events-none absolute bottom-3 left-1/2 max-w-[80%] -translate-x-1/2 rounded-md bg-red-50 px-3 py-2 text-center text-[11px] text-red-700 shadow-sm ring-1 ring-red-200">
+      <div className="relative min-h-0 flex-1 overflow-auto bg-[#f3f4f6] p-5">
+        {previewUrl ? (
+          <>
+            <div className="sticky left-2 top-0 z-20 flex w-max items-center gap-1 rounded-lg bg-white/95 p-1 shadow-md ring-1 ring-black/10 backdrop-blur-sm">
+              <AnnotationToolButton
+                active={tool === 'pointer'}
+                title={t('drawing.annotation.pointer')}
+                onClick={() => setTool('pointer')}
+              >
+                <MousePointer2 size={15} />
+              </AnnotationToolButton>
+              <AnnotationToolButton
+                active={tool === 'pen'}
+                title={t('drawing.annotation.pen')}
+                onClick={() => setTool('pen')}
+              >
+                <Pencil size={15} />
+              </AnnotationToolButton>
+              <AnnotationToolButton
+                active={tool === 'ellipse'}
+                title={t('drawing.annotation.ellipse')}
+                onClick={() => setTool('ellipse')}
+              >
+                <CircleIcon size={15} />
+              </AnnotationToolButton>
+              <AnnotationToolButton
+                active={tool === 'text'}
+                title={t('drawing.annotation.comment')}
+                onClick={() => setTool('text')}
+              >
+                <MessageSquareText size={15} />
+              </AnnotationToolButton>
+              <div className="mx-0.5 h-5 w-px bg-black/10" />
+              {ANNOTATION_COLORS.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-label={t('drawing.annotation.color')}
+                  aria-pressed={color === value}
+                  title={t('drawing.annotation.color')}
+                  onClick={() => setColor(value)}
+                  className={`h-4 w-4 rounded-full ring-offset-1 transition-shadow ${
+                    color === value ? 'ring-2 ring-ink/70' : 'ring-1 ring-black/15 hover:ring-black/40'
+                  }`}
+                  style={{ backgroundColor: value }}
+                />
+              ))}
+              <div className="mx-0.5 h-5 w-px bg-black/10" />
+              <AnnotationToolButton
+                disabled={annotations.length === 0}
+                title={t('drawing.annotation.undo')}
+                onClick={() => updateAnnotations((current) => current.slice(0, -1))}
+              >
+                <Undo2 size={15} />
+              </AnnotationToolButton>
+              <AnnotationToolButton
+                disabled={annotations.length === 0}
+                title={t('drawing.annotation.clear')}
+                onClick={() => replaceAnnotations([])}
+              >
+                <Trash2 size={15} />
+              </AnnotationToolButton>
+            </div>
+            <div className="flex min-h-full items-center justify-center pt-3">
+              <div className="relative inline-block max-h-full max-w-full leading-none shadow-md ring-1 ring-black/10">
+                <img
+                  ref={imageRef}
+                  src={previewUrl}
+                  crossOrigin="anonymous"
+                  alt={t('drawing.powerpoint.previewAlt')}
+                  className="block max-h-full max-w-full bg-white object-contain"
+                  style={{ aspectRatio: `${status?.slide_width || 516} / ${status?.slide_height || 326}` }}
+                  onLoad={renderVisibleCanvas}
+                  onError={() => setError(t('drawing.powerpoint.previewError'))}
+                />
+                <canvas
+                  ref={canvasRef}
+                  data-testid="powerpoint-annotation-canvas"
+                  className={`absolute inset-0 h-full w-full ${
+                    tool === 'pointer' ? 'pointer-events-none' : 'cursor-crosshair'
+                  }`}
+                  style={{ touchAction: tool === 'pointer' ? 'auto' : 'none' }}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerUp}
+                  onClick={handleCanvasClick}
+                />
+                {textEditor && (
+                  <textarea
+                    autoFocus
+                    value={textEditor.value}
+                    aria-label={t('drawing.annotation.commentPlaceholder')}
+                    placeholder={t('drawing.annotation.commentPlaceholder')}
+                    onChange={(event) =>
+                      setTextEditor((current) =>
+                        current ? { ...current, value: event.target.value } : null
+                      )
+                    }
+                    onBlur={commitTextEditor}
+                    onKeyDown={(event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setTextEditor(null)
+                      } else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault()
+                        commitTextEditor()
+                      }
+                    }}
+                    className="absolute z-10 min-h-20 w-[min(240px,38%)] resize-none rounded-md border-2 bg-[#fffbe8] px-2 py-1.5 text-[13px] leading-5 text-ink shadow-lg outline-none placeholder:text-ink-faint"
+                    style={{
+                      left: `${Math.min(textEditor.point.x, 0.6) * 100}%`,
+                      top: `${Math.min(textEditor.point.y, 0.72) * 100}%`,
+                      borderColor: textEditor.color
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex min-h-full flex-col items-center justify-center gap-3 text-center text-ink-muted">
+            <Presentation size={36} strokeWidth={1.5} />
+            <div className="text-sm font-medium text-ink">{t('drawing.powerpoint.waiting')}</div>
+            <div className="max-w-md text-xs leading-5">{t('drawing.powerpoint.waitingHint')}</div>
+          </div>
+        )}
+        {error && (
+          <div className="absolute bottom-3 left-1/2 z-30 max-w-[80%] -translate-x-1/2 rounded-md bg-red-50 px-3 py-2 text-center text-[11px] text-red-700 shadow-sm ring-1 ring-red-200">
             {error}
           </div>
         )}

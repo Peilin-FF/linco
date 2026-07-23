@@ -39,6 +39,10 @@ import {
   type LatexCompileResult,
   type OverleafProjectInfo
 } from '@/lib/latex'
+import {
+  chooseLatexMainDocument,
+  type LatexProjectTextFile
+} from '@/lib/latexProject'
 import { useI18n } from '@/lib/i18n'
 
 interface LatexViewProps {
@@ -55,6 +59,8 @@ interface ProjectFile {
   depth: number
   kind: 'tex' | 'bib' | 'style' | 'image'
 }
+
+const ROOT_INSPECTION_LIMIT = 16
 
 type Engine = 'pdflatex' | 'xelatex' | 'lualatex'
 
@@ -118,6 +124,34 @@ async function collectProjectFiles(root: string, host?: string): Promise<Project
       file.name.toLowerCase() === 'main.tex' ? 0 : file.kind === 'tex' ? 1 : file.kind === 'bib' ? 2 : 3
     return weight(a) - weight(b) || a.relative.localeCompare(b.relative)
   })
+}
+
+async function inspectTexSources(
+  files: ProjectFile[],
+  host?: string
+): Promise<Map<string, string>> {
+  const texFiles = files
+    .filter((file) => file.kind === 'tex')
+    .sort(
+      (a, b) =>
+        a.depth - b.depth ||
+        a.relative.localeCompare(b.relative)
+    )
+    .slice(0, ROOT_INSPECTION_LIMIT)
+  const sources = new Map<string, string>()
+  const batchSize = 8
+  for (let index = 0; index < texFiles.length; index += batchSize) {
+    await Promise.all(
+      texFiles.slice(index, index + batchSize).map(async (file) => {
+        try {
+          sources.set(file.path, await readFile(file.path, host))
+        } catch {
+          // An unreadable file should not prevent the rest of the project from opening.
+        }
+      })
+    )
+  }
+  return sources
 }
 
 function storageKey(host: string | undefined, root: string, field: string): string {
@@ -204,11 +238,20 @@ export default function LatexView({
       const nextFiles = await collectProjectFiles(cwd, host)
       setFiles(nextFiles)
       const rememberedMain = window.localStorage.getItem(storageKey(host, cwd, 'main')) || ''
+      const texFiles = nextFiles.filter((file) => file.kind === 'tex')
+      const validRemembered = texFiles.find((file) => file.path === rememberedMain)?.path
+      const conventionalMain = texFiles.find(
+        (file) => file.name.toLowerCase() === 'main.tex'
+      )?.path
       const nextMain =
-        nextFiles.find((file) => file.path === rememberedMain && file.kind === 'tex')?.path ||
-        nextFiles.find((file) => file.name.toLowerCase() === 'main.tex')?.path ||
-        nextFiles.find((file) => file.kind === 'tex')?.path ||
-        ''
+        validRemembered ||
+        conventionalMain ||
+        chooseLatexMainDocument(
+          texFiles as LatexProjectTextFile[],
+          '',
+          await inspectTexSources(nextFiles, host),
+          !host
+        )
       setMainPath(nextMain)
       setSelectedPath((current) =>
         nextFiles.some((file) => file.path === current && TEXT_EXTENSIONS.has(file.name.split('.').pop()?.toLowerCase() || ''))
@@ -578,7 +621,11 @@ export default function LatexView({
           <button
             onClick={() =>
               onSubmitToAgent(
-                t('latex.agentPrompt', { path: selectedPath || mainPath, root: cwd })
+                t('latex.agentPrompt', {
+                  path: selectedPath || mainPath,
+                  root: cwd,
+                  main: mainPath
+                })
               )
             }
             className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-accent hover:bg-accent/10"
@@ -685,8 +732,10 @@ export default function LatexView({
               </div>
             ) : selectedFile ? (
               <LatexVisualEditor
+                key={selectedFile.path}
                 value={content}
                 fileName={selectedFile.name}
+                isMainDocument={selectedFile.path === mainPath}
                 mode={editorMode}
                 dirty={dirty}
                 saving={saving}

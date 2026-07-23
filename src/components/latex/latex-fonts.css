@@ -1,0 +1,17 @@
+@font-face {
+  font-family: 'Linco JetBrains Mono';
+  src: url('../../assets/fonts/jetbrains-mono/JetBrainsMono-Variable.woff2')
+    format('woff2-variations');
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Linco JetBrains Mono';
+  src: url('../../assets/fonts/jetbrains-mono/JetBrainsMono-VariableItalic.woff2')
+    format('woff2-variations');
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+}

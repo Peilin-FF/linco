@@ -33,12 +33,14 @@ import {
 } from 'lucide-react'
 import { useIsDark } from '@/lib/theme'
 import { useI18n } from '@/lib/i18n'
+import './latex-fonts.css'
 
 export type LatexEditorMode = 'visual' | 'source'
 
 interface LatexVisualEditorProps {
   value: string
   fileName: string
+  isMainDocument: boolean
   mode: LatexEditorMode
   dirty: boolean
   saving: boolean
@@ -465,10 +467,63 @@ const visualTheme = EditorView.theme({
   }
 })
 
+const SOURCE_FONT =
+  "'Linco JetBrains Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace"
+
 const sourceTheme = EditorView.theme({
-  '&': { height: '100%', userSelect: 'text' },
-  '.cm-scroller': { overflow: 'auto' },
-  '.cm-content': { minHeight: '100%', padding: '12px 0 40px' },
+  '&': {
+    height: '100%',
+    userSelect: 'text',
+    textRendering: 'optimizeSpeed',
+    fontVariantNumeric: 'slashed-zero'
+  },
+  '.cm-scroller': {
+    overflow: 'auto',
+    fontFamily: SOURCE_FONT
+  },
+  '.cm-content': {
+    minHeight: '100%',
+    padding: '12px 0 40px',
+    fontSize: '13px',
+    lineHeight: '1.5',
+    fontWeight: '400',
+    fontFeatureSettings: "'liga' 0, 'calt' 0",
+    letterSpacing: '0'
+  },
+  '.cm-cursor-primary': {
+    fontSize: '13px',
+    lineHeight: '1.5'
+  },
+  '.cm-gutters': {
+    borderRight: 'none',
+    fontFamily: SOURCE_FONT,
+    fontSize: '13px',
+    lineHeight: '1.5'
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 4px 0 0',
+    userSelect: 'none'
+  },
+  '.cm-cursor, .cm-dropCursor': {
+    borderWidth: '2px',
+    marginLeft: '-1px'
+  },
+  '.cm-lintRange.cm-lintRange': {
+    backgroundImage: 'none',
+    paddingBottom: '0'
+  },
+  '.cm-lintRange-error': {
+    background: 'rgba(255, 0, 0, 0.2)'
+  },
+  '.cm-lintRange-warning': {
+    background: 'rgba(222, 128, 20, 0.16)'
+  },
+  '.cm-lintRange-error .cm-lintRange-error, .cm-lintRange-warning .cm-lintRange-warning': {
+    background: 'none'
+  },
+  '.cm-diagnosticSource': {
+    display: 'none'
+  },
   '&.cm-focused': { outline: 'none' }
 })
 
@@ -496,6 +551,7 @@ function ToolbarButton({
 export default function LatexVisualEditor({
   value,
   fileName,
+  isMainDocument,
   mode,
   dirty,
   saving,
@@ -515,7 +571,12 @@ export default function LatexVisualEditor({
         autoCloseBrackets: true,
         enableAutocomplete: true,
         enableLinting: true,
-        enableTooltips: mode === 'source'
+        enableTooltips: mode === 'source',
+        linter: {
+          checkMissingDocumentEnv: isMainDocument,
+          checkMissingReferences: false,
+          checkCitesWithoutBibliography: false
+        }
       }),
       EditorView.lineWrapping,
       keymap.of([
@@ -534,7 +595,7 @@ export default function LatexVisualEditor({
       ]),
       mode === 'visual' ? [visualDecorations, visualTheme] : sourceTheme
     ],
-    [fileName, mode, onSave]
+    [fileName, isMainDocument, mode, onSave]
   )
 
   const wrapSelection = (before: string, after: string, placeholder: string): void => {
@@ -672,7 +733,7 @@ export default function LatexVisualEditor({
             searchKeymap: false,
             historyKeymap: false
           }}
-          style={{ height: '100%', fontSize: mode === 'source' ? 13 : 16 }}
+          style={{ height: '100%', fontSize: mode === 'visual' ? 16 : 13 }}
         />
       </div>
     </div>

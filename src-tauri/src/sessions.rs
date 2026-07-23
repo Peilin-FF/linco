@@ -60,7 +60,9 @@ fn is_injected_context(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("<environment_context>")
         || t.starts_with("<user_instructions>")
+        || t.starts_with("<codex_internal_context")
         || t.starts_with("<system-reminder>")
+        || t.starts_with("# AGENTS.md instructions")
         || t.starts_with("Caveat:")
 }
 
@@ -98,11 +100,19 @@ fn claude_title(content: &str) -> Option<String> {
     None
 }
 
-/// 从 Codex 的 jsonl 内容里取 cwd 与首条真实用户消息。
-/// 返回 (cwd, title)。
-fn codex_meta(content: &str) -> (Option<String>, Option<String>) {
+struct CodexMeta {
+    cwd: Option<String>,
+    session_id: Option<String>,
+    title: Option<String>,
+    is_subagent: bool,
+}
+
+/// Read the resumable UUID, project path, title, and source from a Codex rollout.
+fn codex_meta(content: &str) -> CodexMeta {
     let mut cwd: Option<String> = None;
+    let mut session_id: Option<String> = None;
     let mut title: Option<String> = None;
+    let mut is_subagent = false;
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -110,13 +120,17 @@ fn codex_meta(content: &str) -> (Option<String>, Option<String>) {
         };
         let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
         if ty == "session_meta" {
-            if let Some(c) = v
-                .get("payload")
-                .and_then(|p| p.get("cwd"))
-                .and_then(|c| c.as_str())
-            {
+            let payload = v.get("payload").unwrap_or(&v);
+            if let Some(c) = payload.get("cwd").and_then(|c| c.as_str()) {
                 cwd = Some(c.to_string());
             }
+            if let Some(id) = payload.get("id").and_then(|id| id.as_str()) {
+                session_id = Some(id.to_string());
+            }
+            is_subagent = payload
+                .get("source")
+                .and_then(|source| source.get("subagent"))
+                .is_some();
         } else if ty == "response_item" && title.is_none() {
             let p = v.get("payload").unwrap_or(&v);
             if p.get("role").and_then(|r| r.as_str()) == Some("user") {
@@ -132,11 +146,35 @@ fn codex_meta(content: &str) -> (Option<String>, Option<String>) {
                 }
             }
         }
-        if cwd.is_some() && title.is_some() {
+        if cwd.is_some() && session_id.is_some() && title.is_some() {
             break;
         }
     }
-    (cwd, title)
+    CodexMeta {
+        cwd,
+        session_id,
+        title,
+        is_subagent,
+    }
+}
+
+fn normalize_project_path(raw: &str) -> String {
+    let path = fs::canonicalize(raw).unwrap_or_else(|_| PathBuf::from(raw));
+    let mut normalized = path.to_string_lossy().replace('\\', "/");
+    if let Some(rest) = normalized.strip_prefix("//?/") {
+        normalized = rest.to_string();
+    }
+    while normalized.len() > 1 && normalized.ends_with('/') {
+        normalized.pop();
+    }
+    if cfg!(target_os = "windows") {
+        normalized.make_ascii_lowercase();
+    }
+    normalized
+}
+
+fn same_project_path(left: &str, right: &str) -> bool {
+    normalize_project_path(left) == normalize_project_path(right)
 }
 
 /// 本地:列 Claude 项目目录下的会话。
@@ -205,18 +243,24 @@ fn collect_codex(dir: &Path, cwd: &str, out: &mut Vec<SessionInfo>) -> Result<()
             Ok(c) => c,
             Err(_) => continue,
         };
-        let (file_cwd, title) = codex_meta(&content);
-        if file_cwd.as_deref() != Some(cwd) {
+        let session = codex_meta(&content);
+        if session.is_subagent
+            || !session
+                .cwd
+                .as_deref()
+                .is_some_and(|file_cwd| same_project_path(file_cwd, cwd))
+        {
             continue; // 不是本项目的会话
         }
         let meta = entry.metadata().map_err(|e| e.to_string())?;
-        let id = path
+        let file_id = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
+        let id = session.session_id.unwrap_or(file_id);
         out.push(SessionInfo {
             id: id.clone(),
-            title: title.unwrap_or_else(|| short_id(&id)),
+            title: session.title.unwrap_or_else(|| short_id(&id)),
             mtime: mtime_secs(&meta),
             size: meta.len(),
         });
@@ -378,13 +422,17 @@ fn find_codex_file(id: &str) -> Result<PathBuf, String> {
                 if let Some(p) = walk(&path, id) {
                     return Some(p);
                 }
-            } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
-                && path
+            } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                let matches = path
                     .file_stem()
-                    .map(|s| s.to_string_lossy() == id)
-                    .unwrap_or(false)
-            {
-                return Some(path);
+                    .map(|stem| {
+                        let stem = stem.to_string_lossy();
+                        stem == id || stem.ends_with(&format!("-{id}"))
+                    })
+                    .unwrap_or(false);
+                if matches {
+                    return Some(path);
+                }
             }
         }
         None
@@ -409,6 +457,79 @@ mod tests {
         let jsonl = r#"{"type":"user","message":{"content":"<environment_context>x</environment_context>"}}
 {"type":"user","message":{"content":"帮我修一个 bug"}}"#;
         assert_eq!(claude_title(jsonl).as_deref(), Some("帮我修一个 bug"));
+    }
+
+    #[test]
+    fn codex_meta_uses_uuid_and_skips_agent_instructions() {
+        let jsonl = r##"{"type":"session_meta","payload":{"id":"019f-test","cwd":"C:\\work\\app","source":"cli"}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>test</INSTRUCTIONS>"}]}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Fix the history list"}]}}"##;
+        let meta = codex_meta(jsonl);
+        assert_eq!(meta.session_id.as_deref(), Some("019f-test"));
+        assert_eq!(meta.cwd.as_deref(), Some(r"C:\work\app"));
+        assert_eq!(meta.title.as_deref(), Some("Fix the history list"));
+        assert!(!meta.is_subagent);
+    }
+
+    #[test]
+    fn codex_meta_marks_subagent_sessions() {
+        let jsonl = r#"{"type":"session_meta","payload":{"id":"child","cwd":"/work/app","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}}}"#;
+        assert!(codex_meta(jsonl).is_subagent);
+    }
+
+    #[test]
+    fn codex_collection_keeps_only_direct_sessions_for_project() {
+        let root = std::env::temp_dir().join(format!(
+            "linco-codex-sessions-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let day = root.join("2026").join("07").join("23");
+        fs::create_dir_all(&day).unwrap();
+        fs::write(
+            day.join("rollout-direct-root-id.jsonl"),
+            r#"{"type":"session_meta","payload":{"id":"root-id","cwd":"C:\\work\\app","source":"cli"}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Direct conversation"}]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            day.join("rollout-subagent-id.jsonl"),
+            r#"{"type":"session_meta","payload":{"id":"subagent-id","cwd":"C:\\work\\app","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root-id"}}}}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Internal worker"}]}}"#,
+        )
+        .unwrap();
+        fs::write(
+            day.join("rollout-other-project.jsonl"),
+            r#"{"type":"session_meta","payload":{"id":"other-id","cwd":"C:\\work\\other","source":"cli"}}
+{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"Other project"}]}}"#,
+        )
+        .unwrap();
+
+        let mut sessions = Vec::new();
+        let project = if cfg!(target_os = "windows") {
+            r"c:\WORK\app"
+        } else {
+            r"C:\work\app"
+        };
+        collect_codex(&root, project, &mut sessions).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "root-id");
+        assert_eq!(sessions[0].title, "Direct conversation");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn project_paths_ignore_windows_case_and_verbatim_prefix() {
+        if cfg!(target_os = "windows") {
+            assert!(same_project_path(
+                r"\\?\C:\Users\Tester\Project\\",
+                r"c:\users\tester\project"
+            ));
+        }
     }
 
     #[test]

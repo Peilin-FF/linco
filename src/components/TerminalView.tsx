@@ -309,11 +309,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         return true
       })
 
-      // Codex can redraw a fixed-height normal buffer without contributing any
-      // rows to xterm's scrollback. In that state xterm receives wheel events,
-      // but has nowhere to scroll. New Codex sessions use --no-alt-screen (see
-      // agentLaunchCommand); this fallback also makes already-running sessions
-      // and older Codex versions scroll through their transcript naturally.
+      // Keep Codex wheel input inside xterm's normal scrollback. Forwarding the
+      // wheel to Codex opens its transcript pager, which steals keyboard focus
+      // until the user presses q. Codex is launched with --no-alt-screen, so
+      // xterm owns the transcript and can scroll it directly.
       let wheelRemainder = 0
       term.attachCustomWheelEventHandler((event): boolean => {
         if (event.ctrlKey || event.metaKey || event.shiftKey || event.deltaY === 0) {
@@ -331,13 +330,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           usageRef.current?.provider === 'openai' ||
           commandName === 'codex' ||
           commandName === 'codex.exe'
-        if (!isCodex || term.modes.mouseTrackingMode !== 'none') return true
-
-        const buffer = term.buffer.active
-        if (buffer.type === 'normal' && buffer.baseY > 0) {
-          wheelRemainder = 0
-          return true
-        }
+        if (!isCodex) return true
 
         const lineHeight =
           Number(term.options.fontSize ?? 13.5) * Number(term.options.lineHeight ?? 1)
@@ -356,35 +349,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
         wheelRemainder -= rawLines * lineHeight
         const lineCount = Math.min(Math.abs(rawLines), 6)
-        const lineKey = rawLines < 0 ? '\x1b[A' : '\x1b[B'
-        const edgeRows = [
-          0,
-          1,
-          2,
-          3,
-          term.rows - 4,
-          term.rows - 3,
-          term.rows - 2,
-          term.rows - 1
-        ]
-        const transcriptProbe = [...new Set(edgeRows)]
-          .filter((row) => row >= 0 && row < term.rows)
-          .map((row) => buffer.getLine(buffer.viewportY + row)?.translateToString(true))
-          .join('')
-          .toLowerCase()
-          .replace(/\s+/g, '')
-        const inTranscript =
-          transcriptProbe.includes('transcript') ||
-          (transcriptProbe.includes('qtoquit') && transcriptProbe.includes('esctoeditprev'))
-
-        if (inTranscript) {
-          void termWrite(id, lineKey.repeat(lineCount))
-        } else if (rawLines < 0) {
-          // Ctrl+T opens Codex's transcript; the following Up keys scroll the
-          // newly opened pager. Keeping them in one PTY write preserves order
-          // even for higher-latency SSH sessions.
-          void termWrite(id, '\x14' + lineKey.repeat(lineCount))
-        }
+        term.scrollLines(rawLines < 0 ? -lineCount : lineCount)
         return false
       })
 

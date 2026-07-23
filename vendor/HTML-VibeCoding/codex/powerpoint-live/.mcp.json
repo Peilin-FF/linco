@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "linco-powerpoint-live": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/scripts/server.mjs"]
+    }
+  }
+}

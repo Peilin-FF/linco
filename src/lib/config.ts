@@ -343,8 +343,8 @@ function codexResumeCommand(
   if (perm === 'bypass') {
     cmd += ' --dangerously-bypass-approvals-and-sandbox'
   } else if (perm === 'full-auto') {
-    // resume 不认 --full-auto,用等价的沙箱+审批组合
-    cmd += ' --sandbox workspace-write --ask-for-approval on-failure'
+    // Current Codex resume accepts on-request, not the removed on-failure value.
+    cmd += ' --sandbox workspace-write --ask-for-approval on-request'
   }
   const effort = agent.effort.trim()
   if (effort) cmd += codexConfigArg('model_reasoning_effort', effort, shell)
@@ -399,7 +399,7 @@ export function agentLaunchCommand(
   if (perm) {
     if (isCodex) {
       if (perm === 'full-auto' && !hasFlag(cmd, '--full-auto', '--full-auto')) {
-        cmd += ' --full-auto'
+        cmd += ' --sandbox workspace-write --ask-for-approval on-request'
       } else if (
         perm === 'bypass' &&
         !cmd.includes('--dangerously-bypass-approvals-and-sandbox')
