@@ -14,7 +14,8 @@ import {
   PanelLeftClose,
   X,
   Download,
-  Loader2
+  Loader2,
+  RefreshCw
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
@@ -130,7 +131,10 @@ export default function App(): JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
   const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [updateChecked, setUpdateChecked] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
+  const updateCheckInFlightRef = useRef(false)
   // 点更新横幅 → 弹出「新版更新内容」公告(展示 release notes,再让用户决定是否更新)
   const [showUpdatePanel, setShowUpdatePanel] = useState(false)
   // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
@@ -223,31 +227,56 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 启动时检查 GitHub release updater；只在发现新版本时显示右上角提示。
+  const runUpdateCheck = async (): Promise<boolean> => {
+    if (updateCheckInFlightRef.current) return true
+    updateCheckInFlightRef.current = true
+    setCheckingUpdate(true)
+    setUpdateChecked(false)
+    setUpdateError(null)
+    try {
+      const update = await check({ timeout: 60_000 })
+      setAvailableUpdate(update)
+      setUpdateChecked(true)
+      return true
+    } catch (err) {
+      setUpdateError(err instanceof Error ? err.message : String(err))
+      return false
+    } finally {
+      updateCheckInFlightRef.current = false
+      setCheckingUpdate(false)
+    }
+  }
+
+  // GitHub Release 在部分网络下会偶发 TLS/重定向失败。启动后快速重试，
+  // 并保留周期检查，避免一次瞬时错误让客户端数小时收不到更新。
   useEffect(() => {
     let cancelled = false
-    const runCheck = async (): Promise<void> => {
-      try {
-        const update = await check({ timeout: 8000 })
-        if (!cancelled) {
-          setAvailableUpdate(update)
-          setUpdateError(null)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setUpdateError(err instanceof Error ? err.message : String(err))
+    let retryTimer: number | undefined
+
+    const runWithRetry = async (retryIndex = 0): Promise<void> => {
+      const succeeded = await runUpdateCheck()
+      if (!cancelled && !succeeded) {
+        const retryDelays = [15_000, 60_000]
+        const delay = retryDelays[retryIndex]
+        if (delay !== undefined) {
+          retryTimer = window.setTimeout(() => {
+            runWithRetry(retryIndex + 1).catch(() => {})
+          }, delay)
         }
       }
     }
 
-    runCheck().catch(() => {})
+    runWithRetry().catch(() => {})
     const timer = window.setInterval(() => {
-      runCheck().catch(() => {})
-    }, 6 * 60 * 60 * 1000)
+      runWithRetry().catch(() => {})
+    }, 30 * 60 * 1000)
     return () => {
       cancelled = true
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       window.clearInterval(timer)
     }
+    // App is the root component; runUpdateCheck intentionally uses current state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // 当前激活的连接(空 = 本地)
@@ -1023,6 +1052,30 @@ export default function App(): JSX.Element {
               />
             )}
           </div>
+        )}
+        {!availableUpdate && (
+          <button
+            onClick={() => runUpdateCheck().catch(() => {})}
+            disabled={checkingUpdate}
+            title={
+              updateError
+                ? t('update.failed', { error: updateError })
+                : checkingUpdate
+                  ? t('update.checking')
+                  : updateChecked
+                    ? t('update.upToDate')
+                    : t('update.checkNow')
+            }
+            className={`no-drag flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-default ${
+              updateError
+                ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                : updateChecked
+                  ? 'text-emerald-600 hover:bg-emerald-50'
+                  : 'text-ink-muted hover:bg-black/5 hover:text-ink'
+            }`}
+          >
+            <RefreshCw size={15} className={checkingUpdate ? 'animate-spin' : undefined} />
+          </button>
         )}
         <ConnectionPicker
           connections={config.connections}

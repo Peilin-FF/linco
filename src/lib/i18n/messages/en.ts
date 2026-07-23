@@ -164,6 +164,8 @@ export const en: Record<string, string> = {
   'update.installing': 'Updating…',
   'update.failed': 'Update failed: {error}',
   'update.checking': 'Checking for updates',
+  'update.checkNow': 'Check for updates',
+  'update.upToDate': 'Linco is up to date',
   'update.install': 'Install Linco {version}',
   'update.whatsNew': "What's new",
   'update.installNow': 'Update now',

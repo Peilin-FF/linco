@@ -66,7 +66,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.1:
+            Linco 1.0.2:
+            - 修复 GitHub Release 网络抖动时静默收不到更新的问题，增加 60 秒超时、启动重试和右上角手动检查入口
             - 绘图工作区改为 PowerPoint Live，实时同步当前幻灯片并支持 Linco 批注后局部修改
             - LaTeX 工作区按 Overleaf 模型识别主文档，子文件不再误报缺失 document 环境
             - LaTeX Source 内置 JetBrains Mono，并改进源码诊断、文件切换和跨文件引用体验

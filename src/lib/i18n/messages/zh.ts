@@ -172,6 +172,8 @@ export const zh: Record<string, string> = {
   'update.installing': '正在更新…',
   'update.failed': '更新失败: {error}',
   'update.checking': '正在检查更新',
+  'update.checkNow': '检查更新',
+  'update.upToDate': '已是最新版本',
   'update.install': '安装 Linco {version}',
   'update.whatsNew': '新版更新内容',
   'update.installNow': '立即更新',
