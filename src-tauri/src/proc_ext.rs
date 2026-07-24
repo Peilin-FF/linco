@@ -104,7 +104,6 @@ pub fn cli_command(name: &str, args: &[&str]) -> Command {
     c
 }
 
-
 /// 痛点:GUI 启动的 app(Finder/launchd)PATH 是精简的(`/usr/bin:/bin:...`),
 /// 不含 nvm / homebrew / `~/.local/bin` 等。于是 `Command::new("claude")` 找不到,
 /// 误报「不支持」。这里依次:① 常见安装目录直查;② 登录 shell 取 `which`;
@@ -161,8 +160,7 @@ pub fn resolve_exe(name: &str) -> String {
 pub fn resolve_exe(name: &str) -> String {
     use std::path::Path;
     let path = std::env::var("PATH").unwrap_or_default();
-    let pathext =
-        std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
     resolve_exe_in(name, &path, &pathext, |p| Path::new(p).is_file())
 }
 
@@ -170,12 +168,7 @@ pub fn resolve_exe(name: &str) -> String {
 /// 沿 PATH 每个目录 × PATHEXT(先试无扩展名,再逐个后缀)找第一个 `exists` 为真的候选,
 /// 返回其完整路径;带分隔符的入参原样返回;全不命中则回退裸名。
 #[cfg_attr(not(windows), allow(dead_code))]
-fn resolve_exe_in(
-    name: &str,
-    path: &str,
-    pathext: &str,
-    exists: impl Fn(&str) -> bool,
-) -> String {
+fn resolve_exe_in(name: &str, path: &str, pathext: &str, exists: impl Fn(&str) -> bool) -> String {
     // 已是带分隔符的路径(调用方已给绝对/相对路径)→ 原样返回。
     if name.contains('\\') || name.contains('/') {
         return name.to_string();
@@ -212,8 +205,7 @@ mod tests {
         // 必须解析到 .cmd 全路径(这正是修复前裸名找不到、导致误判"无 plugin"的场景)。
         // 闭包用大小写不敏感比较,模拟 Windows 文件系统(PATHEXT 是大写,真实 FS 不区分大小写)。
         let path = r"C:\Users\me\AppData\Roaming\npm;C:\Windows\System32";
-        let exists =
-            |p: &str| p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex.cmd");
+        let exists = |p: &str| p.eq_ignore_ascii_case(r"C:\Users\me\AppData\Roaming\npm\codex.cmd");
         assert_eq!(
             resolve_exe_in("codex", path, PATHEXT, exists).to_ascii_lowercase(),
             r"c:\users\me\appdata\roaming\npm\codex.cmd"
@@ -254,13 +246,19 @@ mod tests {
             resolve_exe_in(r"C:\tools\codex.cmd", "", PATHEXT, never),
             r"C:\tools\codex.cmd"
         );
-        assert_eq!(resolve_exe_in("/usr/bin/git", "", PATHEXT, never), "/usr/bin/git");
+        assert_eq!(
+            resolve_exe_in("/usr/bin/git", "", PATHEXT, never),
+            "/usr/bin/git"
+        );
     }
 
     #[test]
     fn falls_back_to_bare_name_when_not_found() {
         // PATH 里找不到 → 回退裸名(交给系统,不比现状差)。
         let none = |_: &str| false;
-        assert_eq!(resolve_exe_in("codex", r"C:\x;C:\y", PATHEXT, none), "codex");
+        assert_eq!(
+            resolve_exe_in("codex", r"C:\x;C:\y", PATHEXT, none),
+            "codex"
+        );
     }
 }

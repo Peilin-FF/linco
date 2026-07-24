@@ -1130,6 +1130,7 @@ mod tests {
 
     // 用本地 /bin/sh 构造一个会话(与 `ssh host /bin/sh` 同样的管道语义),
     // 从而无需远程即可测试分帧协议。
+    #[cfg(not(windows))]
     fn local_session() -> ShellSession {
         let mut child = Command::new("/bin/sh")
             .stdin(Stdio::piped())
@@ -1147,6 +1148,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn frame_stdout_stderr_rc() {
         let mut s = local_session();
         let (out, err, rc) = exec_on(
@@ -1162,6 +1164,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn frame_binary_roundtrip() {
         let mut s = local_session();
         // 输出含 NUL 与高位字节,验证 base64 分帧二进制安全
@@ -1177,6 +1180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn frame_stdin_data() {
         let mut s = local_session();
         // 把数据经 stdin 喂给 cat,验证 heredoc 解码路径
@@ -1188,6 +1192,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn frame_reuse_same_session() {
         // 同一会话连续多条命令(验证复用不串状态)
         let mut s = local_session();
@@ -1206,6 +1211,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn frame_timeout_kills() {
         let mut s = local_session();
         let r = exec_on(&mut s, "sleep 30", None, Duration::from_millis(800));

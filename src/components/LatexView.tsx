@@ -15,8 +15,10 @@ import {
   FileCode2,
   FileImage,
   FileText,
+  Folder,
   FolderGit2,
   FolderOpen,
+  ListTree,
   Loader2,
   PanelRightClose,
   PanelRightOpen,
@@ -27,15 +29,27 @@ import {
 import LatexVisualEditor, {
   type LatexEditorMode
 } from './latex/LatexVisualEditor'
-import { baseName, invalidateFile, listDir, readBytes, readFile, writeFile } from '@/lib/fs'
+import {
+  baseName,
+  invalidateFile,
+  listDir,
+  parentDir,
+  readBytes,
+  readFile,
+  writeFile
+} from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
 import {
   compileLatex,
+  type LatexPolishMode,
   overleafClone,
   overleafProjectInfo,
   overleafPublish,
   overleafPull,
   overleafStoreToken,
+  reviewLatex,
+  suggestLatex,
+  type LatexReviewSegment,
   type LatexCompileResult,
   type OverleafProjectInfo
 } from '@/lib/latex'
@@ -48,7 +62,7 @@ import { useI18n } from '@/lib/i18n'
 interface LatexViewProps {
   host?: string
   cwd?: string
-  onOpenProject: (path: string) => void
+  active?: boolean
   onSubmitToAgent?: (text: string) => void
 }
 
@@ -60,7 +74,32 @@ interface ProjectFile {
   kind: 'tex' | 'bib' | 'style' | 'image'
 }
 
+interface ProjectFolderNode {
+  type: 'folder'
+  name: string
+  relative: string
+  children: ProjectTreeNode[]
+}
+
+interface ProjectFileNode {
+  type: 'file'
+  file: ProjectFile
+}
+
+type ProjectTreeNode = ProjectFolderNode | ProjectFileNode
+
+interface LatexOutlineItem {
+  id: string
+  title: string
+  level: number
+  offset: number
+}
+
 const ROOT_INSPECTION_LIMIT = 16
+const EDITOR_PANE_MIN_WIDTH = 480
+const EDITOR_PANE_MAX_WIDTH = 1_200
+const PDF_PANE_MIN_WIDTH = 340
+const editorPaneWidthMemory = { value: 620 }
 
 type Engine = 'pdflatex' | 'xelatex' | 'lualatex'
 
@@ -79,6 +118,25 @@ function relativePath(root: string, path: string): string {
   return normalizedPath.startsWith(`${normalizedRoot}/`)
     ? normalizedPath.slice(normalizedRoot.length + 1)
     : baseName(path)
+}
+
+function normalizedPath(path: string, caseInsensitive: boolean): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  return caseInsensitive ? normalized.toLowerCase() : normalized
+}
+
+function isPathInside(
+  root: string,
+  candidate: string,
+  caseInsensitive: boolean,
+  allowRoot = true
+): boolean {
+  const normalizedRoot = normalizedPath(root, caseInsensitive)
+  const normalizedCandidate = normalizedPath(candidate, caseInsensitive)
+  return (
+    (allowRoot && normalizedCandidate === normalizedRoot) ||
+    normalizedCandidate.startsWith(`${normalizedRoot}/`)
+  )
 }
 
 function projectIdFromUrl(value: string): string {
@@ -174,6 +232,129 @@ function compilerHighlights(log: string): string[] {
   return results
 }
 
+function buildProjectTree(files: ProjectFile[]): ProjectTreeNode[] {
+  const root: ProjectFolderNode = {
+    type: 'folder',
+    name: '',
+    relative: '',
+    children: []
+  }
+  for (const file of files) {
+    const parts = file.relative.replace(/\\/g, '/').split('/').filter(Boolean)
+    let folder = root
+    let relative = ''
+    for (const name of parts.slice(0, -1)) {
+      relative = relative ? `${relative}/${name}` : name
+      let child = folder.children.find(
+        (node): node is ProjectFolderNode =>
+          node.type === 'folder' && node.relative === relative
+      )
+      if (!child) {
+        child = { type: 'folder', name, relative, children: [] }
+        folder.children.push(child)
+      }
+      folder = child
+    }
+    folder.children.push({ type: 'file', file })
+  }
+
+  const sortNodes = (nodes: ProjectTreeNode[]): ProjectTreeNode[] =>
+    nodes
+      .map((node) =>
+        node.type === 'folder'
+          ? { ...node, children: sortNodes(node.children) }
+          : node
+      )
+      .sort((left, right) => {
+        if (left.type !== right.type) return left.type === 'folder' ? -1 : 1
+        const leftName = left.type === 'folder' ? left.name : left.file.name
+        const rightName = right.type === 'folder' ? right.name : right.file.name
+        if (left.type === 'file' && right.type === 'file') {
+          const leftMain = leftName.toLowerCase() === 'main.tex' ? 0 : 1
+          const rightMain = rightName.toLowerCase() === 'main.tex' ? 0 : 1
+          if (leftMain !== rightMain) return leftMain - rightMain
+        }
+        return leftName.localeCompare(rightName)
+      })
+
+  return sortNodes(root.children)
+}
+
+function isCommentedAt(source: string, offset: number): boolean {
+  const lineStart = source.lastIndexOf('\n', offset - 1) + 1
+  for (let index = lineStart; index < offset; index += 1) {
+    if (source[index] !== '%') continue
+    let slashes = 0
+    for (let cursor = index - 1; cursor >= lineStart && source[cursor] === '\\'; cursor -= 1) {
+      slashes += 1
+    }
+    if (slashes % 2 === 0) return true
+  }
+  return false
+}
+
+function bracedArgument(source: string, openBrace: number): string | null {
+  let depth = 0
+  for (let index = openBrace; index < source.length; index += 1) {
+    const character = source[index]
+    if (character === '\\') {
+      index += 1
+      continue
+    }
+    if (character === '{') depth += 1
+    if (character !== '}') continue
+    depth -= 1
+    if (depth === 0) return source.slice(openBrace + 1, index)
+  }
+  return null
+}
+
+function outlineTitle(value: string): string {
+  let title = value
+  for (let pass = 0; pass < 3; pass += 1) {
+    title = title.replace(
+      /\\[A-Za-z@]+\*?(?:\s*\[[^\]]*\])?\s*\{([^{}]*)\}/g,
+      '$1'
+    )
+  }
+  return title
+    .replace(/\\(?:label|index)\s*\{[^{}]*\}/g, '')
+    .replace(/\\[A-Za-z@]+\*?/g, '')
+    .replace(/[{}]/g, '')
+    .replace(/~/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function latexOutline(source: string): LatexOutlineItem[] {
+  const items: LatexOutlineItem[] = []
+  const pattern =
+    /\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?(?:\s*\[[^\]]*\])?\s*\{/g
+  const levels: Record<string, number> = {
+    part: 0,
+    chapter: 0,
+    section: 0,
+    subsection: 1,
+    subsubsection: 2,
+    paragraph: 3,
+    subparagraph: 4
+  }
+  for (const match of source.matchAll(pattern)) {
+    const offset = match.index ?? 0
+    if (isCommentedAt(source, offset)) continue
+    const openBrace = offset + match[0].lastIndexOf('{')
+    const title = outlineTitle(bracedArgument(source, openBrace) || '')
+    if (!title) continue
+    items.push({
+      id: `${offset}:${items.length}`,
+      title,
+      level: levels[match[1]] ?? 0,
+      offset
+    })
+  }
+  return items
+}
+
 function FileIcon({ kind }: { kind: ProjectFile['kind'] }): JSX.Element {
   if (kind === 'image') return <FileImage size={14} />
   if (kind === 'bib') return <FileText size={14} />
@@ -184,13 +365,15 @@ function FileIcon({ kind }: { kind: ProjectFile['kind'] }): JSX.Element {
 export default function LatexView({
   host,
   cwd,
-  onOpenProject,
+  active = true,
   onSubmitToAgent
 }: LatexViewProps): JSX.Element {
   const { t } = useI18n()
+  const [paperRoot, setPaperRoot] = useState('')
   const [files, setFiles] = useState<ProjectFile[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const [fileRailOpen, setFileRailOpen] = useState(true)
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState('')
   const [mainPath, setMainPath] = useState('')
   const [content, setContent] = useState('')
@@ -199,12 +382,13 @@ export default function LatexView({
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [externalConflict, setExternalConflict] = useState(false)
-  const [editorMode, setEditorMode] = useState<LatexEditorMode>('visual')
+  const [editorMode, setEditorMode] = useState<LatexEditorMode>('source')
+  const [editorPaneWidth, setEditorPaneWidth] = useState(editorPaneWidthMemory.value)
   const [engine, setEngine] = useState<Engine>('pdflatex')
   const [compiling, setCompiling] = useState(false)
   const [compileResult, setCompileResult] = useState<LatexCompileResult | null>(null)
   const [pdfSrc, setPdfSrc] = useState('')
-  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(true)
   const [logOpen, setLogOpen] = useState(false)
   const [projectInfo, setProjectInfo] = useState<OverleafProjectInfo | null>(null)
   const [syncing, setSyncing] = useState<'pull' | 'publish' | ''>('')
@@ -216,6 +400,10 @@ export default function LatexView({
   const [rememberToken, setRememberToken] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [pendingSync, setPendingSync] = useState<'pull' | 'publish' | ''>('')
+  const [editorNavigation, setEditorNavigation] = useState<{
+    offset: number
+    revision: number
+  } | null>(null)
 
   const contentRef = useRef(content)
   const dirtyRef = useRef(dirty)
@@ -225,17 +413,53 @@ export default function LatexView({
   const ownWriteAtRef = useRef(0)
   const writeChainRef = useRef<Promise<void>>(Promise.resolve())
   const loadGenerationRef = useRef(0)
+  const refreshGenerationRef = useRef(0)
+  const outlineNavigationRevisionRef = useRef(0)
+  const editorPreviewRef = useRef<HTMLElement | null>(null)
 
   contentRef.current = content
   dirtyRef.current = dirty
   selectedPathRef.current = selectedPath
   hostRef.current = host
 
-  const refreshProject = useCallback(async (): Promise<void> => {
+  const refreshProject = useCallback(async (preferredRoot?: string): Promise<void> => {
     if (!cwd) return
+    const generation = ++refreshGenerationRef.current
     setFilesLoading(true)
     try {
-      const nextFiles = await collectProjectFiles(cwd, host)
+      const caseInsensitive = !host
+      const rememberedRoot =
+        window.localStorage.getItem(storageKey(host, cwd, 'paperRoot')) || ''
+      let nextRoot =
+        preferredRoot && isPathInside(cwd, preferredRoot, caseInsensitive)
+          ? preferredRoot
+          : rememberedRoot && isPathInside(cwd, rememberedRoot, caseInsensitive)
+            ? rememberedRoot
+            : ''
+      let nextFiles = await collectProjectFiles(nextRoot || cwd, host)
+      if (nextRoot && !nextFiles.some((file) => file.kind === 'tex')) {
+        nextRoot = ''
+        nextFiles = await collectProjectFiles(cwd, host)
+      }
+
+      if (!nextRoot) {
+        const repositoryTexFiles = nextFiles.filter((file) => file.kind === 'tex')
+        const detectedMain =
+          repositoryTexFiles.find((file) => file.name.toLowerCase() === 'main.tex')?.path ||
+          chooseLatexMainDocument(
+            repositoryTexFiles as LatexProjectTextFile[],
+            '',
+            await inspectTexSources(nextFiles, host),
+            !host
+          )
+        nextRoot = detectedMain ? parentDir(detectedMain) || cwd : cwd
+        if (normalizedPath(nextRoot, caseInsensitive) !== normalizedPath(cwd, caseInsensitive)) {
+          nextFiles = await collectProjectFiles(nextRoot, host)
+        }
+      }
+
+      if (generation !== refreshGenerationRef.current) return
+      setPaperRoot(nextRoot)
       setFiles(nextFiles)
       const rememberedMain = window.localStorage.getItem(storageKey(host, cwd, 'main')) || ''
       const texFiles = nextFiles.filter((file) => file.kind === 'tex')
@@ -252,6 +476,7 @@ export default function LatexView({
           await inspectTexSources(nextFiles, host),
           !host
         )
+      window.localStorage.setItem(storageKey(host, cwd, 'paperRoot'), nextRoot)
       setMainPath(nextMain)
       setSelectedPath((current) =>
         nextFiles.some((file) => file.path === current && TEXT_EXTENSIONS.has(file.name.split('.').pop()?.toLowerCase() || ''))
@@ -261,15 +486,32 @@ export default function LatexView({
     } catch (reason) {
       setSaveError(compactError(reason))
     } finally {
-      setFilesLoading(false)
+      if (generation === refreshGenerationRef.current) setFilesLoading(false)
     }
-    overleafProjectInfo(cwd, host)
-      .then(setProjectInfo)
-      .catch(() => setProjectInfo(null))
   }, [cwd, host])
 
   useEffect(() => {
+    if (!paperRoot) {
+      setProjectInfo(null)
+      return
+    }
+    let cancelled = false
+    overleafProjectInfo(paperRoot, host)
+      .then((info) => {
+        if (!cancelled) setProjectInfo(info)
+      })
+      .catch(() => {
+        if (!cancelled) setProjectInfo(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [host, paperRoot])
+
+  useEffect(() => {
     setFiles([])
+    setCollapsedFolders(new Set())
+    setPaperRoot('')
     setSelectedPath('')
     setMainPath('')
     setContent('')
@@ -294,6 +536,7 @@ export default function LatexView({
       if (generation !== loadGenerationRef.current) return
       selectedPathRef.current = path
       setSelectedPath(path)
+      setEditorNavigation(null)
       contentRef.current = next
       setContent(next)
       dirtyRef.current = false
@@ -351,6 +594,57 @@ export default function LatexView({
     saveTimerRef.current = window.setTimeout(() => void saveNow(), 700)
   }
 
+  const startEditorResize = (event: React.MouseEvent): void => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = editorPaneWidth
+    const onMove = (moveEvent: MouseEvent): void => {
+      const availableWidth =
+        editorPreviewRef.current?.getBoundingClientRect().width || window.innerWidth
+      const maximum = Math.max(
+        EDITOR_PANE_MIN_WIDTH,
+        Math.min(EDITOR_PANE_MAX_WIDTH, availableWidth - PDF_PANE_MIN_WIDTH - 1)
+      )
+      const width = Math.min(
+        maximum,
+        Math.max(EDITOR_PANE_MIN_WIDTH, startWidth + moveEvent.clientX - startX)
+      )
+      editorPaneWidthMemory.value = width
+      setEditorPaneWidth(width)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  useEffect(() => {
+    const element = editorPreviewRef.current
+    if (!element || !previewOpen) return
+    const observer = new ResizeObserver(([entry]) => {
+      const maximum = Math.max(
+        EDITOR_PANE_MIN_WIDTH,
+        Math.min(
+          EDITOR_PANE_MAX_WIDTH,
+          entry.contentRect.width - PDF_PANE_MIN_WIDTH - 1
+        )
+      )
+      setEditorPaneWidth((current) => {
+        const width = Math.min(current, maximum)
+        editorPaneWidthMemory.value = width
+        return width
+      })
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [previewOpen])
+
   const selectFile = async (path: string): Promise<void> => {
     if (path === selectedPathRef.current) return
     await saveNow()
@@ -394,12 +688,12 @@ export default function LatexView({
   )
 
   const compile = async (): Promise<void> => {
-    if (!cwd || !mainPath || compiling) return
+    if (!paperRoot || !mainPath || compiling) return
     await saveNow()
     setCompiling(true)
     setSaveError('')
     try {
-      const result = await compileLatex(cwd, mainPath, engine, host)
+      const result = await compileLatex(paperRoot, mainPath, engine, host)
       setCompileResult(result)
       setLogOpen(!result.success)
       setPreviewOpen(true)
@@ -425,16 +719,16 @@ export default function LatexView({
   }
 
   const sync = async (kind: 'pull' | 'publish'): Promise<void> => {
-    if (!cwd || syncing) return
+    if (!paperRoot || syncing) return
     await saveNow()
     setSyncing(kind)
     setSyncError('')
     try {
       const next =
         kind === 'pull'
-          ? await overleafPull(cwd, connectToken, host)
+          ? await overleafPull(paperRoot, connectToken, host)
           : await overleafPublish(
-              cwd,
+              paperRoot,
               `Update manuscript from Linco (${new Date().toLocaleString()})`,
               connectToken,
               host
@@ -455,7 +749,11 @@ export default function LatexView({
   }
 
   const connect = async (): Promise<void> => {
-    if (!connectUrl.trim() || !connectToken.trim() || !connectDestination.trim()) return
+    if (!cwd || !connectUrl.trim() || !connectToken.trim() || !connectDestination.trim()) return
+    if (!isPathInside(cwd, connectDestination, !host, false)) {
+      setSyncError(t('latex.destinationInsideRepository'))
+      return
+    }
     setConnecting(true)
     setSyncError('')
     try {
@@ -467,7 +765,8 @@ export default function LatexView({
         host
       })
       setConnectOpen(false)
-      onOpenProject(connectDestination)
+      window.localStorage.setItem(storageKey(host, cwd, 'paperRoot'), connectDestination)
+      await refreshProject(connectDestination)
     } catch (reason) {
       setSyncError(compactError(reason))
     } finally {
@@ -476,11 +775,11 @@ export default function LatexView({
   }
 
   const authenticate = async (): Promise<void> => {
-    if (!cwd || !connectToken.trim()) return
+    if (!paperRoot || !connectToken.trim()) return
     setConnecting(true)
     setSyncError('')
     try {
-      await overleafStoreToken(cwd, connectToken, rememberToken, host)
+      await overleafStoreToken(paperRoot, connectToken, rememberToken, host)
       const retry = pendingSync
       setPendingSync('')
       setConnectOpen(false)
@@ -493,9 +792,14 @@ export default function LatexView({
   }
 
   const chooseCloneParent = async (): Promise<void> => {
-    if (host) return
+    if (host || !cwd) return
     const selected = await openDialog({ directory: true, multiple: false, defaultPath: cwd })
     if (typeof selected === 'string') {
+      if (!isPathInside(cwd, selected, true)) {
+        setSyncError(t('latex.destinationInsideRepository'))
+        return
+      }
+      setSyncError('')
       setConnectDestination(joinPath(selected, projectIdFromUrl(connectUrl), false))
     }
   }
@@ -509,8 +813,121 @@ export default function LatexView({
     () => compilerHighlights(compileResult?.log || ''),
     [compileResult?.log]
   )
-  const editableFiles = files.filter((file) => file.kind !== 'image')
   const selectedFile = files.find((file) => file.path === selectedPath)
+  const projectTree = useMemo(() => buildProjectTree(files), [files])
+  const outline = useMemo(
+    () => (selectedFile?.kind === 'tex' ? latexOutline(content) : []),
+    [content, selectedFile?.kind]
+  )
+  const paperLabel =
+    cwd && paperRoot && normalizedPath(paperRoot, !host) !== normalizedPath(cwd, !host)
+      ? relativePath(cwd, paperRoot)
+      : ''
+  const requestLatexSuggestion = useCallback(
+    ({
+      before,
+      selection,
+      after,
+      mode
+    }: {
+      before: string
+      selection: string
+      after: string
+      mode: LatexPolishMode
+    }) => {
+      if (!cwd || !selectedPath) return Promise.reject(new Error(t('latex.selectFile')))
+      return suggestLatex({
+        repo: cwd,
+        currentFile: selectedPath,
+        before,
+        selection,
+        after,
+        mode,
+        host
+      })
+    },
+    [cwd, host, selectedPath, t]
+  )
+  const reviewLatexSegments = useCallback(
+    (segments: LatexReviewSegment[]) => {
+      if (!cwd || !selectedPath) return Promise.reject(new Error(t('latex.selectFile')))
+      return reviewLatex({
+        repo: cwd,
+        currentFile: selectedPath,
+        segments,
+        host
+      })
+    },
+    [cwd, host, selectedPath, t]
+  )
+
+  const toggleFolder = (relative: string): void => {
+    setCollapsedFolders((current) => {
+      const next = new Set(current)
+      if (next.has(relative)) next.delete(relative)
+      else next.add(relative)
+      return next
+    })
+  }
+
+  const revealOutlineItem = (item: LatexOutlineItem): void => {
+    outlineNavigationRevisionRef.current += 1
+    setEditorNavigation({
+      offset: item.offset,
+      revision: outlineNavigationRevisionRef.current
+    })
+  }
+
+  const renderProjectNodes = (
+    nodes: ProjectTreeNode[],
+    level = 0
+  ): JSX.Element[] =>
+    nodes.map((node) => {
+      if (node.type === 'folder') {
+        const collapsed = collapsedFolders.has(node.relative)
+        return (
+          <div key={`folder:${node.relative}`}>
+            <button
+              type="button"
+              onClick={() => toggleFolder(node.relative)}
+              className="flex h-7 w-full min-w-0 items-center gap-1 rounded-md pr-1.5 text-left text-[11px] text-ink-muted hover:bg-black/5 hover:text-ink"
+              style={{ paddingLeft: 5 + level * 10 }}
+              title={node.relative}
+            >
+              {collapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+              <Folder size={13} className="shrink-0 text-[#6f91c8]" />
+              <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            </button>
+            {!collapsed && renderProjectNodes(node.children, level + 1)}
+          </div>
+        )
+      }
+      const file = node.file
+      const selectable = file.kind !== 'image'
+      return (
+        <button
+          key={`file:${file.relative}`}
+          type="button"
+          onClick={() => {
+            if (selectable) void selectFile(file.path)
+          }}
+          disabled={!selectable}
+          className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-left text-[11px] ${
+            selectedPath === file.path
+              ? 'bg-canvas text-ink shadow-sm'
+              : selectable
+                ? 'text-ink-muted hover:bg-black/5 hover:text-ink'
+                : 'cursor-default text-ink-faint'
+          }`}
+          style={{ paddingLeft: 17 + level * 10 }}
+          title={file.relative}
+        >
+          <span className="shrink-0 text-ink-faint"><FileIcon kind={file.kind} /></span>
+          <span className="min-w-0 flex-1 truncate">{file.name}</span>
+          {file.path === mainPath && <Check size={11} className="shrink-0 text-emerald-600" />}
+        </button>
+      )
+    })
 
   if (!cwd) {
     return (
@@ -532,10 +949,9 @@ export default function LatexView({
         >
           <FolderGit2 size={15} />
         </button>
-        <div className="min-w-0 max-w-[220px] truncate px-1 text-[12px] font-medium text-ink">
-          {projectInfo?.connected
-            ? `Overleaf · ${projectInfo.project_id}`
-            : baseName(cwd)}
+        <div className="min-w-0 max-w-[260px] truncate px-1 text-[12px] font-medium text-ink">
+          <span>{baseName(cwd)}</span>
+          {paperLabel && <span className="text-ink-faint"> / {paperLabel}</span>}
         </div>
         {projectInfo?.connected ? (
           <div className="ml-1 flex shrink-0 items-center gap-0.5">
@@ -623,7 +1039,8 @@ export default function LatexView({
               onSubmitToAgent(
                 t('latex.agentPrompt', {
                   path: selectedPath || mainPath,
-                  root: cwd,
+                  root: paperRoot || cwd,
+                  repository: cwd,
                   main: mainPath
                 })
               )
@@ -667,65 +1084,60 @@ export default function LatexView({
       <div className="flex min-h-0 flex-1">
         {fileRailOpen && (
           <aside className="flex w-[190px] shrink-0 flex-col border-r border-black/8 bg-sidebar/60">
-            <div className="flex h-9 shrink-0 items-center gap-2 px-2.5 text-[10px] font-medium uppercase text-ink-faint">
-              <span>{t('latex.files')}</span>
-              <div className="flex-1" />
-              <button
-                onClick={() => void refreshProject()}
-                className="rounded p-1 hover:bg-black/5 hover:text-ink"
-                title={t('latex.refreshFiles')}
-              >
-                <RefreshCw size={12} className={filesLoading ? 'animate-spin' : ''} />
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
-              {editableFiles.map((file) => (
+            <section className="flex min-h-0 flex-[3] flex-col">
+              <div className="flex h-9 shrink-0 items-center gap-2 px-2.5 text-[10px] font-medium uppercase text-ink-faint">
+                <span>{t('latex.files')}</span>
+                <div className="flex-1" />
                 <button
-                  key={file.path}
-                  onClick={() => void selectFile(file.path)}
-                  className={`flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pr-1.5 text-left text-[11px] ${
-                    selectedPath === file.path
-                      ? 'bg-canvas text-ink shadow-sm'
-                      : 'text-ink-muted hover:bg-black/5 hover:text-ink'
-                  }`}
-                  style={{ paddingLeft: 7 + Math.min(file.depth, 3) * 9 }}
-                  title={file.relative}
+                  onClick={() => void refreshProject()}
+                  className="rounded p-1 hover:bg-black/5 hover:text-ink"
+                  title={t('latex.refreshFiles')}
                 >
-                  <span className="shrink-0 text-ink-faint"><FileIcon kind={file.kind} /></span>
-                  <span className="min-w-0 flex-1 truncate">{file.name}</span>
-                  {file.path === mainPath && <Check size={11} className="shrink-0 text-emerald-600" />}
+                  <RefreshCw size={12} className={filesLoading ? 'animate-spin' : ''} />
                 </button>
-              ))}
-              {editableFiles.length === 0 && !filesLoading && (
-                <div className="px-2 py-5 text-center text-[11px] text-ink-faint">
-                  {t('latex.noTexFiles')}
-                </div>
-              )}
-              {files.some((file) => file.kind === 'image') && (
-                <div className="mt-2 border-t border-black/8 pt-2">
-                  <div className="px-2 pb-1 text-[9px] font-medium uppercase text-ink-faint">
-                    {t('latex.assets')}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+                {renderProjectNodes(projectTree)}
+                {files.length === 0 && !filesLoading && (
+                  <div className="px-2 py-5 text-center text-[11px] text-ink-faint">
+                    {t('latex.noTexFiles')}
                   </div>
-                  {files
-                    .filter((file) => file.kind === 'image')
-                    .map((file) => (
-                      <div
-                        key={file.path}
-                        className="flex h-6 items-center gap-1.5 truncate px-2 text-[10px] text-ink-faint"
-                        title={file.relative}
-                      >
-                        <FileImage size={12} />
-                        <span className="truncate">{file.name}</span>
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </section>
+            <section className="flex min-h-[108px] flex-[2] flex-col border-t border-black/8">
+              <div className="flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-[10px] font-medium uppercase text-ink-faint">
+                <ListTree size={12} />
+                <span>{t('latex.outline')}</span>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+                {outline.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => revealOutlineItem(item)}
+                    className="flex h-7 w-full min-w-0 items-center rounded-md pr-1.5 text-left text-[11px] text-ink-muted hover:bg-black/5 hover:text-ink"
+                    style={{ paddingLeft: 8 + Math.min(item.level, 4) * 12 }}
+                    title={item.title}
+                  >
+                    <span className="truncate">{item.title}</span>
+                  </button>
+                ))}
+                {outline.length === 0 && (
+                  <div className="px-2 py-4 text-center text-[10px] text-ink-faint">
+                    {t('latex.noOutline')}
+                  </div>
+                )}
+              </div>
+            </section>
           </aside>
         )}
 
-        <main className="relative flex min-w-0 flex-1">
-          <div className="min-w-[360px] flex-1">
+        <main ref={editorPreviewRef} className="relative flex min-w-0 flex-1 overflow-hidden">
+          <div
+            className={previewOpen ? 'min-w-[480px] shrink-0' : 'min-w-[480px] flex-1'}
+            style={previewOpen ? { width: editorPaneWidth } : undefined}
+          >
             {!loaded ? (
               <div className="flex h-full items-center justify-center text-[12px] text-ink-faint">
                 {filesLoading ? <Loader2 size={15} className="animate-spin" /> : t('latex.selectFile')}
@@ -739,15 +1151,30 @@ export default function LatexView({
                 mode={editorMode}
                 dirty={dirty}
                 saving={saving}
+                active={active}
+                repositoryLabel={baseName(cwd)}
+                navigationTarget={editorNavigation}
                 onMode={setEditorMode}
                 onChange={onEditorChange}
                 onSave={() => void saveNow()}
+                onRequestSuggestion={requestLatexSuggestion}
+                onReviewSegments={reviewLatexSegments}
               />
             ) : null}
           </div>
 
           {previewOpen && (
-            <section className="absolute inset-y-0 right-0 z-20 flex w-[min(520px,100%)] min-w-[340px] flex-col border-l border-black/8 bg-[#e7e7e4] shadow-2xl min-[1180px]:static min-[1180px]:z-auto min-[1180px]:w-auto min-[1180px]:flex-[0.92] min-[1180px]:shadow-none">
+            <div
+              onMouseDown={startEditorResize}
+              className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-[#5c8bd6]/50"
+              title={t('files.resizeHint')}
+            >
+              <div className="absolute inset-y-0 -left-[3px] -right-[3px]" />
+            </div>
+          )}
+
+          {previewOpen && (
+            <section className="flex min-w-[340px] flex-1 flex-col bg-[#e7e7e4]">
               <div className="flex h-10 shrink-0 items-center gap-2 border-b border-black/8 bg-canvas px-2.5 text-[11px]">
                 <Eye size={14} className="text-ink-muted" />
                 <span className="font-medium text-ink">{t('latex.pdfPreview')}</span>

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { tailFile } from '@/lib/procs'
 import { useI18n } from '@/lib/i18n'
+import { observeTheme, terminalTheme } from '@/lib/theme'
 
 interface Props {
   // 输出文件路径(agent 后台任务的 stdout 落盘文件)
@@ -45,10 +46,9 @@ export default function AgentTaskOutput({
       disableStdin: true, // 只读,不收键盘
       cursorStyle: 'underline',
       cursorBlink: false,
+      minimumContrastRatio: 7,
       scrollback: 5000,
-      // 固定深色:容器是 #1e1e1e,且与「终端」/「对话」视图保持一致,
-      // 不跟随系统浅色(否则白底文字嵌在深色面板里,既不一致又刺眼)。
-      theme: { background: '#1e1e1e', foreground: '#d4d4d4' }
+      theme: terminalTheme()
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
@@ -60,6 +60,9 @@ export default function AgentTaskOutput({
     }
     termRef.current = term
     fitRef.current = fit
+    const stopObservingTheme = observeTheme(() => {
+      term.options.theme = terminalTheme()
+    })
 
     const ro = new ResizeObserver(() => {
       try {
@@ -72,6 +75,7 @@ export default function AgentTaskOutput({
 
     return () => {
       ro.disconnect()
+      stopObservingTheme()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -121,8 +125,8 @@ export default function AgentTaskOutput({
   }, [active])
 
   return (
-    <div className="flex h-full flex-col bg-[#1e1e1e]">
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-white/50">
+    <div className="flex h-full flex-col bg-canvas text-ink">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1 text-[11px] text-ink-faint">
         <span className="truncate font-mono" title={file}>
           {file}
         </span>

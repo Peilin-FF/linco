@@ -12,6 +12,7 @@ mod config;
 mod fs;
 mod git;
 mod latex;
+mod latex_ai;
 mod model_test;
 mod plugins;
 mod powerpoint_live;
@@ -133,6 +134,8 @@ pub fn run() {
             latex::overleaf_pull,
             latex::overleaf_publish,
             latex::latex_compile,
+            latex_ai::latex_ai_suggest,
+            latex_ai::latex_ai_review,
             remote::ssh_config_hosts,
             remote::ssh_connect,
             remote::ssh_check,

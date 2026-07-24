@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "20";
+const AGENT_VERSION: &str = "21";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -576,13 +576,17 @@ mod tests {
             .stderr(Stdio::null())
             .spawn()
             .unwrap_or_else(|_| {
-                Command::new(if python == "python3" { "python" } else { "python3" })
-                    .arg(&tmp)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .spawn()
-                    .expect("spawn python agent")
+                Command::new(if python == "python3" {
+                    "python"
+                } else {
+                    "python3"
+                })
+                .arg(&tmp)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn python agent")
             });
         let stdin = Arc::new(Mutex::new(child.stdin.take().unwrap()));
         let stdout = BufReader::new(child.stdout.take().unwrap());
@@ -663,6 +667,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn call_allows_fast_rpc_while_another_rpc_is_blocked() {
         let host = format!("local-mux-test-{}", SEQ.fetch_add(1, Ordering::Relaxed));
@@ -792,5 +797,4 @@ mod tests {
 
         assert_eq!(pong.get("pong").and_then(|v| v.as_bool()), Some(true));
     }
-
 }

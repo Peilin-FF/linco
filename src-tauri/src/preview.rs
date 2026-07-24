@@ -1112,7 +1112,10 @@ mod save_tests {
     #[test]
     fn save_path_percent_decoded_for_cjk_and_space() {
         // 中文名:%E6%88%91.html → 我.html
-        assert_eq!(percent_decode("/artifacts/%E6%88%91.html"), "/artifacts/我.html");
+        assert_eq!(
+            percent_decode("/artifacts/%E6%88%91.html"),
+            "/artifacts/我.html"
+        );
         // 空格名
         assert_eq!(percent_decode("/my%20notes/a.html"), "/my notes/a.html");
         // decode 后再 safe_join 应能拼回真实路径(在 root 内)

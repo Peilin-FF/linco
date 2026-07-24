@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FolderOpen, X } from 'lucide-react'
+import { FolderOpen, RefreshCw, X } from 'lucide-react'
 import { writeText as clipWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import FileTree, { type TreeContextTarget } from './files/FileTree'
@@ -71,6 +71,7 @@ export default function FilesView({
   const [refreshPaths, setRefreshPaths] = useState<string[]>([])
   // Git 逐文件状态:绝对路径 → 状态字符(M/A/D/?)。供文件树显色标 + 文件夹聚合。
   const [gitMap, setGitMap] = useState<Map<string, string>>(new Map())
+  const [gitMapReady, setGitMapReady] = useState(false)
   // 文件树定位请求(active 变化时让左侧树跳转到该文件,VS Code 式)
   const [revealReq, setRevealReq] = useState('')
   const revealSeq = useRef(0)
@@ -182,7 +183,10 @@ export default function FilesView({
   // 数据源是 shadow(本轮基线 diff),不是 git 工作区状态:没发过消息 = 空 map = 全树无标记;
   // 发消息后只标这一轮 agent 改过的文件(M/A/D)。git 工作区的未提交改动归 Git 页面管。
   const loadGit = async (): Promise<void> => {
-    if (!root) return
+    if (!root) {
+      setGitMapReady(true)
+      return
+    }
     try {
       const changed = await shadowChanged(root, host)
       const m = new Map<string, string>()
@@ -199,11 +203,14 @@ export default function FilesView({
       setGitMap(m)
     } catch {
       setGitMap(new Map())
+    } finally {
+      setGitMapReady(true)
     }
   }
 
   // 进入/换工作目录时拉一次 git 状态
   useEffect(() => {
+    setGitMapReady(false)
     void loadGit()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, host])
@@ -470,6 +477,19 @@ export default function FilesView({
       >
         <div className="flex shrink-0 items-center justify-between px-3 py-2 text-[12px] font-medium uppercase tracking-wide text-ink-faint">
           <span className="truncate">{baseName(root) || root}</span>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              refresh()
+              void loadGit()
+            }}
+            className="ml-2 flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-muted hover:bg-black/5 hover:text-ink"
+            title={t('files.refresh')}
+            aria-label={t('files.refresh')}
+          >
+            <RefreshCw size={13} />
+          </button>
         </div>
         <div className="min-h-0 flex-1">
           <FileTree
@@ -559,7 +579,13 @@ export default function FilesView({
                       : 'pointer-events-none opacity-0'
                   }`}
                 >
-                  <FileViewer path={p} host={host} repo={root} />
+                  <FileViewer
+                    path={p}
+                    host={host}
+                    repo={root}
+                    changeStatus={gitMap.get(p.replace(/\\/g, '/'))}
+                    changeStatusReady={gitMapReady}
+                  />
                 </div>
               ))}
             </div>

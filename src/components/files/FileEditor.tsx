@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Save, FileText } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
-import type { Extension } from '@codemirror/state'
-import { keymap } from '@codemirror/view'
+import { EditorSelection, type Extension } from '@codemirror/state'
+import { EditorView, keymap } from '@codemirror/view'
 import {
   defaultKeymap,
   historyKeymap,
@@ -22,6 +22,9 @@ import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
 import { useIsDark } from '@/lib/theme'
 import { useI18n } from '@/lib/i18n'
+import ChangeOverviewRuler, {
+  type ChangeOverviewMarker
+} from './ChangeOverviewRuler'
 
 // VS Code 式编辑能力(显式接入,不依赖 basicSetup 默认):
 //   ⌘F 查找 / ⌘⌥F 替换(search panel)、⌘G 下一个、⇧⌘G 上一个
@@ -38,10 +41,59 @@ const EDIT_EXTENSIONS: Extension[] = [
 interface FileEditorProps {
   path: string
   host?: string
+  diff?: string
 }
 
 function baseName(p: string): string {
   return p.split('/').pop() || p
+}
+
+function changeMarkersFromDiff(diff: string): ChangeOverviewMarker[] {
+  const lines: { line: number; kind: ChangeOverviewMarker['kind'] }[] = []
+  let oldLine = 0
+  let newLine = 0
+  let inHunk = false
+  for (const text of diff.split('\n')) {
+    if (text.startsWith('@@')) {
+      const match = text.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+      if (match) {
+        oldLine = Number.parseInt(match[1], 10)
+        newLine = Number.parseInt(match[2], 10)
+        inHunk = true
+      }
+      continue
+    }
+    if (!inHunk || text.startsWith('\\ No newline')) continue
+    if (text.startsWith('+') && !text.startsWith('+++')) {
+      lines.push({ line: Math.max(1, newLine), kind: 'add' })
+      newLine += 1
+    } else if (text.startsWith('-') && !text.startsWith('---')) {
+      lines.push({ line: Math.max(1, newLine), kind: 'delete' })
+      oldLine += 1
+    } else if (text.startsWith(' ')) {
+      oldLine += 1
+      newLine += 1
+    }
+  }
+
+  const markers: ChangeOverviewMarker[] = []
+  for (const point of lines) {
+    const previous = markers[markers.length - 1]
+    if (
+      previous &&
+      previous.kind === point.kind &&
+      point.line <= previous.endLine + 1
+    ) {
+      previous.endLine = Math.max(previous.endLine, point.line)
+    } else {
+      markers.push({
+        startLine: point.line,
+        endLine: point.line,
+        kind: point.kind
+      })
+    }
+  }
+  return markers
 }
 
 // 按扩展名选择 CodeMirror 语言扩展(语法高亮)
@@ -81,7 +133,7 @@ function langFor(name: string): Extension[] {
   }
 }
 
-export default function FileEditor({ path, host }: FileEditorProps): JSX.Element {
+export default function FileEditor({ path, host, diff = '' }: FileEditorProps): JSX.Element {
   const { t } = useI18n()
   const dark = useIsDark()
   const [content, setContent] = useState('')
@@ -91,11 +143,14 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
   const [saving, setSaving] = useState(false)
   const savedRef = useRef('')
   const dirtyRef = useRef(false) // 与 dirty 同步,供事件回调里读最新值(避免闭包旧值)
+  const editorViewRef = useRef<EditorView | null>(null)
 
   const extensions = useMemo(
     () => [...EDIT_EXTENSIONS, ...langFor(baseName(path))],
     [path]
   )
+  const changeMarkers = useMemo(() => changeMarkersFromDiff(diff), [diff])
+  const totalLines = useMemo(() => Math.max(1, content.split('\n').length), [content])
 
   useEffect(() => {
     let alive = true
@@ -195,7 +250,7 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
         </div>
       ) : (
         <div
-          className="min-h-0 flex-1 overflow-auto"
+          className="relative min-h-0 flex-1 overflow-hidden"
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 's') {
               e.preventDefault()
@@ -206,6 +261,9 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
           <CodeMirror
             value={content}
             onChange={onChange}
+            onCreateEditor={(view) => {
+              editorViewRef.current = view
+            }}
             extensions={extensions}
             theme={dark ? githubDark : githubLight}
             height="100%"
@@ -220,6 +278,23 @@ export default function FileEditor({ path, host }: FileEditorProps): JSX.Element
               historyKeymap: false
             }}
             style={{ fontSize: 13, height: '100%' }}
+          />
+          <ChangeOverviewRuler
+            markers={changeMarkers}
+            totalLines={totalLines}
+            label={t('fileViewer.changeOverview')}
+            onJump={(line) => {
+              const view = editorViewRef.current
+              if (!view) return
+              const target = view.state.doc.line(
+                Math.max(1, Math.min(view.state.doc.lines, line))
+              )
+              view.dispatch({
+                selection: EditorSelection.cursor(target.from),
+                effects: EditorView.scrollIntoView(target.from, { y: 'center' })
+              })
+              view.focus()
+            }}
           />
         </div>
       )}

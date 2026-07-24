@@ -203,7 +203,12 @@ const Node = memo(function Node({
   }
 
   useEffect(() => {
-    if (open && entry.isDir && refreshPaths.some((p) => samePath(p, entry.path)))
+    if (
+      refreshKey > 0 &&
+      open &&
+      entry.isDir &&
+      (refreshPaths.length === 0 || refreshPaths.some((p) => samePath(p, entry.path)))
+    )
       void loadChildren()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
@@ -453,7 +458,12 @@ export default function FileTree({
   }, [root, host])
 
   useEffect(() => {
-    if (refreshPaths.some((p) => samePath(p, root))) void load()
+    if (
+      refreshKey > 0 &&
+      (refreshPaths.length === 0 || refreshPaths.some((p) => samePath(p, root)))
+    ) {
+      void load()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
 

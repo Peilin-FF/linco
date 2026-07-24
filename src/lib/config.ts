@@ -36,7 +36,7 @@ export interface AppConfig {
   language?: string
   /** 已安装的插件 agent:''=未选 / 'claude' / 'codex'。决定装哪套插件。 */
   pluginAgent?: string
-  /** 界面主题 id(见 lib/theme.ts);空=github-light */
+  /** UI theme id (see lib/theme.ts); empty uses VS Code Light Modern. */
   theme?: string
   /** 界面字体 CSS font-family;空=系统默认 */
   uiFont?: string

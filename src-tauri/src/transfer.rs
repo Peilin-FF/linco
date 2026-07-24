@@ -559,11 +559,7 @@ mod tests {
         fs::write(dir.join("a.txt"), b"hello").unwrap();
         fs::write(sub.join("b.txt"), b"world!!").unwrap();
 
-        let items = expand_local(
-            &[dir.to_string_lossy().to_string()],
-            "/remote/dest",
-        )
-        .unwrap();
+        let items = expand_local(&[dir.to_string_lossy().to_string()], "/remote/dest").unwrap();
         let base = dir.file_name().unwrap().to_string_lossy().to_string();
 
         assert_eq!(items.len(), 2);
@@ -585,8 +581,7 @@ mod tests {
         let f = dir.join("only.bin");
         fs::write(&f, b"1234").unwrap();
 
-        let items =
-            expand_local(&[f.to_string_lossy().to_string()], "/r/d/").unwrap();
+        let items = expand_local(&[f.to_string_lossy().to_string()], "/r/d/").unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].dst, "/r/d/only.bin");
         assert_eq!(items[0].size, 4);

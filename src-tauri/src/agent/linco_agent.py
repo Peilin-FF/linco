@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "16"
+AGENT_VERSION = "21"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -552,6 +552,8 @@ def _shadow_rel(repo, path):
 # 秒级(增量),串行无性能损失。
 _shadow_locks = {}
 _shadow_locks_guard = threading.Lock()
+_shadow_clean = set()
+_shadow_clean_guard = threading.Lock()
 
 
 def _shadow_lock(repo):
@@ -563,11 +565,40 @@ def _shadow_lock(repo):
         return lk
 
 
+def _shadow_mark_clean(repo):
+    with _shadow_clean_guard:
+        _shadow_clean.add(repo.rstrip("/"))
+
+
+def _shadow_invalidate_repo(repo):
+    with _shadow_clean_guard:
+        _shadow_clean.discard(repo.rstrip("/"))
+
+
+def _shadow_invalidate_paths(paths):
+    normalized = [os.path.abspath(p) for p in paths]
+    with _shadow_clean_guard:
+        for repo in list(_shadow_clean):
+            prefix = repo.rstrip("/") + os.sep
+            if any(p == repo or p.startswith(prefix) for p in normalized):
+                _shadow_clean.discard(repo)
+
+
+def _shadow_stage_if_dirty(repo, gitdir):
+    with _shadow_clean_guard:
+        clean = repo.rstrip("/") in _shadow_clean
+    if clean:
+        return
+    _shadow_stage(repo, gitdir)
+    _shadow_mark_clean(repo)
+
+
 def op_shadow_begin(a):
     repo = a["repo"]
     gitdir = _shadow_ensure_init(repo)
     with _shadow_lock(repo):
         _shadow_stage(repo, gitdir)
+        _shadow_mark_clean(repo)
         _shadow_git(repo, gitdir, ["commit", "-q", "--allow-empty", "-m", "linco-turn-baseline"])
     return {}
 
@@ -579,6 +610,7 @@ def op_shadow_changed(a):
         return {"changed": {}}
     with _shadow_lock(repo):
         _shadow_stage(repo, gitdir)
+        _shadow_mark_clean(repo)
         code, out, _ = _shadow_git(repo, gitdir, ["diff", "--cached", "--name-status", "HEAD"])
     base = repo.rstrip("/")
     changed = {}
@@ -602,7 +634,7 @@ def op_shadow_diff(a):
         return {"diff": ""}
     rel = _shadow_rel(repo, path)
     with _shadow_lock(repo):
-        _shadow_stage(repo, gitdir)
+        _shadow_stage_if_dirty(repo, gitdir)
         code, out, _ = _shadow_git(repo, gitdir,
                                    ["diff", "--cached", "--no-color", "-U99999", "HEAD", "--", rel])
     return {"diff": out}
@@ -1027,6 +1059,7 @@ WATCH_SKIP = {".git", "node_modules", "target", "__pycache__", ".venv", "dist"}
 
 def _emit_changes(paths):
     if paths:
+        _shadow_invalidate_paths(paths)
         _send({"event": "fileChange", "paths": sorted(set(paths))})
 
 
@@ -1123,6 +1156,7 @@ def _watch_poll(root, stop):
 def op_watch(a, rid):
     global _watch_thread, _watch_stop
     root = a["root"]
+    _shadow_invalidate_repo(root)
     mode = "none"
     with _watch_lock:
         # 已在监听 → 先停旧的

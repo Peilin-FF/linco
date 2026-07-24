@@ -106,7 +106,11 @@ pub fn proxy_start(app: AppHandle, upstream: String, session: String) -> Option<
         .env("LINCO_PROXY_PORT", "0")
         .env(
             "LINCO_SESSION_ID",
-            if session.is_empty() { "default" } else { &session },
+            if session.is_empty() {
+                "default"
+            } else {
+                &session
+            },
         )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -208,7 +212,11 @@ pub fn proxy_cmdlog_file(session: String) -> String {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             PathBuf::from(home).join(".linco").join("agent-cmdlog")
         });
-    let session = if session.is_empty() { "default" } else { &session };
+    let session = if session.is_empty() {
+        "default"
+    } else {
+        &session
+    };
     dir.join(session)
         .join("current.jsonl")
         .to_string_lossy()

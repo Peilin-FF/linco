@@ -8,6 +8,8 @@ import {
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   DEFAULT_FONT_SIZE,
+  DEFAULT_THEME_ID,
+  themeById,
   type Theme
 } from '@/lib/theme'
 
@@ -19,7 +21,7 @@ interface Props {
 // 设置 → 常规:界面语言 + 主题(预览卡)+ 字体/字号(预览)。改动即时生效 + 持久化。
 export default function GeneralSettings({ config, onChange }: Props): JSX.Element {
   const { t, lang, setLang } = useI18n()
-  const curTheme = config.theme || 'github-light'
+  const curTheme = themeById(config.theme || DEFAULT_THEME_ID).id
   const curFont = config.uiFont || ''
   const curSize = config.uiFontSize || DEFAULT_FONT_SIZE
 

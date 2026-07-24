@@ -26,35 +26,8 @@ import {
   type UsageAgentContext
 } from '@/lib/usage'
 import { useI18n } from '@/lib/i18n'
+import { observeTheme, terminalTheme } from '@/lib/theme'
 import type { UnlistenFn } from '@tauri-apps/api/event'
-
-// 跟随系统深浅色:深色模式下 claude 等 TUI 会用深色背景的 ANSI 块,
-// 终端背景也必须深,否则块与白底对不齐,出现大片空白(本次修复的问题)。
-function termTheme(): Record<string, string> {
-  return {
-    background: '#1e1e1e',
-    foreground: '#e6edf3',
-    cursor: '#e6edf3',
-    cursorAccent: '#1e1e1e',
-    selectionBackground: 'rgba(255,255,255,0.18)',
-    black: '#1e1e1e',
-    red: '#f47067',
-    green: '#57ab5a',
-    yellow: '#c69026',
-    blue: '#539bf5',
-    magenta: '#b083f0',
-    cyan: '#39c5cf',
-    white: '#d1d5da',
-    brightBlack: '#8b949e',
-    brightRed: '#ff7b72',
-    brightGreen: '#7ee787',
-    brightYellow: '#d29922',
-    brightBlue: '#79c0ff',
-    brightMagenta: '#d2a8ff',
-    brightCyan: '#56d4dd',
-    brightWhite: '#ffffff'
-  }
-}
 
 export interface TerminalHandle {
   /** 把文本写入终端并回车(整体发送)。 */
@@ -166,8 +139,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         letterSpacing: 0.2,
         cursorBlink: true,
         cursorStyle: 'bar',
+        minimumContrastRatio: 7,
         scrollback: 5000,
-        theme: termTheme(),
+        theme: terminalTheme(),
         allowProposedApi: true
       })
       const fit = new FitAddon()
@@ -180,7 +154,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         term.element.style.height = '100%'
       }
       // 让 host 内边距区域也跟随终端背景,避免深色下出现白边框
-      host.style.background = termTheme().background
+      host.style.background = terminalTheme().background || ''
       fit.fit()
       termRef.current = term
       fitRef.current = fit
@@ -451,13 +425,11 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       })
       ro.observe(host)
 
-      // 监听系统深浅色切换 → 实时更新终端主题
-      const mql = window.matchMedia('(prefers-color-scheme: dark)')
-      const onScheme = (): void => {
-        term.options.theme = termTheme()
-        host.style.background = termTheme().background
-      }
-      mql.addEventListener?.('change', onScheme)
+      const stopObservingTheme = observeTheme(() => {
+        const nextTheme = terminalTheme()
+        term.options.theme = nextTheme
+        host.style.background = nextTheme.background || ''
+      })
 
       return () => {
         disposed = true
@@ -466,7 +438,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         activeGen = null
         startupEvents = []
         ro.disconnect()
-        mql.removeEventListener?.('change', onScheme)
+        stopObservingTheme()
         host.removeEventListener('keydown', onKeyDownCapture, true)
         dataSub.dispose()
         const timer = usageTimerRef.current

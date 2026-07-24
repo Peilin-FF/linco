@@ -12,6 +12,8 @@ $script:LastFingerprint = $null
 $script:CanvasPreset = 'academic-wide'
 $script:OperationCount = 0
 $script:LastOperation = 'idle'
+$script:LivePreviewWidth = 1400
+$script:AgentLockPath = Join-Path (Join-Path $env:USERPROFILE '.linco') 'powerpoint-live-agent.lock'
 
 function Get-CanvasSize($Parameters) {
     $preset = [string] (Get-Property $Parameters 'canvas_preset' 'academic-wide')
@@ -46,6 +48,59 @@ function Get-Property($Object, [string] $Name, $Default = $null) {
         return $Object.$Name
     }
     return $Default
+}
+
+function Has-Property($Object, [string] $Name) {
+    return $null -ne $Object -and $Object.PSObject.Properties.Name -contains $Name
+}
+
+function Write-AtomicText([string] $Path, [string] $Content) {
+    $parent = Split-Path -Parent $Path
+    if ($parent) { [IO.Directory]::CreateDirectory($parent) | Out-Null }
+    $temporaryPath = "$Path.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
+    $backupPath = "$Path.$PID.bak"
+    [IO.File]::WriteAllText($temporaryPath, $Content, [Text.UTF8Encoding]::new($false))
+    try {
+        for ($attempt = 0; $attempt -lt 6; $attempt++) {
+            try {
+                if ([IO.File]::Exists($Path)) {
+                    [IO.File]::Replace($temporaryPath, $Path, $backupPath, $true)
+                    if ([IO.File]::Exists($backupPath)) {
+                        try { [IO.File]::Delete($backupPath) } catch {}
+                    }
+                } else {
+                    [IO.File]::Move($temporaryPath, $Path)
+                }
+                return
+            } catch {
+                if ($attempt -ge 5) { throw }
+                Start-Sleep -Milliseconds ([math]::Min(250, 20 * [math]::Pow(2, $attempt)))
+            }
+        }
+    } finally {
+        if ([IO.File]::Exists($temporaryPath)) {
+            try { [IO.File]::Delete($temporaryPath) } catch {}
+        }
+        if ([IO.File]::Exists($backupPath)) {
+            try { [IO.File]::Delete($backupPath) } catch {}
+        }
+    }
+}
+
+function Set-AgentBusy {
+    $payload = [ordered]@{
+        pid = $PID
+        expires_at = [DateTimeOffset]::UtcNow.AddMinutes(10).ToUnixTimeMilliseconds()
+    }
+    Write-AtomicText $script:AgentLockPath ($payload | ConvertTo-Json -Compress)
+}
+
+function Clear-AgentBusy {
+    try {
+        if (-not [IO.File]::Exists($script:AgentLockPath)) { return }
+        $payload = [IO.File]::ReadAllText($script:AgentLockPath) | ConvertFrom-Json
+        if ([int] $payload.pid -eq $PID) { [IO.File]::Delete($script:AgentLockPath) }
+    } catch {}
 }
 
 function Ensure-PowerPoint {
@@ -121,20 +176,34 @@ function Get-SlideFingerprint {
     return [string]::Join("`n", $parts)
 }
 
-function Publish-LiveStatus {
+function Publish-LiveStatus(
+    [int] $PreviewWidth = 1400,
+    [bool] $IncludeFingerprint = $true
+) {
     Ensure-Slide
     $lincoDirectory = Join-Path $env:USERPROFILE '.linco'
     $previewDirectory = Join-Path $lincoDirectory 'powerpoint-live-preview'
     [IO.Directory]::CreateDirectory($previewDirectory) | Out-Null
     $script:PreviewSequence += 1
     $previewPath = Join-Path $previewDirectory ("slide-{0}-{1}.png" -f $PID, $script:PreviewSequence)
-    $previewWidth = 3200
+    $previewWidth = [math]::Max(600, $PreviewWidth)
     $previewHeight = [int] [math]::Round(
         $previewWidth * $script:Presentation.PageSetup.SlideHeight / $script:Presentation.PageSetup.SlideWidth
     )
     $script:Slide.Export($previewPath, 'PNG', $previewWidth, $previewHeight)
-    $fingerprint = Get-SlideFingerprint
+    $fingerprint = $script:LastFingerprint
+    if ($IncludeFingerprint -or [string]::IsNullOrEmpty($fingerprint)) {
+        $fingerprint = Get-SlideFingerprint
+        $script:LastFingerprint = $fingerprint
+    }
 
+    $descriptorPath = Join-Path $lincoDirectory 'powerpoint-live.json'
+    $previousDescriptor = $null
+    try {
+        if ([IO.File]::Exists($descriptorPath)) {
+            $previousDescriptor = [IO.File]::ReadAllText($descriptorPath) | ConvertFrom-Json
+        }
+    } catch {}
     $descriptor = [ordered]@{
         version = 1
         ready = $true
@@ -153,18 +222,15 @@ function Publish-LiveStatus {
         fingerprint = $fingerprint
         updated_at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         power_point_pid = $PID
+        monitor_pid = Get-Property $previousDescriptor 'monitor_pid' $null
+        monitor_parent_pid = Get-Property $previousDescriptor 'monitor_parent_pid' $null
+        monitor_protocol_version = Get-Property $previousDescriptor 'monitor_protocol_version' $null
     }
-    $descriptorPath = Join-Path $lincoDirectory 'powerpoint-live.json'
-    [IO.File]::WriteAllText(
-        $descriptorPath,
-        ($descriptor | ConvertTo-Json -Depth 5),
-        [Text.UTF8Encoding]::new($false)
-    )
+    Write-AtomicText $descriptorPath ($descriptor | ConvertTo-Json -Depth 5)
     if ($script:LastPreviewPath -and $script:LastPreviewPath -ne $previewPath) {
         try { [IO.File]::Delete($script:LastPreviewPath) } catch {}
     }
     $script:LastPreviewPath = $previewPath
-    $script:LastFingerprint = $fingerprint
 }
 
 function Sync-ActiveSlide {
@@ -202,34 +268,79 @@ function Get-Shape([string] $Name) {
     try { return $script:Slide.Shapes.Item($Name) } catch { throw "Shape not found: $Name" }
 }
 
-function Set-ShapeText($Shape, $Parameters) {
-    $text = Get-Property $Parameters 'text' $null
-    if ($null -eq $text) { return }
-    $Shape.TextFrame2.TextRange.Text = [string] $text
-    $fontSize = [single] (Get-Property $Parameters 'font_size' 7)
-    $Shape.TextFrame2.TextRange.Font.Size = $fontSize
-    $Shape.TextFrame2.TextRange.Font.Bold = if (Get-Property $Parameters 'bold' $false) { -1 } else { 0 }
+function Set-ShapeText($Shape, $Parameters, [bool] $UseDefaults = $false) {
+    if ($Shape.HasTextFrame -eq 0) { return }
+    $textRuns = Get-Property $Parameters 'text_runs' $null
+    $hasRuns = $null -ne $textRuns -and @($textRuns).Count -gt 0
+    if ($hasRuns) {
+        $builder = [Text.StringBuilder]::new()
+        foreach ($run in @($textRuns)) { [void] $builder.Append([string] (Get-Property $run 'text' '')) }
+        $Shape.TextFrame2.TextRange.Text = $builder.ToString()
+    } elseif (Has-Property $Parameters 'text') {
+        $Shape.TextFrame2.TextRange.Text = [string] $Parameters.text
+    }
+
+    $textRange = $Shape.TextFrame2.TextRange
+    if ($UseDefaults -or (Has-Property $Parameters 'font_size')) {
+        $textRange.Font.Size = [single] (Get-Property $Parameters 'font_size' 7)
+    }
+    if ($UseDefaults -or (Has-Property $Parameters 'bold')) {
+        $textRange.Font.Bold = if (Get-Property $Parameters 'bold' $false) { -1 } else { 0 }
+    }
+    if ($UseDefaults -or (Has-Property $Parameters 'italic')) {
+        $textRange.Font.Italic = if (Get-Property $Parameters 'italic' $false) { -1 } else { 0 }
+    }
     $fontName = Get-Property $Parameters 'font_name' $null
-    if ($fontName) { $Shape.TextFrame2.TextRange.Font.Name = [string] $fontName }
-    $fontColor = Convert-HexColor (Get-Property $Parameters 'font_color' '#202124')
-    if ($null -ne $fontColor) { $Shape.TextFrame2.TextRange.Font.Fill.ForeColor.RGB = $fontColor }
-    $alignment = [string] (Get-Property $Parameters 'align' 'center')
-    $Shape.TextFrame2.TextRange.ParagraphFormat.Alignment = switch ($alignment) {
-        'left' { 1 }
-        'right' { 3 }
-        default { 2 }
+    if ($fontName) { $textRange.Font.Name = [string] $fontName }
+    if ($UseDefaults -or (Has-Property $Parameters 'font_color')) {
+        $fontColor = Convert-HexColor (Get-Property $Parameters 'font_color' '#202124')
+        if ($null -ne $fontColor) { $textRange.Font.Fill.ForeColor.RGB = $fontColor }
     }
-    $vertical = [string] (Get-Property $Parameters 'vertical_align' 'middle')
-    $Shape.TextFrame2.VerticalAnchor = switch ($vertical) {
-        'top' { 1 }
-        'bottom' { 4 }
-        default { 3 }
+    if ($UseDefaults -or (Has-Property $Parameters 'align')) {
+        $alignment = [string] (Get-Property $Parameters 'align' 'center')
+        $textRange.ParagraphFormat.Alignment = switch ($alignment) {
+            'left' { 1 }
+            'right' { 3 }
+            default { 2 }
+        }
     }
+    if ($UseDefaults -or (Has-Property $Parameters 'vertical_align')) {
+        $vertical = [string] (Get-Property $Parameters 'vertical_align' 'middle')
+        $Shape.TextFrame2.VerticalAnchor = switch ($vertical) {
+            'top' { 1 }
+            'bottom' { 4 }
+            default { 3 }
+        }
+    }
+    $Shape.TextFrame2.AutoSize = 0
     $Shape.TextFrame2.WordWrap = -1
-    $Shape.TextFrame2.MarginLeft = [single] (Get-Property $Parameters 'margin' 2)
-    $Shape.TextFrame2.MarginRight = [single] (Get-Property $Parameters 'margin' 2)
-    $Shape.TextFrame2.MarginTop = [single] (Get-Property $Parameters 'margin' 2)
-    $Shape.TextFrame2.MarginBottom = [single] (Get-Property $Parameters 'margin' 2)
+    if ($UseDefaults -or (Has-Property $Parameters 'margin')) {
+        $margin = [single] (Get-Property $Parameters 'margin' 2)
+        $Shape.TextFrame2.MarginLeft = $margin
+        $Shape.TextFrame2.MarginRight = $margin
+        $Shape.TextFrame2.MarginTop = $margin
+        $Shape.TextFrame2.MarginBottom = $margin
+    }
+
+    if ($hasRuns) {
+        $start = 1
+        foreach ($run in @($textRuns)) {
+            $runText = [string] (Get-Property $run 'text' '')
+            $length = $runText.Length
+            if ($length -le 0) { continue }
+            $range = $textRange.Characters($start, $length)
+            if (Has-Property $run 'font_size') { $range.Font.Size = [single] $run.font_size }
+            if (Has-Property $run 'font_name') { $range.Font.Name = [string] $run.font_name }
+            if (Has-Property $run 'font_color') {
+                $runColor = Convert-HexColor ([string] $run.font_color)
+                if ($null -ne $runColor) { $range.Font.Fill.ForeColor.RGB = $runColor }
+            }
+            if (Has-Property $run 'bold') { $range.Font.Bold = if ($run.bold) { -1 } else { 0 } }
+            if (Has-Property $run 'italic') { $range.Font.Italic = if ($run.italic) { -1 } else { 0 } }
+            if (Has-Property $run 'underline') { $range.Font.UnderlineStyle = if ($run.underline) { 1 } else { 0 } }
+            $start += $length
+        }
+    }
 }
 
 function Set-ShapeStyle($Shape, $Parameters) {
@@ -240,7 +351,13 @@ function Set-ShapeStyle($Shape, $Parameters) {
         $Shape.Fill.Visible = -1
         $Shape.Fill.Solid()
         $Shape.Fill.ForeColor.RGB = Convert-HexColor $fill
-        $Shape.Fill.Transparency = [single] (Get-Property $Parameters 'fill_transparency' 0)
+        $transparency = [single] (Get-Property $Parameters 'fill_transparency' 0)
+        if ($transparency -lt 0 -or $transparency -gt 1) { throw 'fill_transparency must be between 0 and 1.' }
+        $Shape.Fill.Transparency = $transparency
+    } elseif (Has-Property $Parameters 'fill_transparency') {
+        $transparency = [single] $Parameters.fill_transparency
+        if ($transparency -lt 0 -or $transparency -gt 1) { throw 'fill_transparency must be between 0 and 1.' }
+        $Shape.Fill.Transparency = $transparency
     }
     $stroke = Get-Property $Parameters 'stroke_color' $null
     if ($stroke -eq 'none' -or $stroke -eq 'transparent') {
@@ -269,7 +386,7 @@ function Add-Shape($Parameters) {
     )
     $shape.Name = [string] $Parameters.name
     Set-ShapeStyle $shape $Parameters
-    Set-ShapeText $shape $Parameters
+    Set-ShapeText $shape $Parameters $true
     return Shape-Summary $shape
 }
 
@@ -280,7 +397,7 @@ function Add-Text($Parameters) {
         [single] $Parameters.width, [single] $Parameters.height
     )
     $shape.Name = [string] $Parameters.name
-    Set-ShapeText $shape $Parameters
+    Set-ShapeText $shape $Parameters $true
     Set-ShapeStyle $shape $Parameters
     return Shape-Summary $shape
 }
@@ -390,6 +507,77 @@ function Shape-Summary($Shape) {
     }
 }
 
+function Invoke-DrawSequence($Parameters) {
+    Ensure-Slide
+    $operations = @($Parameters.operations)
+    if ($operations.Count -lt 1) { throw 'draw_sequence requires at least one operation.' }
+    $allowed = @(
+        'new_slide', 'select_slide', 'clear', 'add_shape', 'add_text', 'add_connector',
+        'connect_shapes', 'add_image', 'group', 'ungroup', 'align', 'distribute',
+        'z_order', 'duplicate', 'update', 'delete'
+    )
+    $publishEvery = [math]::Max(1, [int] (Get-Property $Parameters 'publish_every_operations' 8))
+    $publishInterval = [math]::Max(100, [int] (Get-Property $Parameters 'publish_interval_ms' 650))
+    $previewWidth = [math]::Max(600, [int] (Get-Property $Parameters 'live_preview_width' $script:LivePreviewWidth))
+    $stepDelay = [math]::Max(0, [int] (Get-Property $Parameters 'step_delay_ms' 0))
+    $includeResults = [bool] (Get-Property $Parameters 'include_results' $false)
+    $results = [Collections.Generic.List[object]]::new()
+    $appliedCount = 0
+    $failedIndex = $null
+    $failure = $null
+    $lastPublish = [Diagnostics.Stopwatch]::StartNew()
+
+    Set-AgentBusy
+    try {
+        for ($index = 0; $index -lt $operations.Count; $index++) {
+            $operation = $operations[$index]
+            $command = [string] (Get-Property $operation 'type' '')
+            if ($command -notin $allowed) {
+                $failedIndex = $index
+                $failure = "Unsupported draw_sequence operation: $command"
+                break
+            }
+            try {
+                $result = Invoke-Command ([pscustomobject]@{ command = $command; args = $operation })
+                if ($includeResults) { $results.Add($result) }
+                $appliedCount += 1
+                $script:OperationCount += 1
+                $script:LastOperation = $command
+            } catch {
+                $failedIndex = $index
+                $failure = "$($_.Exception.Message) (line $($_.InvocationInfo.ScriptLineNumber))"
+                break
+            }
+
+            $shouldPublish = ($appliedCount % $publishEvery -eq 0) -or
+                ($lastPublish.ElapsedMilliseconds -ge $publishInterval)
+            if ($shouldPublish -and $index -lt ($operations.Count - 1)) {
+                Set-AgentBusy
+                Publish-LiveStatus -PreviewWidth $previewWidth -IncludeFingerprint $false
+                $lastPublish.Restart()
+            }
+            if ($stepDelay -gt 0) { Start-Sleep -Milliseconds $stepDelay }
+        }
+        $script:LastOperation = if ($null -eq $failure) { 'draw_sequence' } else { 'draw_sequence_partial' }
+        Publish-LiveStatus -PreviewWidth $previewWidth -IncludeFingerprint $true
+    } finally {
+        Clear-AgentBusy
+    }
+
+    $response = [ordered]@{
+        completed = $null -eq $failure
+        operation_count = $operations.Count
+        applied_count = $appliedCount
+        failed_index = $failedIndex
+        error = $failure
+        preview_publish_every_operations = $publishEvery
+        preview_publish_interval_ms = $publishInterval
+        live_preview_width = $previewWidth
+    }
+    if ($includeResults) { $response.results = @($results) }
+    return $response
+}
+
 function Invoke-Command($Request) {
     $parameters = $Request.args
     switch ([string] $Request.command) {
@@ -453,6 +641,7 @@ function Invoke-Command($Request) {
             for ($i = $script:Slide.Shapes.Count; $i -ge 1; $i--) { $script:Slide.Shapes.Item($i).Delete() }
             return @{ slide_index = $script:Slide.SlideIndex; shape_count = 0 }
         }
+        'draw_sequence' { return Invoke-DrawSequence $parameters }
         'add_shape' { return Add-Shape $parameters }
         'add_text' { return Add-Text $parameters }
         'add_connector' { return Add-Connector $parameters }
@@ -526,7 +715,12 @@ function Invoke-Command($Request) {
         'inspect' {
             Ensure-Slide
             $items = @()
-            for ($i = 1; $i -le $script:Slide.Shapes.Count; $i++) { $items += Shape-Summary $script:Slide.Shapes.Item($i) }
+            $names = @(Get-Property $parameters 'names' @())
+            if ($names.Count -gt 0) {
+                foreach ($name in $names) { $items += Shape-Summary (Get-Shape ([string] $name)) }
+            } else {
+                for ($i = 1; $i -le $script:Slide.Shapes.Count; $i++) { $items += Shape-Summary $script:Slide.Shapes.Item($i) }
+            }
             return @{ file_path = $script:FilePath; slide_index = $script:Slide.SlideIndex; slide_width = $script:Presentation.PageSetup.SlideWidth; slide_height = $script:Presentation.PageSetup.SlideHeight; canvas_preset = $script:CanvasPreset; shape_count = $items.Count; shapes = $items }
         }
         'sync' { return Sync-ActiveSlide }
@@ -561,15 +755,27 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
     try {
         $request = $line | ConvertFrom-Json
         $id = $request.id
-        $result = Invoke-Command $request
-        if ([string] $request.command -in @(
+        $publishesAfterMutation = [string] $request.command -in @(
             'launch', 'new_slide', 'select_slide', 'clear', 'add_shape', 'add_text',
             'add_connector', 'connect_shapes', 'add_image', 'group', 'ungroup',
             'align', 'distribute', 'z_order', 'duplicate', 'update', 'delete', 'save'
-        )) {
+        )
+        $commandSucceeded = $false
+        if ($publishesAfterMutation) { Set-AgentBusy }
+        try {
+            $result = Invoke-Command $request
+            $commandSucceeded = $true
+        } finally {
+            if ($publishesAfterMutation -and -not $commandSucceeded) { Clear-AgentBusy }
+        }
+        if ($publishesAfterMutation) {
             $script:OperationCount += 1
             $script:LastOperation = [string] $request.command
-            Publish-LiveStatus
+            try {
+                Publish-LiveStatus -PreviewWidth $script:LivePreviewWidth -IncludeFingerprint $true
+            } finally {
+                Clear-AgentBusy
+            }
         }
         [Console]::Out.WriteLine((@{ id = $id; ok = $true; result = $result } | ConvertTo-Json -Depth 12 -Compress))
     } catch {

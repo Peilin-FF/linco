@@ -63,6 +63,7 @@ pub async fn watch_start(app: AppHandle, host: Option<String>, root: String) -> 
             Ok(())
         } else {
             // 本地:起 mtime 扫描线程
+            crate::shadow::invalidate_stage(None, &root);
             let gen = LOCAL_GEN.load(Ordering::Relaxed);
             std::thread::spawn(move || local_poll(app, root, gen));
             Ok(())
@@ -86,7 +87,14 @@ pub async fn watch_stop() -> Result<(), String> {
     .await
 }
 
-fn scan_mtimes(root: &str) -> HashMap<String, i64> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    modified_ns: u128,
+    len: u64,
+    is_dir: bool,
+}
+
+fn scan_mtimes(root: &str) -> HashMap<String, FileStamp> {
     let mut out = HashMap::new();
     let mut stack = vec![Path::new(root).to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -100,14 +108,30 @@ fn scan_mtimes(root: &str) -> HashMap<String, i64> {
                 Err(_) => continue,
             };
             if ft.is_dir() {
-                let n = e.file_name().to_string_lossy().to_string();
-                if !SKIP.contains(&n.as_str()) {
-                    stack.push(p);
+                let name = e.file_name().to_string_lossy().to_string();
+                if SKIP.contains(&name.as_str()) {
+                    continue;
                 }
-            } else if let Ok(m) = e.metadata().and_then(|md| md.modified()) {
-                if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
-                    out.insert(p.to_string_lossy().to_string(), d.as_secs() as i64);
-                }
+            }
+            let Ok(metadata) = e.metadata() else {
+                continue;
+            };
+            let modified_ns = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default();
+            out.insert(
+                p.to_string_lossy().to_string(),
+                FileStamp {
+                    modified_ns,
+                    len: metadata.len(),
+                    is_dir: ft.is_dir(),
+                },
+            );
+            if ft.is_dir() {
+                stack.push(p);
             }
         }
         if out.len() > 20000 {
@@ -139,6 +163,7 @@ fn local_poll(app: AppHandle, root: String, gen: u64) {
         if !changed.is_empty() {
             changed.sort();
             changed.dedup();
+            crate::shadow::invalidate_stage(None, &root);
             let _ = app.emit(
                 "remote-fs-change",
                 FsChangeEvent {
@@ -148,5 +173,40 @@ fn local_poll(app: AppHandle, root: String, gen: u64) {
             );
         }
         prev = cur;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn local_snapshot_tracks_directories_and_file_metadata() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("linco-watch-{nonce}"));
+        let empty = root.join("empty");
+        let skipped = root.join("node_modules");
+        let file = root.join("paper.tex");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&skipped).unwrap();
+        std::fs::write(&file, "draft").unwrap();
+
+        let first = scan_mtimes(root.to_str().unwrap());
+        assert!(first.contains_key(&empty.to_string_lossy().to_string()));
+        assert!(first.contains_key(&file.to_string_lossy().to_string()));
+        assert!(!first.contains_key(&skipped.to_string_lossy().to_string()));
+
+        std::fs::write(&file, "longer draft").unwrap();
+        let second = scan_mtimes(root.to_str().unwrap());
+        assert_ne!(
+            first.get(&file.to_string_lossy().to_string()),
+            second.get(&file.to_string_lossy().to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

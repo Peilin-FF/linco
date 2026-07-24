@@ -5,6 +5,7 @@
 // 字体/字号同理走 --app-font / --app-font-size。
 
 import { useEffect, useState } from 'react'
+import type { ITheme } from '@xterm/xterm'
 
 export interface ThemeVars {
   canvas: string
@@ -13,6 +14,10 @@ export interface ThemeVars {
   inkMuted: string
   inkFaint: string
   accent: string
+  border?: string
+  hover?: string
+  selection?: string
+  shadow?: string
 }
 
 export interface Theme {
@@ -25,29 +30,37 @@ export interface Theme {
 // VSCode 热门主题的近似配色(取其编辑器背景/前景/强调)。
 export const THEMES: Theme[] = [
   {
-    id: 'github-light',
-    name: 'GitHub Light',
+    id: 'vscode-light',
+    name: 'VS Code Light Modern',
     dark: false,
     vars: {
       canvas: '#ffffff',
-      sidebar: '#f6f8fa',
-      ink: '#1f2328',
-      inkMuted: '#656d76',
-      inkFaint: '#8c959f',
-      accent: '#0969da'
+      sidebar: '#f8f8f8',
+      ink: '#3b3b3b',
+      inkMuted: '#616161',
+      inkFaint: '#868686',
+      accent: '#005fb8',
+      border: '#e5e5e5',
+      hover: '#f2f2f2',
+      selection: '#e8e8e8',
+      shadow: '0 2px 8px rgba(0, 0, 0, 0.16)'
     }
   },
   {
-    id: 'github-dark',
-    name: 'GitHub Dark',
+    id: 'vscode-dark',
+    name: 'VS Code Dark Modern',
     dark: true,
     vars: {
-      canvas: '#0d1117',
-      sidebar: '#161b22',
-      ink: '#e6edf3',
-      inkMuted: '#9198a1',
-      inkFaint: '#6e7681',
-      accent: '#2f81f7'
+      canvas: '#1f1f1f',
+      sidebar: '#181818',
+      ink: '#cccccc',
+      inkMuted: '#9d9d9d',
+      inkFaint: '#868686',
+      accent: '#0078d4',
+      border: '#2b2b2b',
+      hover: '#2b2b2b',
+      selection: '#37373d',
+      shadow: '0 2px 8px rgba(0, 0, 0, 0.36)'
     }
   },
   {
@@ -130,10 +143,16 @@ export const THEMES: Theme[] = [
   }
 ]
 
-export const DEFAULT_THEME_ID = 'github-light'
+export const DEFAULT_THEME_ID = 'vscode-light'
+
+const LEGACY_THEME_IDS: Record<string, string> = {
+  'github-light': 'vscode-light',
+  'github-dark': 'vscode-dark'
+}
 
 export function themeById(id: string | undefined): Theme {
-  return THEMES.find((t) => t.id === id) || THEMES[0]
+  const resolved = id ? LEGACY_THEME_IDS[id] || id : DEFAULT_THEME_ID
+  return THEMES.find((t) => t.id === resolved) || THEMES[0]
 }
 
 /** 应用主题:把变量写到 <html>,并设 color-scheme(影响原生滚动条/控件)。 */
@@ -147,6 +166,19 @@ export function applyTheme(id: string | undefined): void {
   root.style.setProperty('--ink-muted', v.inkMuted)
   root.style.setProperty('--ink-faint', v.inkFaint)
   root.style.setProperty('--accent', v.accent)
+  root.style.setProperty('--border', v.border || (t.dark ? '#3c3c3c' : '#e5e5e5'))
+  root.style.setProperty('--hover', v.hover || (t.dark ? '#ffffff12' : '#0000000d'))
+  root.style.setProperty(
+    '--selection',
+    v.selection || (t.dark ? '#ffffff1a' : '#00000012')
+  )
+  root.style.setProperty(
+    '--shadow-card',
+    v.shadow ||
+      (t.dark
+        ? '0 2px 8px rgba(0, 0, 0, 0.36)'
+        : '0 2px 8px rgba(0, 0, 0, 0.16)')
+  )
   root.style.colorScheme = t.dark ? 'dark' : 'light'
   root.setAttribute('data-theme', t.id)
   root.setAttribute('data-theme-dark', t.dark ? '1' : '0')
@@ -174,6 +206,97 @@ export function useIsDark(): boolean {
     return () => obs.disconnect()
   }, [])
   return dark
+}
+
+const ANSI_LIGHT = {
+  black: '#000000',
+  red: '#cd3131',
+  green: '#107c10',
+  yellow: '#949800',
+  blue: '#0451a5',
+  magenta: '#bc05bc',
+  cyan: '#0598bc',
+  white: '#555555',
+  brightBlack: '#666666',
+  brightRed: '#cd3131',
+  brightGreen: '#14ce14',
+  brightYellow: '#b5ba00',
+  brightBlue: '#0451a5',
+  brightMagenta: '#bc05bc',
+  brightCyan: '#0598bc',
+  brightWhite: '#a5a5a5'
+}
+
+const ANSI_DARK = {
+  black: '#000000',
+  red: '#cd3131',
+  green: '#0dbc79',
+  yellow: '#e5e510',
+  blue: '#2472c8',
+  magenta: '#bc3fbc',
+  cyan: '#11a8cd',
+  white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#e5e5e5'
+}
+
+function defaultExtendedAnsi(): string[] {
+  const colors: string[] = []
+  const cube = [0x00, 0x5f, 0x87, 0xaf, 0xd7, 0xff]
+  for (let i = 0; i < 216; i++) {
+    const r = cube[Math.floor(i / 36) % 6]
+    const g = cube[Math.floor(i / 6) % 6]
+    const b = cube[i % 6]
+    colors.push(`#${r.toString(16).padStart(2, '0')}${g
+      .toString(16)
+      .padStart(2, '0')}${b.toString(16).padStart(2, '0')}`)
+  }
+  for (let i = 0; i < 24; i++) {
+    const channel = (8 + i * 10).toString(16).padStart(2, '0')
+    colors.push(`#${channel}${channel}${channel}`)
+  }
+  return colors
+}
+
+const DEFAULT_EXTENDED_ANSI = defaultExtendedAnsi()
+
+/** Build an xterm palette from the active workbench theme. ANSI colors match VS Code. */
+export function terminalTheme(theme: Theme = currentTheme()): ITheme {
+  const ansi = theme.dark ? ANSI_DARK : ANSI_LIGHT
+  const extendedAnsi = [...DEFAULT_EXTENDED_ANSI]
+  if (!theme.dark) {
+    // Codex renders its input surface with xterm color 235 (#262626).
+    // Re-theme that indexed color so a light workbench does not retain a dark bar.
+    extendedAnsi[235 - 16] = theme.vars.selection || '#e8e8e8'
+  }
+  return {
+    background: theme.vars.canvas,
+    foreground: theme.vars.ink,
+    cursor: theme.vars.accent,
+    cursorAccent: theme.vars.canvas,
+    selectionBackground:
+      theme.vars.selection || (theme.dark ? '#ffffff1a' : '#00000012'),
+    extendedAnsi,
+    ...ansi
+  }
+}
+
+export function currentTheme(): Theme {
+  return themeById(document.documentElement.getAttribute('data-theme') || undefined)
+}
+
+/** Observe theme changes without coupling terminal components to app config state. */
+export function observeTheme(listener: (theme: Theme) => void): () => void {
+  const root = document.documentElement
+  const observer = new MutationObserver(() => listener(currentTheme()))
+  observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] })
+  return () => observer.disconnect()
 }
 
 // ---------- 字体 ----------

@@ -2,15 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 主题默认变量(GitHub Light)。切主题时 src/lib/theme.ts 覆盖这些。
-   先在 :root 给一份,避免首帧无变量时闪烁。 */
+/* First-paint values match VS Code Light Modern. src/lib/theme.ts updates them. */
 :root {
   --canvas: #ffffff;
-  --sidebar: #f6f6f4;
-  --ink: #1a1a1a;
-  --ink-muted: #6b6b6b;
-  --ink-faint: #9a9a9a;
-  --accent: #d97a2b;
+  --sidebar: #f8f8f8;
+  --ink: #3b3b3b;
+  --ink-muted: #616161;
+  --ink-faint: #868686;
+  --accent: #005fb8;
+  --border: #e5e5e5;
+  --hover: #f2f2f2;
+  --selection: #e8e8e8;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.16);
   --app-font-size: 14px;
   /* --app-font 默认不设,让 tailwind sans 链回退到系统字体 */
 }
@@ -23,10 +26,16 @@ body,
 }
 
 body {
+  background: var(--sidebar);
+  color: var(--ink);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   user-select: none;
   font-size: var(--app-font-size, 14px);
+}
+
+::selection {
+  background: var(--selection);
 }
 
 /* 整个顶部区域可拖动窗口;交互元素用 .no-drag 排除 */
@@ -49,15 +58,104 @@ iframe {
   transform: translateZ(0);
 }
 
+/* Scale the bottom workbench as a unit instead of floating fixed-width rails. */
+.app-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  min-height: clamp(150px, 17vh, 210px);
+  width: 100%;
+}
+
+.app-bottom-grid-compact {
+  min-height: 64px;
+}
+
+.app-bottom-composer {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.app-bottom-composer > div {
+  height: 100%;
+}
+
+.app-bottom-rail {
+  display: none;
+  grid-row: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.app-bottom-rail > div {
+  inset: 0;
+  position: absolute;
+}
+
+@media (min-width: 1180px) {
+  .app-bottom-grid {
+    grid-template-columns:
+      minmax(180px, 1fr)
+      minmax(540px, 3.4fr)
+      minmax(180px, 1fr);
+    align-items: stretch;
+  }
+
+  .app-bottom-composer {
+    grid-column: 2;
+  }
+
+  .app-bottom-rail {
+    display: flex;
+  }
+
+  .app-bottom-rail-left {
+    grid-column: 1;
+  }
+
+  .app-bottom-rail-right {
+    grid-column: 3;
+  }
+}
+
 /* 细滚动条 */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Remap existing neutral utility classes to the active workbench theme. */
+[class~='border-black/5'],
+[class~='border-black/8'],
+[class~='border-black/10'],
+[class~='border-black/15'],
+[class~='border-black/25'] {
+  border-color: var(--border);
+}
+[class~='ring-black/5'],
+[class~='ring-black/10'] {
+  --tw-ring-color: var(--border);
+}
+[class~='bg-black/5'],
+[class~='bg-black/8'] {
+  background-color: var(--hover);
+}
+[class~='bg-black/10'],
+[class~='bg-black/15'] {
+  background-color: var(--selection);
+}
+[class~='hover:bg-black/5']:hover,
+[class~='hover:bg-black/7']:hover,
+[class~='hover:bg-black/10']:hover,
+[class~='hover:bg-black/[0.05]']:hover,
+[class~='hover:bg-black/[0.07]']:hover {
+  background-color: var(--hover);
 }

@@ -15,7 +15,6 @@ import {
   X,
   Download,
   Loader2,
-  RefreshCw
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
@@ -70,6 +69,7 @@ import { relaunch } from '@tauri-apps/plugin-process'
 type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'latex' | 'files' | 'git'
 
 const ENABLE_BACKGROUND_PREWARM = false
+const IS_MACOS = navigator.platform.toLowerCase().includes('mac')
 
 const LatexView = lazy(() => import('./components/LatexView'))
 
@@ -131,8 +131,6 @@ export default function App(): JSX.Element {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
   const [installingUpdate, setInstallingUpdate] = useState(false)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
-  const [updateChecked, setUpdateChecked] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
   const updateCheckInFlightRef = useRef(false)
   // 点更新横幅 → 弹出「新版更新内容」公告(展示 release notes,再让用户决定是否更新)
@@ -171,9 +169,10 @@ export default function App(): JSX.Element {
   >([])
   const [chatBoxHeight, setChatBoxHeight] = useState(0) // 对话框输入区额外高度(0=默认)
 
-  // 终端/预览视图的左侧对话分栏:默认打开,可拖宽、可关闭。
+  // 终端/预览/绘图的左侧对话分栏默认打开；LaTeX 独立记忆开关且默认收起。
   // 复用同一个对话会话(移动定位,不重挂),边看输出边对话。
   const [chatSplitOpen, setChatSplitOpen] = useState(true)
+  const [latexChatSplitOpen, setLatexChatSplitOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
 
   // 连接状态
@@ -230,20 +229,16 @@ export default function App(): JSX.Element {
   const runUpdateCheck = async (): Promise<boolean> => {
     if (updateCheckInFlightRef.current) return true
     updateCheckInFlightRef.current = true
-    setCheckingUpdate(true)
-    setUpdateChecked(false)
     setUpdateError(null)
     try {
       const update = await check({ timeout: 60_000 })
       setAvailableUpdate(update)
-      setUpdateChecked(true)
       return true
     } catch (err) {
       setUpdateError(err instanceof Error ? err.message : String(err))
       return false
     } finally {
       updateCheckInFlightRef.current = false
-      setCheckingUpdate(false)
     }
   }
 
@@ -517,8 +512,9 @@ export default function App(): JSX.Element {
   // 左侧对话分栏是否当前生效:开关开 + 存在活动会话 + 在终端/预览视图。
   // 无活动会话时不留左栏空位。
   const hasActiveChat = chatSessions.some((s) => s.id === activeChatId)
+  const chatPaneOpen = view === 'latex' ? latexChatSplitOpen : chatSplitOpen
   const chatSplitActive =
-    chatSplitOpen &&
+    chatPaneOpen &&
     hasActiveChat &&
     (view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex')
 
@@ -972,7 +968,9 @@ export default function App(): JSX.Element {
           data-tauri-drag-region + .drag 双保险:Overlay 标题栏下拖动更可靠。 */}
       <div
         data-tauri-drag-region
-        className="drag flex h-11 shrink-0 items-center gap-1 pl-20 pr-3"
+        className={`drag flex h-11 shrink-0 items-center gap-1 pr-3 ${
+          IS_MACOS ? 'pl-20' : 'pl-1.5'
+        }`}
       >
         {VIEWS.map(({ id, labelKey, icon: Icon }) => (
           <button
@@ -998,15 +996,21 @@ export default function App(): JSX.Element {
         {/* 左分栏开关:终端/预览视图显示,放顶部视图栏(在视图按钮右边),不挡视图内工具栏。 */}
         {(view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex') && (
           <button
-            onClick={() => setChatSplitOpen((o) => !o)}
-            title={chatSplitOpen ? t('app.chatPane.collapse') : t('app.chatPane.expand')}
+            onClick={() => {
+              if (view === 'latex') {
+                setLatexChatSplitOpen((open) => !open)
+              } else {
+                setChatSplitOpen((open) => !open)
+              }
+            }}
+            title={chatPaneOpen ? t('app.chatPane.collapse') : t('app.chatPane.expand')}
             className={`no-drag ml-1 flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] transition-colors ${
-              chatSplitOpen
+              chatPaneOpen
                 ? 'bg-canvas text-ink shadow-sm'
                 : 'text-ink-muted hover:bg-black/5'
             }`}
           >
-            {chatSplitOpen ? (
+            {chatPaneOpen ? (
               <PanelLeftClose size={15} />
             ) : (
               <PanelLeft size={15} />
@@ -1052,30 +1056,6 @@ export default function App(): JSX.Element {
               />
             )}
           </div>
-        )}
-        {!availableUpdate && (
-          <button
-            onClick={() => runUpdateCheck().catch(() => {})}
-            disabled={checkingUpdate}
-            title={
-              updateError
-                ? t('update.failed', { error: updateError })
-                : checkingUpdate
-                  ? t('update.checking')
-                  : updateChecked
-                    ? t('update.upToDate')
-                    : t('update.checkNow')
-            }
-            className={`no-drag flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-default ${
-              updateError
-                ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                : updateChecked
-                  ? 'text-emerald-600 hover:bg-emerald-50'
-                  : 'text-ink-muted hover:bg-black/5 hover:text-ink'
-            }`}
-          >
-            <RefreshCw size={15} className={checkingUpdate ? 'animate-spin' : undefined} />
-          </button>
         )}
         <ConnectionPicker
           connections={config.connections}
@@ -1354,10 +1334,14 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-          {remoteDataReady && view === 'latex' && (
+          {remoteDataReady && visited.has('latex') && (
             <div
               style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
-              className="absolute right-0 top-0 bottom-0 z-10"
+              className={`absolute right-0 top-0 bottom-0 ${
+                view === 'latex'
+                  ? 'z-10 opacity-100'
+                  : 'pointer-events-none opacity-0'
+              }`}
             >
               <ViewErrorBoundary>
                 <Suspense
@@ -1370,7 +1354,7 @@ export default function App(): JSX.Element {
                   <LatexView
                     host={host}
                     cwd={cwd}
-                    onOpenProject={handlePickDir}
+                    active={view === 'latex'}
                     onSubmitToAgent={submitToAgent}
                   />
                 </Suspense>
@@ -1426,12 +1410,13 @@ export default function App(): JSX.Element {
         />
       </div>
 
-      {/* 底部对话框:常驻所有视图,始终与「对话」会话通信。
-          输入/提交不切换当前视图(想看对话自己点「对话」)。
-          对话框居中(max-w-820);右侧空白区浮一个「会话总览侧栏」,
-          列出所有机器×项目的 agent 会话(忙/空闲),点击直达——不挤压对话框宽度。 */}
-      <div className="relative shrink-0 px-1.5 pb-1.5">
-        <div className="mx-auto w-full max-w-[820px]">
+      {/* 底部对话区:宽屏按比例填充历史/输入/会话三栏,窄屏自动保留输入栏。 */}
+      <div
+        className={`app-bottom-grid shrink-0 px-1.5 pb-1.5 ${
+          dockTerminalOpen ? 'app-bottom-grid-compact' : ''
+        }`}
+      >
+        <div className="app-bottom-composer min-w-0">
           <ChatInput
             onSend={handleSend}
             onForward={handleForward}
@@ -1452,12 +1437,10 @@ export default function App(): JSX.Element {
             }}
           />
         </div>
-        {/* 会话总览侧栏:在对话框右边缘到屏幕右边之间的「空白区」水平居中。
-            左边界 = 居中对话框(max-w-820)的右边缘(中线+410px);该容器铺满到屏幕右边,
-            内部 flex 居中放侧栏。与对话框等高(inset-y);窄屏 xl 以下隐藏。一屏约 3 个,超出滚动。 */}
+        {/* 会话总览:宽屏占右侧比例栏,窄屏自动收起。 */}
         {railSessions.length > 0 && (
-          <div className="pointer-events-none absolute bottom-1.5 right-0 top-0 hidden left-[calc(50%_+_410px)] items-stretch justify-center xl:flex">
-            <div className="pointer-events-auto w-[176px] overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+          <div className="app-bottom-rail app-bottom-rail-right pointer-events-none min-w-0 items-stretch justify-center">
+            <div className="pointer-events-auto w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
               <SessionRail
                 sessions={railSessions}
                 activeId={activeChatId}
@@ -1466,12 +1449,10 @@ export default function App(): JSX.Element {
             </div>
           </div>
         )}
-        {/* 会话历史面板:对话框左侧空白区(与右侧 SessionRail 镜像)。
-            只列「当前项目」里该 agent 存的历史会话,可逐个删除防堆积。
-            右边界 = 居中对话框(max-w-820)的左边缘(中线-410px);窄屏 xl 以下隐藏。 */}
+        {/* 当前项目会话历史:与右侧总览使用相同的比例栏。 */}
         {cwd && (
-          <div className="pointer-events-none absolute bottom-1.5 right-[calc(50%_+_410px)] top-0 hidden left-0 items-stretch justify-center xl:flex">
-            <div className="pointer-events-auto w-[200px] overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 empty:hidden">
+          <div className="app-bottom-rail app-bottom-rail-left pointer-events-none min-w-0 items-stretch justify-center">
+            <div className="pointer-events-auto w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 empty:hidden">
               <SessionHistory
                 cwd={cwd}
                 provider={defaultAgent?.provider || ''}

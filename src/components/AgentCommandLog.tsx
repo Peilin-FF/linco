@@ -99,28 +99,28 @@ export default function AgentCommandLog({ session, host, active }: Props): JSX.E
   }, [entries])
 
   return (
-    <div className="flex h-full flex-col bg-[#1e1e1e] text-[#d4d4d4]">
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-1 text-[11px] text-white/50">
+    <div className="flex h-full flex-col bg-canvas text-ink">
+      <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1 text-[11px] text-ink-faint">
         <span className="font-mono">{t('cmdlog.title')}</span>
         <span className="ml-auto">{entries.length}</span>
       </div>
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-2 py-2 font-mono text-[12px]">
         {entries.length === 0 ? (
-          <div className="px-2 py-4 text-white/40">{t('cmdlog.empty')}</div>
+          <div className="px-2 py-4 text-ink-faint">{t('cmdlog.empty')}</div>
         ) : (
           entries.map((e) => (
             <div key={e.tool_use_id} className="mb-3">
               {/* 命令行:$ + 命令(非 Bash 工具显示工具名) */}
               <div className="flex items-baseline gap-2">
-                <span className="shrink-0 text-[#5c8bd6]">
+                <span className="shrink-0 text-accent">
                   {e.tool === 'Bash' ? '$' : `[${e.tool}]`}
                 </span>
-                <span className="whitespace-pre-wrap break-all text-[#e8e6de]">
+                <span className="whitespace-pre-wrap break-all text-ink">
                   {e.command}
                 </span>
               </div>
               {e.description && (
-                <div className="pl-4 text-[11px] text-white/40">{e.description}</div>
+                <div className="pl-4 text-[11px] text-ink-faint">{e.description}</div>
               )}
               {/* 输出:模型看到的结果 */}
               {e.output && (
@@ -128,7 +128,7 @@ export default function AgentCommandLog({ session, host, active }: Props): JSX.E
                   className={`mt-1 max-h-[320px] overflow-auto whitespace-pre-wrap break-all rounded px-3 py-2 text-[11.5px] leading-relaxed ${
                     e.is_error
                       ? 'bg-red-950/40 text-red-300'
-                      : 'bg-black/30 text-[#cfcdc4]'
+                      : 'bg-sidebar text-ink-muted'
                   }`}
                 >
                   {e.output}

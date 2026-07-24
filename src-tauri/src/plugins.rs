@@ -160,7 +160,10 @@ fn install_local(app: &AppHandle, lang: &str) -> Result<(), String> {
         let root = marketplace_root(app)?;
         let root_s = root.to_string_lossy().to_string();
         // 注册 marketplace(幂等,已存在会提示 already)
-        run_cli(exe, &["plugin", "marketplace", "add", &root_s, "--scope", "user"]);
+        run_cli(
+            exe,
+            &["plugin", "marketplace", "add", &root_s, "--scope", "user"],
+        );
         // 卸另一语言
         for n in other_names(lang) {
             run_cli(
@@ -329,7 +332,10 @@ fn tar_pipe_to_remote(local: &Path, host: &str, remote_dir: &str) -> Result<(), 
     // 1) 远端镜像准备:删旧 + 建新(实现 --delete 的「目标只剩本次内容」语义)
     crate::remote::run_remote(
         host,
-        &format!("rm -rf {d} && mkdir -p {d}", d = crate::remote::shq(remote_dir)),
+        &format!(
+            "rm -rf {d} && mkdir -p {d}",
+            d = crate::remote::shq(remote_dir)
+        ),
     )
     .map_err(|e| format!("远端准备目录失败: {e}"))?;
 
@@ -344,10 +350,7 @@ fn tar_pipe_to_remote(local: &Path, host: &str, remote_dir: &str) -> Result<(), 
         .stderr(Stdio::piped());
     crate::proc_ext::no_window(&mut tar);
     let mut tar_child = tar.spawn().map_err(|e| format!("tar 启动失败: {e}"))?;
-    let tar_out = tar_child
-        .stdout
-        .take()
-        .ok_or("无法获取 tar 输出管道")?;
+    let tar_out = tar_child.stdout.take().ok_or("无法获取 tar 输出管道")?;
 
     // 3) ssh 远端解包,stdin 接 tar 的 stdout(进程直连,不经内存中转)
     let mut ssh = Command::new(crate::proc_ext::resolve_exe("ssh"));
@@ -381,7 +384,6 @@ fn tar_pipe_to_remote(local: &Path, host: &str, remote_dir: &str) -> Result<(), 
     }
     Ok(())
 }
-
 
 /// 把本地目录镜像到远端相对 $HOME 的子路径(内容镜像,等价旧 `rsync -a --delete 本地/ host:rel/`)。
 /// 跨平台实现见 [`tar_pipe_to_remote`]。`_ssh_e` 保留以兼容调用方,内部不再使用。
@@ -460,7 +462,10 @@ fn install_codex_local(app: &AppHandle, lang: &str) -> Result<(), String> {
                     &[
                         "plugin",
                         "remove",
-                        &format!("{}@{CODEX_MARKETPLACE}", codex_variant(id, other_lang(lang))),
+                        &format!(
+                            "{}@{CODEX_MARKETPLACE}",
+                            codex_variant(id, other_lang(lang))
+                        ),
                     ],
                 );
                 // 装本语言变体
@@ -500,7 +505,10 @@ fn ensure_codex_marketplace(app: &AppHandle) -> Result<(), String> {
     let root_s = root.to_string_lossy().to_string();
     let (ok, err) = run_cli("codex", &["plugin", "marketplace", "add", &root_s]);
     if !ok && err.contains("already added from a different source") {
-        run_cli("codex", &["plugin", "marketplace", "remove", CODEX_MARKETPLACE]);
+        run_cli(
+            "codex",
+            &["plugin", "marketplace", "remove", CODEX_MARKETPLACE],
+        );
         run_cli("codex", &["plugin", "marketplace", "add", &root_s]);
     }
     Ok(())
@@ -516,9 +524,21 @@ fn other_lang(lang: &str) -> &'static str {
 
 /// codex 三个逻辑插件 → (逻辑 id, 展示名, 描述)。
 const CODEX_PLUGINS: [(&str, &str, &str); 3] = [
-    ("html", "HTML 产物套件", "codex 版:自包含 HTML 产物 + 设计套件 skill + notebook 工作流"),
-    ("task-monitor", "后台任务监控", "后台长任务用 -u + .log + & 启动,Linco 终端面板实时可见"),
-    ("shadow-diff", "改动可视化", "影子 git 追踪每轮 agent 改动 + shadow.sh CLI"),
+    (
+        "html",
+        "HTML 产物套件",
+        "codex 版:自包含 HTML 产物 + 设计套件 skill + notebook 工作流",
+    ),
+    (
+        "task-monitor",
+        "后台任务监控",
+        "后台长任务用 -u + .log + & 启动,Linco 终端面板实时可见",
+    ),
+    (
+        "shadow-diff",
+        "改动可视化",
+        "影子 git 追踪每轮 agent 改动 + shadow.sh CLI",
+    ),
 ];
 
 // ============ Tauri 命令 ============
@@ -540,9 +560,21 @@ pub struct PluginStatus {
 
 /// claude 逻辑插件 → (基名, 展示名, 描述)。变体名 = 基名 + (en 时 "-en")。
 const CLAUDE_PLUGINS: [(&str, &str, &str); 3] = [
-    ("linco-html", "HTML 产物套件", "自包含 HTML 产物/报告/notebook + 设计组件 + 就地答复工作流"),
-    ("linco-task-monitor", "后台任务监控", "把后台长任务输出重定向到 .log,在终端面板实时查看"),
-    ("linco-shadow-diff", "改动可视化", "影子 git 追踪每轮 agent 改了哪些文件(A/M/D + 红绿 diff)"),
+    (
+        "linco-html",
+        "HTML 产物套件",
+        "自包含 HTML 产物/报告/notebook + 设计组件 + 就地答复工作流",
+    ),
+    (
+        "linco-task-monitor",
+        "后台任务监控",
+        "把后台长任务输出重定向到 .log,在终端面板实时查看",
+    ),
+    (
+        "linco-shadow-diff",
+        "改动可视化",
+        "影子 git 追踪每轮 agent 改了哪些文件(A/M/D + 红绿 diff)",
+    ),
 ];
 
 /// 取当前 config 的语言(zh/en)。
@@ -601,7 +633,10 @@ fn codex_installed_names() -> std::collections::HashSet<String> {
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                 if let Some(arr) = v.get("installed").and_then(|x| x.as_array()) {
                     for p in arr {
-                        let installed = p.get("installed").and_then(|x| x.as_bool()).unwrap_or(false);
+                        let installed = p
+                            .get("installed")
+                            .and_then(|x| x.as_bool())
+                            .unwrap_or(false);
                         let enabled = p.get("enabled").and_then(|x| x.as_bool()).unwrap_or(false);
                         if installed && enabled {
                             if let Some(n) = p.get("name").and_then(|x| x.as_str()) {
@@ -715,7 +750,14 @@ pub async fn plugin_set(
             let root = marketplace_root(&app)?;
             run_cli(
                 "claude",
-                &["plugin", "marketplace", "add", &root.to_string_lossy(), "--scope", "user"],
+                &[
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    &root.to_string_lossy(),
+                    "--scope",
+                    "user",
+                ],
             );
             let variant = claude_variant(&id, &lang);
             let full = format!("{variant}@{CLAUDE_MARKETPLACE}");
@@ -733,7 +775,6 @@ pub async fn plugin_set(
     })
     .await
 }
-
 
 /// agent="codex" → 装 ~/.codex 的 AGENTS.md+skill;否则(claude)装 ~/.claude/plugins。
 #[tauri::command]

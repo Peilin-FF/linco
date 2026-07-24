@@ -19,6 +19,45 @@ export interface LatexCompileResult {
   tool_missing: boolean
 }
 
+export interface LatexAiSuggestion {
+  suggestion: string
+  edits: LatexPolishEdit[]
+  evidence: string[]
+  agent: string
+  model: string
+  filesConsidered: number
+}
+
+export type LatexPolishMode = 'standard' | 'project'
+
+export interface LatexPolishEdit {
+  original: string
+  replacement: string
+  reason: string
+  evidence: string[]
+}
+
+export interface LatexReviewSegment {
+  id: string
+  text: string
+}
+
+export interface LatexReviewIssue {
+  segmentId: string
+  original: string
+  replacement: string
+  reason: string
+  category: 'spelling' | 'grammar' | 'clarity' | 'consistency'
+  evidence: string[]
+}
+
+export interface LatexReviewResult {
+  issues: LatexReviewIssue[]
+  agent: string
+  model: string
+  filesConsidered: number
+}
+
 const remoteHost = (host?: string): string | null => host || null
 const sessionToken = (token?: string): string | null => token?.trim() || null
 
@@ -96,5 +135,39 @@ export function compileLatex(
     mainFile,
     engine,
     host: remoteHost(host)
+  })
+}
+
+export function suggestLatex(options: {
+  repo: string
+  currentFile: string
+  before: string
+  selection: string
+  after: string
+  mode: LatexPolishMode
+  host?: string
+}): Promise<LatexAiSuggestion> {
+  return invoke('latex_ai_suggest', {
+    repo: options.repo,
+    currentFile: options.currentFile,
+    before: options.before,
+    selection: options.selection,
+    after: options.after,
+    projectAware: options.mode === 'project',
+    host: remoteHost(options.host)
+  })
+}
+
+export function reviewLatex(options: {
+  repo: string
+  currentFile: string
+  segments: LatexReviewSegment[]
+  host?: string
+}): Promise<LatexReviewResult> {
+  return invoke('latex_ai_review', {
+    repo: options.repo,
+    currentFile: options.currentFile,
+    segments: options.segments,
+    host: remoteHost(options.host)
   })
 }

@@ -305,12 +305,12 @@ pub async fn agent_processes(
         }
         #[cfg(not(windows))]
         {
-        let out = Command::new("ps")
-            .args(["-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="])
-            .output()
-            .map_err(|e| format!("无法执行 ps: {e}"))?;
-        let raw = String::from_utf8_lossy(&out.stdout).to_string();
-        Ok(parse_and_filter(&raw, &base, None))
+            let out = Command::new("ps")
+                .args(["-eo", "pid=,ppid=,etime=,pcpu=,pmem=,stat=,args="])
+                .output()
+                .map_err(|e| format!("无法执行 ps: {e}"))?;
+            let raw = String::from_utf8_lossy(&out.stdout).to_string();
+            Ok(parse_and_filter(&raw, &base, None))
         }
     })
     .await
@@ -597,19 +597,102 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
 
 // 一闪而过的短命工具 / 纯 shell 外壳:不是用户想看的训练任务,剔除。
 const NOISE_CMDS: &[&str] = &[
-    "sh", "bash", "zsh", "dash", "fish", "ksh", "head", "tail", "cat", "grep", "egrep", "fgrep",
-    "ugrep", "rg", "ag", "ls", "sed", "awk", "find", "fd", "wc", "sort", "uniq", "cut", "tr",
-    "which", "env", "echo", "printf", "true", "false", "test", "expr", "date", "basename",
-    "dirname", "readlink", "stat", "cmp", "diff", "git", "ssh", "scp", "rsync", "tee", "xargs",
-    "cp", "mv", "rm", "mkdir", "sleep",
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "ksh",
+    "head",
+    "tail",
+    "cat",
+    "grep",
+    "egrep",
+    "fgrep",
+    "ugrep",
+    "rg",
+    "ag",
+    "ls",
+    "sed",
+    "awk",
+    "find",
+    "fd",
+    "wc",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "which",
+    "env",
+    "echo",
+    "printf",
+    "true",
+    "false",
+    "test",
+    "expr",
+    "date",
+    "basename",
+    "dirname",
+    "readlink",
+    "stat",
+    "cmp",
+    "diff",
+    "git",
+    "ssh",
+    "scp",
+    "rsync",
+    "tee",
+    "xargs",
+    "cp",
+    "mv",
+    "rm",
+    "mkdir",
+    "sleep",
     // 开发工具链 / dev server:用户自己长驻的开发进程,不是 agent 起的后台任务,过滤掉。
-    "node", "npm", "npx", "yarn", "pnpm", "bun", "deno", "vite", "tauri", "esbuild", "rollup",
-    "webpack", "tsc", "tsserver", "next", "nuxt", "nodemon", "ts-node", "cargo", "rustc",
-    "go", "gradle", "mvn", "make", "cmake", "ninja", "linco",
+    "node",
+    "npm",
+    "npx",
+    "yarn",
+    "pnpm",
+    "bun",
+    "deno",
+    "vite",
+    "tauri",
+    "esbuild",
+    "rollup",
+    "webpack",
+    "tsc",
+    "tsserver",
+    "next",
+    "nuxt",
+    "nodemon",
+    "ts-node",
+    "cargo",
+    "rustc",
+    "go",
+    "gradle",
+    "mvn",
+    "make",
+    "cmake",
+    "ninja",
+    "linco",
     // Windows 外壳 / 终端宿主 / REPL:agent 每跑一条命令就会起一批这些壳进程,
     // 不是用户想盯的长任务,全部过滤(exe_name 已剥 .exe 后缀,故这里写裸名)。
-    "powershell", "pwsh", "cmd", "conhost", "node_repl", "windowsterminal", "wt",
-    "openconsole", "csrss", "where", "findstr", "more", "type", "cscript", "wscript",
+    "powershell",
+    "pwsh",
+    "cmd",
+    "conhost",
+    "node_repl",
+    "windowsterminal",
+    "wt",
+    "openconsole",
+    "csrss",
+    "where",
+    "findstr",
+    "more",
+    "type",
+    "cscript",
+    "wscript",
 ];
 
 /// 从命令行取真正执行的程序名(跳过 env/nohup 前缀与 VAR=val,取首个非选项 token 的 basename)。
@@ -659,12 +742,7 @@ fn shell_runs_script(args: &str) -> bool {
         let t = toks[i];
         let tl = t.to_ascii_lowercase();
         // 内联命令壳:POSIX -c;PowerShell -Command/-EncodedCommand;cmd /c /k
-        if tl == "-c"
-            || tl == "-command"
-            || tl == "-encodedcommand"
-            || tl == "/c"
-            || tl == "/k"
-        {
+        if tl == "-c" || tl == "-command" || tl == "-encodedcommand" || tl == "/c" || tl == "/k" {
             return false;
         }
         // PowerShell 显式脚本开关:-File <script> → 是脚本
@@ -692,7 +770,6 @@ fn shell_runs_script(args: &str) -> bool {
     }
     false // 裸 shell / 交互壳
 }
-
 
 /// Linco 自身基础设施(html-vibe 预览服务器、linco agent 自己)。
 /// 例外:`bash deploy.sh` 这种**带脚本文件参数**的 shell 不算噪声——那是用户在跑的

@@ -22,18 +22,30 @@ Use the MCP tools named `powerpoint_live_launch`, `powerpoint_live_add_shape`,
 - Never create another presentation, append a slide, clear the current slide, or redraw the whole page during a local revision unless the user explicitly requests that operation.
 - Use native PowerPoint shapes, text boxes, connectors, and pictures so every object remains editable.
 - Use stable, descriptive object names. Never rely only on collection indices.
-- Work in logical sections. Export a PNG after each section and inspect both the image and object geometry.
+- Work in logical sections. Let the live preview update during a batch, then inspect once after each section instead of after every object.
 - New scientific figures use the `academic-wide` canvas by default: 182 x 115 mm (516 x 326 pt), matching common two-column paper artwork width. Use `academic-tall` only when the requested layout needs more vertical depth.
 - Treat slide coordinates as points. Design at final print size; use 5-8 pt labels and 0.5-1 pt strokes unless the user requests another publication style.
 - Keep important text inside its shape bounds and check for unintended overlaps.
 - `powerpoint_live_inspect` must report `layout_warning_count=0` before saving.
+- Keep `powerpoint_live_inspect` compact by default. Request `include_shapes: true` or specific `names` only while correcting a local region.
+- Use `text_runs` for mixed color, weight, or font text inside one text box instead of splitting a sentence into many objects.
 - Save only after visual and geometry review. Do not overwrite an existing file unless the user explicitly requested it.
+
+## Multi-agent review
+
+For a complex reference redraw, use two roles when sub-agents are available:
+
+1. The drafting agent analyzes the reference, names regions, and creates one logical section per `powerpoint_live_draw_sequence` call.
+2. The review agent checks the exported section image plus compact layout warnings and returns a short correction list.
+3. The drafting agent applies those corrections in one update batch.
+
+Do not let both agents write to PowerPoint concurrently. Do not run a visual comparison after each object; review at section boundaries and once for the final slide.
 
 ## Workflow
 
-1. Call `powerpoint_live_launch` with the exact target `.pptx` path, target slide index, `canvas_preset: academic-wide`, and a visible 150-250 ms step delay. Reuse the attached open presentation when it exists.
+1. Call `powerpoint_live_launch` with the exact target `.pptx` path, target slide index, and `canvas_preset: academic-wide`. Reuse the attached open presentation when it exists.
 2. Clear the slide only when rebuilding it intentionally.
-3. Add native objects individually or with a paced `powerpoint_live_draw_sequence`.
+3. Add native objects with `powerpoint_live_draw_sequence`; use zero step delay unless the user explicitly requests slow object-by-object animation. Live preview publication is already throttled.
 4. Call `powerpoint_live_inspect` after each logical section.
 5. Call `powerpoint_live_compare_reference` when a reference image exists. Otherwise call `powerpoint_live_export_preview`; inspect the PNG and correct layout issues.
 6. Call `powerpoint_live_save` after the slide is complete.

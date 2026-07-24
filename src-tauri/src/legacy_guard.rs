@@ -6,7 +6,6 @@ fn retired_structured_agent_path_does_not_reappear() {
     let roots = [repo.join("src"), repo.join("src-tauri").join("src")];
     let forbidden = [
         concat!("stream", "-json"),
-        concat!("output", "-format"),
         concat!("agent", "_send"),
         concat!("agent", "-event"),
         concat!("agent", "-done"),

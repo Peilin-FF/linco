@@ -30,7 +30,7 @@ export default {
         serif: ['"Songti SC"', '"STSong"', 'Georgia', 'serif']
       },
       boxShadow: {
-        card: '0 4px 24px rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.04)'
+        card: 'var(--shadow-card, 0 2px 8px rgba(0,0,0,0.16))'
       }
     }
   },

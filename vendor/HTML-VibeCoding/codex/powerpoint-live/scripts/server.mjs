@@ -8,7 +8,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const SERVER_NAME = 'linco-powerpoint-live'
-const SERVER_VERSION = '0.2.0'
+const SERVER_VERSION = '0.3.0'
 const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18'])
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const HOST_SCRIPT = path.join(SCRIPT_DIR, 'powerpoint-host.ps1')
@@ -31,12 +31,37 @@ const styleProperties = {
   fill_color: colorProperty,
   stroke_color: colorProperty,
   stroke_width: { type: 'number', minimum: 0, maximum: 50 },
-  fill_transparency: { type: 'number', minimum: 0, maximum: 1 },
+  fill_transparency: {
+    type: 'number',
+    minimum: 0,
+    maximum: 1,
+    description: 'Fill transparency as a fraction from 0 (opaque) to 1 (fully transparent).'
+  },
   dash: { type: 'boolean' },
   rotation: { type: 'number' }
 }
+const textRunSchema = {
+  type: 'object',
+  required: ['text'],
+  properties: {
+    text: { type: 'string' },
+    font_size: { type: 'number', minimum: 1, maximum: 300 },
+    font_name: { type: 'string' },
+    font_color: colorProperty,
+    bold: { type: 'boolean' },
+    italic: { type: 'boolean' },
+    underline: { type: 'boolean' }
+  },
+  additionalProperties: false
+}
 const textProperties = {
   text: { type: 'string' },
+  text_runs: {
+    type: 'array',
+    minItems: 1,
+    items: textRunSchema,
+    description: 'Rich-text runs applied in order. Each run can use its own font, size, color, bold, italic, and underline formatting.'
+  },
   font_size: { type: 'number', minimum: 1, maximum: 300 },
   font_name: { type: 'string' },
   font_color: colorProperty,
@@ -44,6 +69,100 @@ const textProperties = {
   align: { type: 'string', enum: ['left', 'center', 'right'] },
   vertical_align: { type: 'string', enum: ['top', 'middle', 'bottom'] },
   margin: { type: 'number', minimum: 0, maximum: 100 }
+}
+
+const shapeTypeProperty = {
+  type: 'string',
+  enum: ['rectangle', 'rounded', 'ellipse', 'diamond', 'triangle', 'hexagon', 'parallelogram', 'pentagon', 'chevron', 'cloud'],
+  default: 'rounded'
+}
+const connectorProperties = {
+  kind: { type: 'string', enum: ['straight', 'elbow'], default: 'straight' },
+  stroke_color: colorProperty,
+  stroke_width: { type: 'number', minimum: 0, maximum: 50 },
+  dash: { type: 'boolean' },
+  start_arrow: { type: 'string', enum: ['none', 'triangle', 'oval'], default: 'none' },
+  end_arrow: { type: 'string', enum: ['none', 'triangle', 'oval'], default: 'triangle' }
+}
+const sequenceVariant = (type, required, properties, extra = {}) => ({
+  type: 'object',
+  required: ['type', ...required],
+  properties: {
+    type: { type: 'string', const: type, description: `Execute the ${type} host operation.` },
+    ...properties
+  },
+  additionalProperties: false,
+  ...extra
+})
+const sequenceOperationSchema = {
+  oneOf: [
+    sequenceVariant('add_shape', ['name', 'x', 'y', 'width', 'height'], {
+      name: { type: 'string' },
+      shape: shapeTypeProperty,
+      ...geometryProperties,
+      ...styleProperties,
+      ...textProperties
+    }),
+    sequenceVariant('add_text', ['name', 'x', 'y', 'width', 'height'], {
+      name: { type: 'string' },
+      ...geometryProperties,
+      ...styleProperties,
+      ...textProperties
+    }, {
+      anyOf: [{ required: ['text'] }, { required: ['text_runs'] }]
+    }),
+    sequenceVariant('add_connector', ['name', 'x1', 'y1', 'x2', 'y2'], {
+      name: { type: 'string' },
+      x1: { type: 'number' },
+      y1: { type: 'number' },
+      x2: { type: 'number' },
+      y2: { type: 'number' },
+      ...connectorProperties
+    }),
+    sequenceVariant('connect_shapes', ['name', 'source_name', 'target_name'], {
+      name: { type: 'string' },
+      source_name: { type: 'string' },
+      target_name: { type: 'string' },
+      source_site: { type: 'integer', minimum: 1, default: 1 },
+      target_site: { type: 'integer', minimum: 1, default: 1 },
+      ...connectorProperties
+    }),
+    sequenceVariant('add_image', ['name', 'path', 'x', 'y', 'width', 'height'], {
+      name: { type: 'string' },
+      path: { type: 'string' },
+      ...geometryProperties
+    }),
+    sequenceVariant('update', ['name'], {
+      name: { type: 'string' },
+      ...geometryProperties,
+      ...styleProperties,
+      ...textProperties
+    }),
+    sequenceVariant('delete', ['name'], { name: { type: 'string' } }),
+    sequenceVariant('group', ['name', 'names'], {
+      name: { type: 'string' },
+      names: { type: 'array', minItems: 2, items: { type: 'string' } }
+    }),
+    sequenceVariant('ungroup', ['name'], { name: { type: 'string' } }),
+    sequenceVariant('align', ['names', 'mode'], {
+      names: { type: 'array', minItems: 2, items: { type: 'string' } },
+      mode: { type: 'string', enum: ['left', 'center', 'right', 'top', 'middle', 'bottom'] }
+    }),
+    sequenceVariant('distribute', ['names', 'mode'], {
+      names: { type: 'array', minItems: 3, items: { type: 'string' } },
+      mode: { type: 'string', enum: ['horizontal', 'vertical'] }
+    }),
+    sequenceVariant('z_order', ['name', 'mode'], {
+      name: { type: 'string' },
+      mode: { type: 'string', enum: ['front', 'back', 'forward', 'backward'] }
+    }),
+    sequenceVariant('duplicate', ['name', 'new_name'], {
+      name: { type: 'string' },
+      new_name: { type: 'string' },
+      offset_x: { type: 'number', default: 6 },
+      offset_y: { type: 'number', default: 6 }
+    })
+  ]
 }
 
 const tools = [
@@ -94,7 +213,7 @@ const tools = [
       type: 'object', required: ['name', 'x', 'y', 'width', 'height'],
       properties: {
         name: { type: 'string' },
-        shape: { type: 'string', enum: ['rectangle', 'rounded', 'ellipse', 'diamond', 'triangle', 'hexagon', 'parallelogram', 'pentagon', 'chevron', 'cloud'], default: 'rounded' },
+        shape: shapeTypeProperty,
         ...geometryProperties, ...styleProperties, ...textProperties
       }, additionalProperties: false
     }
@@ -103,8 +222,9 @@ const tools = [
     name: 'powerpoint_live_add_text',
     description: 'Add an editable native PowerPoint text box to the visible slide.',
     inputSchema: {
-      type: 'object', required: ['name', 'text', 'x', 'y', 'width', 'height'],
+      type: 'object', required: ['name', 'x', 'y', 'width', 'height'],
       properties: { name: { type: 'string' }, ...geometryProperties, ...styleProperties, ...textProperties },
+      anyOf: [{ required: ['text'] }, { required: ['text_runs'] }],
       additionalProperties: false
     }
   },
@@ -218,19 +338,58 @@ const tools = [
   },
   {
     name: 'powerpoint_live_draw_sequence',
-    description: 'Apply native PowerPoint operations one by one with a visible delay.',
+    description: 'Apply a typed sequence as one host-side batch, with throttled live preview publication and a final forced refresh.',
     inputSchema: {
       type: 'object', required: ['operations'],
       properties: {
-        operations: { type: 'array', minItems: 1, maxItems: 500, items: { type: 'object' } },
-        step_delay_ms: { type: 'integer', minimum: 0, maximum: 10000 }
+        operations: { type: 'array', minItems: 1, maxItems: 500, items: sequenceOperationSchema },
+        step_delay_ms: { type: 'integer', minimum: 0, maximum: 10000 },
+        publish_every_operations: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 100,
+          default: 8,
+          description: 'Publish an intermediate live preview after this many applied operations.'
+        },
+        publish_interval_ms: {
+          type: 'integer',
+          minimum: 100,
+          maximum: 10000,
+          default: 650,
+          description: 'Maximum interval between throttled intermediate live previews.'
+        },
+        live_preview_width: {
+          type: 'integer',
+          minimum: 600,
+          maximum: 3200,
+          default: 1400,
+          description: 'Width of throttled live-preview PNGs. Explicit exports retain their requested resolution.'
+        },
+        include_results: {
+          type: 'boolean',
+          default: false,
+          description: 'Include every per-operation result. Leave false to keep batch responses compact.'
+        }
       }, additionalProperties: false
     }
   },
   {
     name: 'powerpoint_live_inspect',
-    description: 'Return slide dimensions and geometry/text for every native object on the selected slide.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+    description: 'Audit the selected slide. Returns dimensions, counts, and warnings by default; request shapes explicitly when geometry details are needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        include_shapes: { type: 'boolean', default: false, description: 'Include full native-object details in the response.' },
+        names: {
+          type: 'array',
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: 'string' },
+          description: 'Return shape details only for these stable names. Supplying names implies include_shapes.'
+        }
+      },
+      additionalProperties: false
+    }
   },
   {
     name: 'powerpoint_live_export_preview',
@@ -292,14 +451,14 @@ function ensureHost() {
   })
 }
 
-function hostCall(command, args = {}) {
+function hostCall(command, args = {}, timeoutMs = 45000) {
   ensureHost()
   const id = ++hostSequence
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id)
-      reject(new Error(`PowerPoint did not respond to ${command} within 45 seconds.`))
-    }, 45000)
+      reject(new Error(`PowerPoint did not respond to ${command} within ${Math.round(timeoutMs / 1000)} seconds.`))
+    }, timeoutMs)
     pending.set(id, { resolve, reject, timer })
     host.stdin.write(`${JSON.stringify({ id, command, args })}\n`, (error) => {
       if (!error) return
@@ -308,19 +467,6 @@ function hostCall(command, args = {}) {
       reject(error)
     })
   })
-}
-
-const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
-
-function operationCommand(operation) {
-  const type = operation?.type
-  const supported = new Set([
-    'add_shape', 'add_text', 'add_connector', 'connect_shapes', 'add_image',
-    'group', 'ungroup', 'align', 'distribute', 'z_order', 'duplicate', 'update', 'delete'
-  ])
-  if (!supported.has(type)) throw new Error(`Unsupported sequence operation type: ${type}`)
-  const { type: ignored, ...args } = operation
-  return { command: type, args }
 }
 
 function auditSlide(snapshot) {
@@ -377,6 +523,33 @@ function auditSlide(snapshot) {
   }
 }
 
+function inspectResult(audit, args) {
+  const requestedNames = Array.isArray(args.names) ? args.names : []
+  if (!args.include_shapes && requestedNames.length === 0) {
+    const { shapes: ignored, ...summary } = audit
+    return summary
+  }
+
+  const requested = new Set(requestedNames)
+  const shapes = requested.size > 0
+    ? (audit.shapes || []).filter((shape) => requested.has(shape.name))
+    : (audit.shapes || [])
+  const layoutWarnings = requested.size > 0
+    ? (audit.layout_warnings || []).filter((warning) =>
+        (warning.shapes || []).some((name) => requested.has(name)))
+    : (audit.layout_warnings || [])
+  return {
+    ...audit,
+    shapes,
+    returned_shape_count: shapes.length,
+    layout_warnings: layoutWarnings,
+    layout_warning_count: layoutWarnings.length,
+    ...(requested.size > 0
+      ? { missing_names: requestedNames.filter((name) => !shapes.some((shape) => shape.name === name)) }
+      : {})
+  }
+}
+
 async function handleTool(name, args) {
   switch (name) {
     case 'powerpoint_live_launch':
@@ -403,16 +576,19 @@ async function handleTool(name, args) {
     case 'powerpoint_live_z_order': return { value: await hostCall('z_order', args) }
     case 'powerpoint_live_duplicate': return { value: await hostCall('duplicate', args) }
     case 'powerpoint_live_draw_sequence': {
-      const results = []
       const delay = args.step_delay_ms ?? stepDelayMs
-      for (const operation of args.operations) {
-        const { command, args: operationArgs } = operationCommand(operation)
-        results.push(await hostCall(command, operationArgs))
-        if (delay > 0) await sleep(delay)
+      const timeoutMs = Math.max(45000, 60000 + args.operations.length * (delay + 500))
+      return {
+        value: await hostCall('draw_sequence', {
+          ...args,
+          step_delay_ms: delay
+        }, timeoutMs)
       }
-      return { value: { operation_count: results.length, results } }
     }
-    case 'powerpoint_live_inspect': return { value: auditSlide(await hostCall('inspect')) }
+    case 'powerpoint_live_inspect': {
+      const audit = auditSlide(await hostCall('inspect'))
+      return { value: inspectResult(audit, args) }
+    }
     case 'powerpoint_live_export_preview': {
       const result = await hostCall('export', args)
       const imageData = (await fs.readFile(path.resolve(result.output_path))).toString('base64')
@@ -433,7 +609,7 @@ async function handleTool(name, args) {
         ? 'image/jpeg'
         : extension === '.webp' ? 'image/webp' : 'image/png'
       return {
-        value: { reference_path: referencePath, slide_index: result.slide_index },
+        value: { reference_path: referencePath, slide_index: result.slide_index, image_count: 2 },
         imageContents: [
           { label: 'Reference', data: referenceData.toString('base64'), mimeType: referenceMimeType },
           { label: 'Current PowerPoint slide', data: currentData.toString('base64'), mimeType: 'image/png' }

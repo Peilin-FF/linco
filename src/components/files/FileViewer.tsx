@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Loader2, FileQuestion, Download, GitCompare, FileText } from 'lucide-react'
 import { readBytesCached } from '@/lib/fs'
-import { shadowDiff } from '@/lib/shadow'
+import {
+  invalidateShadowDiff,
+  peekShadowDiff,
+  shadowDiff
+} from '@/lib/shadow'
 import { onRemoteFsChange } from '@/lib/watch'
 import { useI18n } from '@/lib/i18n'
 import FileEditor from './FileEditor'
@@ -14,6 +18,9 @@ interface FileViewerProps {
   host?: string
   /** 工作目录(= git 仓库根),用于本轮 agent 改动 diff;空则不显 diff */
   repo?: string
+  /** 文件树已计算出的本轮改动状态；无状态表示不需要请求单文件 diff。 */
+  changeStatus?: string
+  changeStatusReady?: boolean
 }
 
 type Kind = 'image' | 'video' | 'audio' | 'pdf' | 'text'
@@ -70,7 +77,13 @@ function baseName(p: string): string {
  * 按文件类型路由预览(借鉴 yazi 的 previewer 分发思想,但用 webview 原生渲染):
  * 文本/代码 → CodeMirror;图片/视频/音频/PDF → 读 base64 喂给对应 HTML 标签。
  */
-export default function FileViewer({ path, host, repo }: FileViewerProps): JSX.Element {
+export default function FileViewer({
+  path,
+  host,
+  repo,
+  changeStatus,
+  changeStatusReady = true
+}: FileViewerProps): JSX.Element {
   const name = baseName(path)
 
   // 表格类:csv/tsv/xlsx/xls → 可编辑表格(优先于文本/媒体判断)
@@ -82,7 +95,15 @@ export default function FileViewer({ path, host, repo }: FileViewerProps): JSX.E
 
   // 文本类:交给带「改动/文件」切换的包装(本轮有 agent 改动则默认显 diff)
   if (kind === 'text') {
-    return <TextOrDiff path={path} host={host} repo={repo} />
+    return (
+      <TextOrDiff
+        path={path}
+        host={host}
+        repo={repo}
+        changeStatus={changeStatus}
+        changeStatusReady={changeStatusReady}
+      />
+    )
   }
   return <MediaViewer path={path} host={host} kind={kind} mime={mime} />
 }
@@ -94,16 +115,30 @@ export default function FileViewer({ path, host, repo }: FileViewerProps): JSX.E
 function TextOrDiff({
   path,
   host,
-  repo
+  repo,
+  changeStatus,
+  changeStatusReady
 }: {
   path: string
   host?: string
   repo?: string
+  changeStatus?: string
+  changeStatusReady: boolean
 }): JSX.Element {
-  const [diff, setDiff] = useState<string | null>(null)
-  const [mode, setMode] = useState<'diff' | 'file'>('file')
+  const { t } = useI18n()
+  const cachedAtMount = repo ? peekShadowDiff(repo, path, host) : undefined
+  const [diff, setDiff] = useState<string | null>(
+    cachedAtMount?.trim() ? cachedAtMount : null
+  )
+  const [diffLoading, setDiffLoading] = useState(
+    Boolean(repo && cachedAtMount === undefined && (!changeStatusReady || changeStatus))
+  )
+  const [mode, setMode] = useState<'diff' | 'file'>(
+    cachedAtMount?.trim() ? 'diff' : 'file'
+  )
   // 用户是否手动切过:手动切了就尊重选择,不再自动跳回 diff
-  const [touched, setTouched] = useState(false)
+  const touchedRef = useRef(false)
+  const hasRenderedDiffRef = useRef(Boolean(cachedAtMount?.trim()))
 
   // 拉本轮 diff;文件变更事件来时重拉(灵敏:agent 改完即更新)。
   // 文件页只反映「本轮 agent 改动」:本轮有 diff → 显红绿;本轮没改 → 直接显完整文件,
@@ -111,34 +146,66 @@ function TextOrDiff({
   useEffect(() => {
     if (!repo) {
       setDiff(null)
+      setDiffLoading(false)
+      setMode('file')
+      return
+    }
+    if (!changeStatusReady) {
+      if (peekShadowDiff(repo, path, host) === undefined) setDiffLoading(true)
+      return
+    }
+    if (!changeStatus) {
+      setDiff(null)
+      setDiffLoading(false)
+      setMode('file')
+      hasRenderedDiffRef.current = false
       return
     }
     let alive = true
     let un: (() => void) | undefined
-    const load = (): void => {
+    const load = (invalidate = false): void => {
+      if (invalidate) invalidateShadowDiff(repo, path, host)
+      const cached = peekShadowDiff(repo, path, host)
+      if (cached !== undefined) {
+        const has = cached.trim().length > 0
+        setDiff(has ? cached : null)
+        setDiffLoading(false)
+        hasRenderedDiffRef.current = has
+        if (has && !touchedRef.current) setMode('diff')
+        if (!has) setMode('file')
+        return
+      }
+      if (!hasRenderedDiffRef.current) setDiffLoading(true)
       shadowDiff(repo, path, host)
         .then((d) => {
           if (!alive) return
           const has = d.trim().length > 0
-          console.log('[shadow-diff] path=', path, '| repo=', repo, '| diff长=', d.length, '| 有改动=', has)
           setDiff(has ? d : null)
-          // 本轮有改动且用户没手动切过 → 默认显 diff;没改 → 完整文件
-          if (has && !touched) setMode('diff')
+          setDiffLoading(false)
+          hasRenderedDiffRef.current = has
+          if (has && !touchedRef.current) setMode('diff')
           if (!has) setMode('file')
         })
         .catch((e) => {
           console.error('[shadow-diff] ❌ 拉 diff 失败 path=', path, e)
-          if (alive) setDiff(null)
+          if (alive) {
+            setDiffLoading(false)
+            if (!hasRenderedDiffRef.current) {
+              setDiff(null)
+              setMode('file')
+            }
+          }
         })
     }
     load()
     onRemoteFsChange((e) => {
       if ((e.host || undefined) !== (host || undefined)) return
-      if (e.paths.some((p) => p === path)) load()
+      const target = path.replace(/\\/g, '/')
+      if (e.paths.some((p) => p.replace(/\\/g, '/') === target)) load(true)
     }).then((f) => (un = f))
     // 发消息(新一轮)时主动重拉本轮 diff:基线已被 shadowBeginTurn 重置,
     // 立即反映上一轮对该文件的增删,无需等远端轮询。
-    const onTurn = (): void => load()
+    const onTurn = (): void => load(true)
     window.addEventListener('linco:turn-refresh', onTurn)
     return () => {
       alive = false
@@ -146,7 +213,22 @@ function TextOrDiff({
       window.removeEventListener('linco:turn-refresh', onTurn)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, host, repo])
+  }, [path, host, repo, changeStatus, changeStatusReady])
+
+  if (diffLoading && !diff) {
+    return (
+      <div className="flex h-full flex-col bg-canvas text-ink">
+        <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1.5 text-[13px]">
+          <FileText size={14} className="text-ink-muted" />
+          <span className="truncate text-ink">{baseName(path)}</span>
+        </div>
+        <div className="flex min-h-0 flex-1 items-center justify-center gap-2 bg-canvas text-[12px] text-ink-faint">
+          <Loader2 size={14} className="animate-spin" />
+          <span>{t('fileViewer.loadingChanges')}</span>
+        </div>
+      </div>
+    )
+  }
 
   if (mode === 'diff' && diff) {
     return (
@@ -156,7 +238,7 @@ function TextOrDiff({
           hasDiff
           onMode={(m) => {
             setMode(m)
-            setTouched(true)
+            touchedRef.current = true
           }}
           name={baseName(path)}
         />
@@ -175,13 +257,13 @@ function TextOrDiff({
           hasDiff
           onMode={(m) => {
             setMode(m)
-            setTouched(true)
+            touchedRef.current = true
           }}
           name={baseName(path)}
         />
       )}
       <div className="min-h-0 flex-1">
-        <FileEditor path={path} host={host} />
+        <FileEditor path={path} host={host} diff={diff || ''} />
       </div>
     </div>
   )

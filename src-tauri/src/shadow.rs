@@ -49,6 +49,39 @@ fn repo_lock(host: &Option<String>, repo: &str) -> std::sync::Arc<Mutex<()>> {
         .clone()
 }
 
+// 影子 index 是否已与当前工作区同步。文件监听发现变化时置脏；changed/diff 中第一个
+// 拿到仓库锁的请求负责刷新，后续单文件 diff 直接复用热 index，避免每次点击都全仓扫描。
+static STAGE_CLEAN: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+fn stage_clean() -> &'static Mutex<HashMap<String, bool>> {
+    STAGE_CLEAN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn invalidate_stage(host: Option<&str>, repo: &str) {
+    let k = format!("{}|{}", host.unwrap_or(""), repo);
+    if let Ok(mut clean) = stage_clean().lock() {
+        clean.insert(k, false);
+    }
+}
+
+fn mark_stage_clean(host: &Option<String>, repo: &str) {
+    if let Ok(mut clean) = stage_clean().lock() {
+        clean.insert(key(host, repo), true);
+    }
+}
+
+fn stage_snapshot_if_dirty(host: &Option<String>, repo: &str, gitdir: &Path) -> Result<(), String> {
+    let clean = stage_clean()
+        .lock()
+        .map(|state| state.get(&key(host, repo)).copied().unwrap_or(false))
+        .unwrap_or(false);
+    if clean {
+        return Ok(());
+    }
+    stage_snapshot(repo, gitdir)?;
+    mark_stage_clean(host, repo);
+    Ok(())
+}
+
 fn key(host: &Option<String>, repo: &str) -> String {
     format!("{}|{}", host.as_deref().unwrap_or(""), repo)
 }
@@ -231,9 +264,7 @@ fn shadow_git(repo: &str, gitdir: &Path, args: &[&str]) -> Result<String, String
     // add 失败、新文件进不了快照(文件树标记/diff 残缺)。设成 repo 后相对路径才对得上。
     c.current_dir(repo);
     crate::proc_ext::no_window(&mut c);
-    let out = c
-        .output()
-        .map_err(|e| format!("无法执行 git: {e}"))?;
+    let out = c.output().map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -398,13 +429,17 @@ pub async fn shadow_begin_turn(host: Option<String>, repo: String) -> Result<(),
             return crate::agent_rpc::shadow_begin(host.as_deref().unwrap(), &repo);
         }
         let gitdir = ensure_init(&host, &repo)?;
-        eprintln!("[shadow] begin_turn ensure_init OK gitdir={}", gitdir.display());
+        eprintln!(
+            "[shadow] begin_turn ensure_init OK gitdir={}",
+            gitdir.display()
+        );
         // 持仓库锁:与 changed/diff 串行共享同一个热 index。增量 stage(不清空 → 秒级)。
         let lk = repo_lock(&host, &repo);
         eprintln!("[shadow] begin_turn 等锁…");
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
         eprintln!("[shadow] begin_turn 拿到锁,开始 stage");
         stage_snapshot(&repo, &gitdir)?;
+        mark_stage_clean(&host, &repo);
         eprintln!("[shadow] begin_turn stage OK,开始 commit");
         // commit:--allow-empty 保证即便无改动也产出一个基线 commit(后续 diff 才有锚点)。
         shadow_git(
@@ -440,7 +475,7 @@ pub async fn shadow_diff(
         // 持仓库锁:与 begin/changed 串行共享同一个热 index(增量哈希,秒级),不互相踩。
         let lk = repo_lock(&host, &repo);
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
-        stage_snapshot(&repo, &gitdir)?;
+        stage_snapshot_if_dirty(&host, &repo, &gitdir)?;
         // 先用 pathspec 限定取该文件 diff。
         // -U99999:把上下文行数开到极大 = 包含整个文件,这样前端能「全文显示 + 仅改动行红绿」,
         // 而不是只显示改动周围 3 行的紧凑 hunk(那是之前的回归)。
@@ -448,14 +483,26 @@ pub async fn shadow_diff(
         let one = shadow_git(
             &repo,
             &gitdir,
-            &["diff", "--cached", "--no-color", "-U99999", "HEAD", "--", &rel_clean],
+            &[
+                "diff",
+                "--cached",
+                "--no-color",
+                "-U99999",
+                "HEAD",
+                "--",
+                &rel_clean,
+            ],
         )?;
         if !one.trim().is_empty() {
             return Ok(one);
         }
         // 兜底:pathspec 方式偶发匹配不到(尾随字符/特殊字符/环境差异)却确实改了。
         // 改为 diff 全量(同样 -U99999 全文),再从中切出该文件那一段。
-        let full = shadow_git(&repo, &gitdir, &["diff", "--cached", "--no-color", "-U99999", "HEAD"])?;
+        let full = shadow_git(
+            &repo,
+            &gitdir,
+            &["diff", "--cached", "--no-color", "-U99999", "HEAD"],
+        )?;
         Ok(extract_file_diff(&full, &rel_clean))
     })
     .await
@@ -498,6 +545,7 @@ pub async fn shadow_changed(
         let lk = repo_lock(&host, &repo);
         let _g = lk.lock().unwrap_or_else(|e| e.into_inner());
         stage_snapshot(&repo, &gitdir)?;
+        mark_stage_clean(&host, &repo);
         let out = shadow_git(
             &repo,
             &gitdir,
@@ -553,8 +601,9 @@ mod tests {
         std::fs::write(tmp.join("b.txt"), "new file\n").unwrap();
 
         let changed = run(shadow_changed(None, repo.clone())).unwrap();
-        let a = format!("{repo}/a.txt");
-        let b = format!("{repo}/b.txt");
+        let repo_key = norm_slashes(&repo);
+        let a = format!("{repo_key}/a.txt");
+        let b = format!("{repo_key}/b.txt");
         assert_eq!(changed.get(&a).map(String::as_str), Some("M"));
         assert_eq!(
             changed.get(&b).map(String::as_str),
@@ -570,6 +619,41 @@ mod tests {
         // b.txt(全新)diff 应是全绿新增
         let db = run(shadow_diff(None, repo.clone(), b)).unwrap();
         assert!(db.contains("+new file"), "新建文件 diff 应显示新增内容");
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::remove_dir_all(shadow_dir(&repo));
+    }
+
+    #[test]
+    fn diff_reuses_staged_snapshot_until_watcher_invalidates() {
+        let tmp =
+            std::env::temp_dir().join(format!("linco_shadow_test_{}", stable_hash("stage-cache")));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let repo = tmp.to_string_lossy().to_string();
+        std::fs::write(tmp.join("a.txt"), "before a\n").unwrap();
+        std::fs::write(tmp.join("b.txt"), "before b\n").unwrap();
+
+        run(shadow_begin_turn(None, repo.clone())).unwrap();
+        std::fs::write(tmp.join("a.txt"), "after a\n").unwrap();
+        run(shadow_changed(None, repo.clone())).unwrap();
+
+        // A file click after the tree scan must reuse the hot index. This edit
+        // deliberately bypasses the watcher, so it should not appear yet.
+        std::fs::write(tmp.join("b.txt"), "after b\n").unwrap();
+        let b = format!("{repo}/b.txt");
+        let cached = run(shadow_diff(None, repo.clone(), b.clone())).unwrap();
+        assert!(
+            cached.is_empty(),
+            "a clean stage should be reused without another repository scan"
+        );
+
+        // The real watcher calls this as soon as it observes the filesystem
+        // event. The next request refreshes once and sees the new content.
+        invalidate_stage(None, &repo);
+        let refreshed = run(shadow_diff(None, repo.clone(), b)).unwrap();
+        assert!(refreshed.contains("-before b"));
+        assert!(refreshed.contains("+after b"));
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(shadow_dir(&repo));
@@ -600,7 +684,7 @@ mod tests {
         std::fs::write(tmp.join("测试目录").join("主程序.py"), "print(1)\n").unwrap();
 
         let changed = run(shadow_changed(None, repo.clone())).unwrap();
-        let key = format!("{repo}/测试目录/主程序.py");
+        let key = format!("{}/测试目录/主程序.py", norm_slashes(&repo));
         assert_eq!(
             changed.get(&key).map(String::as_str),
             Some("A"),
@@ -628,10 +712,19 @@ mod tests {
     fn parse_name_status_normalizes_windows_base() {
         let out = "M\tsrc/main.py\nA\tdocs/readme.md\n";
         let m = parse_name_status(r"C:\Users\me\proj", out);
-        assert_eq!(m.get("C:/Users/me/proj/src/main.py").map(String::as_str), Some("M"));
-        assert_eq!(m.get("C:/Users/me/proj/docs/readme.md").map(String::as_str), Some("A"));
+        assert_eq!(
+            m.get("C:/Users/me/proj/src/main.py").map(String::as_str),
+            Some("M")
+        );
+        assert_eq!(
+            m.get("C:/Users/me/proj/docs/readme.md").map(String::as_str),
+            Some("A")
+        );
         // 不应残留任何反斜杠 key
-        assert!(m.keys().all(|k| !k.contains('\\')), "key 不应含反斜杠: {m:?}");
+        assert!(
+            m.keys().all(|k| !k.contains('\\')),
+            "key 不应含反斜杠: {m:?}"
+        );
     }
 
     #[test]

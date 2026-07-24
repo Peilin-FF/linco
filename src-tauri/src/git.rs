@@ -106,9 +106,7 @@ fn git_lane(
             .env("HTTPS_PROXY", &proxy);
     }
     crate::proc_ext::no_window(&mut c);
-    let out = c
-        .output()
-        .map_err(|e| format!("无法执行 git: {e}"))?;
+    let out = c.output().map_err(|e| format!("无法执行 git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     } else {
@@ -438,7 +436,10 @@ pub struct GitConnTest {
 /// 测试 origin 仓库的连通性:打 smart-HTTP `info/refs`,返回真实 HTTP 状态。
 /// 本地用 reqwest(带配置的 http 代理 + token Basic 鉴权);远程经 SSH 用 curl。
 #[tauri::command]
-pub async fn git_test_connection(repo: String, host: Option<String>) -> Result<GitConnTest, String> {
+pub async fn git_test_connection(
+    repo: String,
+    host: Option<String>,
+) -> Result<GitConnTest, String> {
     crate::blocking::run(move || {
         let url = git(&host, &repo, &["remote", "get-url", "origin"])
             .map(|s| s.trim().to_string())

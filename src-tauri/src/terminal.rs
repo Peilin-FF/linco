@@ -109,9 +109,7 @@ pub fn term_start(
             let mut prefix = String::new();
             // 中文乱码修复:远端 locale 不是 UTF-8 时,中文路径/输出会乱码。仅在远端未设时兜底
             // 一个 UTF-8 locale(${VAR:-default} 不覆盖远端已有的正确值),让会话按 UTF-8 输出。
-            prefix.push_str(
-                "export LANG=${LANG:-en_US.UTF-8} LC_ALL=${LC_ALL:-en_US.UTF-8}; ",
-            );
+            prefix.push_str("export LANG=${LANG:-en_US.UTF-8} LC_ALL=${LC_ALL:-en_US.UTF-8}; ");
             // IS_SANDBOX=1 仅在要启动 agent(base 非空,如 claude)时注入:
             // Claude Code 在 root 容器里用 --dangerously-skip-permissions 会被拦,
             // 除非环境里有 IS_SANDBOX=1。普通终端(无 base)不需要,保持干净。
@@ -264,7 +262,13 @@ pub fn term_start(
                 Err(_) => break,
             }
         }
-        let _ = app_for_thread.emit("term-exit", TermExit { id: id_for_thread, gen });
+        let _ = app_for_thread.emit(
+            "term-exit",
+            TermExit {
+                id: id_for_thread,
+                gen,
+            },
+        );
     });
 
     // 自动启动 agent:在 shell 提示符就绪后再写入启动命令(等价于在终端键入并回车)。
@@ -295,10 +299,7 @@ pub fn term_start(
     let mut map = state.0.lock().map_err(|e| e.to_string())?;
     if map.get(&id).is_some_and(|current| current.gen > gen) {
         let _ = session.child.kill();
-    } else if let Some(mut old) = map.insert(
-        id,
-        session,
-    ) {
+    } else if let Some(mut old) = map.insert(id, session) {
         let _ = old.child.kill();
     }
     Ok(gen)
