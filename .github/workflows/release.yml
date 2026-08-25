@@ -66,12 +66,9 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.3:
-            - Add Standard and Project-aware LaTeX polish modes with individually reviewable edits.
-            - Improve the Overleaf-style LaTeX source, rich-text, PDF, diagnostics, and file workflows.
-            - Speed up PowerPoint Live drawing with batched operations, throttled previews, and safer state publishing.
-            - Improve remote RPC file, preview, diff, terminal, and Windows behavior.
-            - Show the updater control only when a new Linco version is available.
+            Linco 1.0.4:
+            - Fix native mouse-wheel scrollback in embedded Codex conversations without opening transcript mode.
+            - Preserve Codex ANSI rendering while supporting local Windows and remote Linux PTY sessions.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

@@ -1094,7 +1094,7 @@ export default function App(): JSX.Element {
               <div
                 key={s.id}
                 style={leftPane ? { width: chatWidth } : undefined}
-                className={`overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
+                className={`h-full min-h-0 overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
                   leftPane
                     ? 'absolute left-0 top-0 bottom-0 z-10 opacity-100'
                     : 'absolute inset-0 ' +

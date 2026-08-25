@@ -29,6 +29,21 @@ import { useI18n } from '@/lib/i18n'
 import { observeTheme, terminalTheme } from '@/lib/theme'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
+function commandName(command?: string): string | undefined {
+  return command
+    ?.trim()
+    .split(/\s+/)[0]
+    ?.replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    ?.toLowerCase()
+}
+
+function isCodexCommand(command?: string, usage?: UsageAgentContext): boolean {
+  const name = commandName(command)
+  return usage?.provider === 'openai' || name === 'codex' || name === 'codex.exe'
+}
+
 export interface TerminalHandle {
   /** 把文本写入终端并回车(整体发送)。 */
   send: (text: string) => void
@@ -283,28 +298,13 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         return true
       })
 
-      // Keep Codex wheel input inside xterm's normal scrollback. Forwarding the
-      // wheel to Codex opens its transcript pager, which steals keyboard focus
-      // until the user presses q. Codex is launched with --no-alt-screen, so
-      // xterm owns the transcript and can scroll it directly.
       let wheelRemainder = 0
       term.attachCustomWheelEventHandler((event): boolean => {
         if (event.ctrlKey || event.metaKey || event.shiftKey || event.deltaY === 0) {
           return true
         }
 
-        const commandName = initCmdRef.current
-          ?.trim()
-          .split(/\s+/)[0]
-          ?.replace(/\\/g, '/')
-          .split('/')
-          .pop()
-          ?.toLowerCase()
-        const isCodex =
-          usageRef.current?.provider === 'openai' ||
-          commandName === 'codex' ||
-          commandName === 'codex.exe'
-        if (!isCodex) return true
+        if (!isCodexCommand(initCmdRef.current, usageRef.current)) return true
 
         const lineHeight =
           Number(term.options.fontSize ?? 13.5) * Number(term.options.lineHeight ?? 1)
@@ -335,9 +335,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         started = false
         activeGen = null
         startupEvents = []
+        // Codex otherwise inserts history through a partial DEC scroll region, which
+        // xterm.js may discard. Its Windows Terminal strategy uses full-screen line
+        // feeds, producing native scrollback without rewriting the ANSI output.
+        const startEnv = isCodexCommand(initCmdRef.current, usageRef.current)
+          ? { ...envRef.current, WT_SESSION: 'linco-xterm' }
+          : envRef.current
         void termStart(id, term.cols, term.rows, {
           cwd: cwdRef.current,
-          env: envRef.current,
+          env: startEnv,
           initialCommand: initCmdRef.current,
           host: hostRef2.current,
           identity: identityRef.current
