@@ -13,6 +13,26 @@
   --border: #e5e5e5;
   --hover: #f2f2f2;
   --selection: #e8e8e8;
+  --input-background: #ffffff;
+  --input-border: #cecece;
+  --input-placeholder: #767676;
+  --widget: #f8f8f8;
+  --button-hover: #0258a8;
+  --button-secondary: #e5e5e5;
+  --button-secondary-hover: #cccccc;
+  --link: #005fb8;
+  --error: #f85149;
+  --warning: #bf8803;
+  --editor-selection: #add6ff;
+  --editor-cursor: #000000;
+  --editor-line-number: #6e7681;
+  --editor-line-number-active: #171184;
+  --diff-added: #9bb95533;
+  --diff-deleted: #ff000033;
+  --diff-added-foreground: #2ea043;
+  --diff-deleted-foreground: #f85149;
+  --diff-hunk: #005fb81a;
+  --find-highlight: #ea5c0055;
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.16);
   --app-font-size: 14px;
   /* --app-font 默认不设,让 tailwind sans 链回退到系统字体 */
@@ -52,10 +72,33 @@ input {
   user-select: text;
 }
 
+input:not([type='range']):not([type='checkbox']):not([type='radio']),
+textarea:not([class~='bg-transparent']),
+select:not([multiple]) {
+  background-color: var(--input-background);
+  border-color: var(--input-border);
+  color: var(--ink);
+}
+
+input:not([type='range']):not([type='checkbox']):not([type='radio'])::placeholder,
+textarea:not([class~='bg-transparent'])::placeholder {
+  color: var(--input-placeholder);
+  opacity: 1;
+}
+
+a {
+  color: var(--link);
+}
+
 .xterm,
 iframe {
   contain: strict;
   transform: translateZ(0);
+}
+
+.xterm .xterm-viewport {
+  background-color: var(--canvas);
+  overflow-x: hidden;
 }
 
 /* Scale the bottom workbench as a unit instead of floating fixed-width rails. */
@@ -158,4 +201,8 @@ iframe {
 [class~='hover:bg-black/[0.05]']:hover,
 [class~='hover:bg-black/[0.07]']:hover {
   background-color: var(--hover);
+}
+
+[class~='hover:bg-accent/90']:hover {
+  background-color: var(--button-hover);
 }

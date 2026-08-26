@@ -15,6 +15,9 @@ import {
   X,
   Download,
   Loader2,
+  Minus,
+  Square,
+  Copy,
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
@@ -65,11 +68,14 @@ import { useI18n } from '@/lib/i18n'
 import { usageRecordTurn, type UsageAgentContext } from '@/lib/usage'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 
 type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'latex' | 'files' | 'git'
 
 const ENABLE_BACKGROUND_PREWARM = false
 const IS_MACOS = navigator.platform.toLowerCase().includes('mac')
+const IS_WINDOWS = navigator.platform.toLowerCase().includes('win')
+const APP_ICON = new URL('../src-tauri/icons/32x32.png', import.meta.url).href
 
 const LatexView = lazy(() => import('./components/LatexView'))
 
@@ -99,6 +105,71 @@ const VIEWS: { id: ViewId; labelKey: string; icon: typeof Eye }[] = [
   { id: 'files', labelKey: 'view.files', icon: FolderTree },
   { id: 'git', labelKey: 'view.git', icon: GitBranch }
 ]
+
+function WindowControls(): JSX.Element {
+  const { t } = useI18n()
+  const [maximized, setMaximized] = useState(false)
+
+  useEffect(() => {
+    const window = getCurrentWindow()
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    const syncMaximized = (): void => {
+      void window
+        .isMaximized()
+        .then((value) => {
+          if (!disposed) setMaximized(value)
+        })
+        .catch(() => {})
+    }
+
+    syncMaximized()
+    void window.onResized(syncMaximized).then((stop) => {
+      if (disposed) stop()
+      else unlisten = stop
+    })
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
+
+  return (
+    <div className="no-drag -mr-3 ml-1 flex h-11 shrink-0 self-stretch">
+      <button
+        onClick={() => void getCurrentWindow().minimize()}
+        title={t('window.minimize')}
+        className="flex h-11 w-11 items-center justify-center text-ink-muted hover:bg-black/8 hover:text-ink"
+      >
+        <Minus size={15} strokeWidth={1.7} />
+      </button>
+      <button
+        onClick={() => {
+          void getCurrentWindow()
+            .toggleMaximize()
+            .then(() => getCurrentWindow().isMaximized())
+            .then(setMaximized)
+        }}
+        title={maximized ? t('window.restore') : t('window.maximize')}
+        className="flex h-11 w-11 items-center justify-center text-ink-muted hover:bg-black/8 hover:text-ink"
+      >
+        {maximized ? (
+          <Copy size={12} strokeWidth={1.6} />
+        ) : (
+          <Square size={12} strokeWidth={1.6} />
+        )}
+      </button>
+      <button
+        onClick={() => void getCurrentWindow().close()}
+        title={t('common.close')}
+        className="flex h-11 w-12 items-center justify-center text-ink-muted hover:bg-[#c42b1c] hover:text-white"
+      >
+        <X size={15} strokeWidth={1.7} />
+      </button>
+    </div>
+  )
+}
 
 // 终端会话独立编号
 interface Shell {
@@ -968,10 +1039,20 @@ export default function App(): JSX.Element {
           data-tauri-drag-region + .drag 双保险:Overlay 标题栏下拖动更可靠。 */}
       <div
         data-tauri-drag-region
-        className={`drag flex h-11 shrink-0 items-center gap-1 pr-3 ${
-          IS_MACOS ? 'pl-20' : 'pl-1.5'
+        className={`drag flex h-11 shrink-0 items-center gap-1 border-b border-black/8 pr-3 ${
+          IS_WINDOWS ? 'pl-2' : IS_MACOS ? 'pl-20' : 'pl-1.5'
         }`}
       >
+        {IS_WINDOWS && (
+          <div
+            data-tauri-drag-region
+            className="pointer-events-none mr-1 flex shrink-0 items-center gap-2 pr-2"
+          >
+            <img src={APP_ICON} alt="" className="h-5 w-5" draggable={false} />
+            <span className="text-[13px] font-medium text-ink">Linco</span>
+            <span className="ml-1 h-5 w-px bg-black/10" />
+          </div>
+        )}
         {VIEWS.map(({ id, labelKey, icon: Icon }) => (
           <button
             key={id}
@@ -987,7 +1068,7 @@ export default function App(): JSX.Element {
             <span className="hidden min-[1080px]:inline">{t(labelKey)}</span>
             {/* 终端 tab:有 agent 后台任务在跑时显示绿点计数 */}
             {id === 'terminal' && tasks.length > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-semibold text-white">
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white">
                 {tasks.length}
               </span>
             )}
@@ -1075,6 +1156,7 @@ export default function App(): JSX.Element {
         >
           <SettingsIcon size={17} />
         </button>
+        {IS_WINDOWS && <WindowControls />}
       </div>
 
       {/* 主区 */}
@@ -1107,6 +1189,7 @@ export default function App(): JSX.Element {
                     else chatRefs.current.delete(s.id)
                   }}
                   id={s.id}
+                  visible={visible}
                   cwd={s.cwd}
                   env={s.id === activeChatId ? agentEnvVars : s.env}
                   initialCommand={
@@ -1199,7 +1282,7 @@ export default function App(): JSX.Element {
                     }`}
                     title={t('cmdlog.title')}
                   >
-                    <Activity size={12} className="text-[#5c8bd6]" />
+                    <Activity size={12} className="text-accent" />
                     {t('cmdlog.title')}
                   </button>
                 )}
@@ -1291,6 +1374,7 @@ export default function App(): JSX.Element {
                       >
                         <TerminalView
                           id={s.id}
+                          visible={view === 'terminal' && s.id === activeShell}
                           cwd={s.cwd}
                           host={s.host}
                           identity={s.identity}
@@ -1506,6 +1590,7 @@ export default function App(): JSX.Element {
               >
                 <TerminalView
                   id={d.key}
+                  visible={dockTerminalOpen && d.key === dockKey}
                   cwd={d.cwd}
                   host={d.host}
                   identity={d.identity}

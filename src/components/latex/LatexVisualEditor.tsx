@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
-import { githubDark, githubLight } from '@uiw/codemirror-theme-github'
+import {
+  vscodeDarkEditorTheme,
+  vscodeLightEditorTheme
+} from '@/lib/codeMirrorTheme'
 import { EditorSelection, type EditorState, type Extension } from '@codemirror/state'
 import {
   Decoration,
@@ -56,6 +59,7 @@ interface LatexVisualEditorProps {
   mode: LatexEditorMode
   dirty: boolean
   saving: boolean
+  readOnly?: boolean
   active?: boolean
   repositoryLabel: string
   navigationTarget?: { offset: number; revision: number } | null
@@ -732,6 +736,7 @@ export default function LatexVisualEditor({
   mode,
   dirty,
   saving,
+  readOnly = false,
   active = true,
   repositoryLabel,
   navigationTarget,
@@ -1649,6 +1654,7 @@ export default function LatexVisualEditor({
         <CodeMirror
           value={value}
           onChange={onChange}
+          editable={!readOnly}
           autoFocus={mode === 'source'}
           onCreateEditor={(view) => {
             editorRef.current = view
@@ -1656,7 +1662,11 @@ export default function LatexVisualEditor({
             scheduleReviewRef.current(650)
           }}
           extensions={extensions}
-          theme={dark && mode === 'source' ? githubDark : githubLight}
+          theme={
+            dark && mode === 'source'
+              ? vscodeDarkEditorTheme
+              : vscodeLightEditorTheme
+          }
           height="100%"
           basicSetup={{
             lineNumbers: mode === 'source',

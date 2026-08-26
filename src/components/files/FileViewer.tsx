@@ -358,7 +358,7 @@ function MediaViewer({
       </div>
 
       {/* 内容 */}
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-[#f4f4f2] p-3">
+      <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-sidebar p-3">
         {loading ? (
           <span className="flex items-center gap-2 text-[13px] text-ink-faint">
             <Loader2 size={14} className="animate-spin" />

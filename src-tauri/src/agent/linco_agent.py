@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "21"
+AGENT_VERSION = "25"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -393,6 +393,272 @@ def op_git(a):
 
     except subprocess.TimeoutExpired:
         raise ValueError("git operation timed out")
+
+
+# ---------- Code-agent session history ----------
+
+_SESSION_HEAD_BYTES = 64 * 1024
+_SESSION_LIMIT = 25
+
+
+def _session_injected_context(text):
+    value = text.lstrip()
+    return (
+        value.startswith("<environment_context>")
+        or value.startswith("<user_instructions>")
+        or value.startswith("<codex_internal_context")
+        or value.startswith("<system-reminder>")
+        or value.startswith("# AGENTS.md instructions")
+        or value.startswith("Caveat:")
+    )
+
+
+def _session_title(text):
+    value = " ".join(text.split()).strip()
+    return value[:48] + ("..." if len(value) > 48 else "")
+
+
+def _same_session_project(left, right):
+    try:
+        left_path = os.path.realpath(os.path.expanduser(left)).rstrip("/")
+        right_path = os.path.realpath(os.path.expanduser(right)).rstrip("/")
+        return left_path == right_path
+    except Exception:
+        return left.rstrip("/") == right.rstrip("/")
+
+
+def _codex_session_meta(path):
+    cwd = None
+    session_id = None
+    title = None
+    is_subagent = False
+    is_interactive = False
+    try:
+        with open(path, "rb") as f:
+            content = f.read(_SESSION_HEAD_BYTES).decode("utf-8", "replace")
+    except OSError:
+        return None
+
+    for line in content.splitlines():
+        try:
+            value = json.loads(line)
+        except Exception:
+            continue
+        kind = value.get("type", "")
+        payload = value.get("payload") or value
+        if kind == "session_meta":
+            cwd = payload.get("cwd") or cwd
+            session_id = payload.get("id") or session_id
+            source = payload.get("source")
+            is_subagent = isinstance(source, dict) and source.get("subagent") is not None
+            is_interactive = source in ("cli", "vscode")
+        elif kind == "response_item" and title is None and payload.get("role") == "user":
+            for block in payload.get("content") or []:
+                if not isinstance(block, dict):
+                    continue
+                text = block.get("text")
+                if isinstance(text, str) and not _session_injected_context(text):
+                    title = _session_title(text)
+                    break
+        if cwd is not None and session_id is not None and title is not None:
+            break
+    return {
+        "cwd": cwd,
+        "id": session_id,
+        "title": title,
+        "is_subagent": is_subagent,
+        "is_interactive": is_interactive,
+    }
+
+
+def _codex_session_candidates(root):
+    candidates = []
+    if not os.path.isdir(root):
+        return candidates
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            candidates.append((int(stat.st_mtime), int(stat.st_size), path))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates
+
+
+def _find_codex_executable():
+    executable = shutil.which("codex")
+    if executable:
+        return executable, None
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    try:
+        result = subprocess.run(
+            [shell, "-lic", "command -v codex; printf '\n%s' \"$PATH\""],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        lines = result.stdout.strip().splitlines()
+        executable = lines[0]
+        login_path = lines[-1]
+    except Exception:
+        executable = ""
+        login_path = ""
+    if not executable or not os.path.isfile(executable):
+        raise RuntimeError("codex executable not found")
+    env = os.environ.copy()
+    env["PATH"] = login_path
+    return executable, env
+
+
+def _codex_app_server_sessions(cwd):
+    executable, process_env = _find_codex_executable()
+    process = subprocess.Popen(
+        [executable, "app-server", "--stdio"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        env=process_env,
+    )
+    responses = queue.Queue(maxsize=1)
+
+    def read_response():
+        try:
+            for line in process.stdout:
+                try:
+                    value = json.loads(line)
+                except Exception:
+                    continue
+                if value.get("id") == 2:
+                    responses.put(value)
+                    return
+        finally:
+            if responses.empty():
+                try:
+                    responses.put_nowait(None)
+                except queue.Full:
+                    pass
+
+    reader = threading.Thread(target=read_response, daemon=True)
+    reader.start()
+    requests = [
+        {
+            "method": "initialize",
+            "id": 1,
+            "params": {
+                "clientInfo": {"name": "linco", "title": "Linco", "version": AGENT_VERSION}
+            },
+        },
+        {"method": "initialized", "params": {}},
+        {
+            "method": "thread/list",
+            "id": 2,
+            "params": {
+                "limit": _SESSION_LIMIT,
+                "sortKey": "updated_at",
+                "modelProviders": ["openai"],
+                "sourceKinds": ["cli", "vscode"],
+                "archived": False,
+                "cwd": cwd,
+                "useStateDbOnly": True,
+            },
+        },
+    ]
+    try:
+        for request in requests:
+            process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+        response = responses.get(timeout=15)
+        if not response:
+            raise RuntimeError("codex app-server exited before thread/list completed")
+        if response.get("error") is not None:
+            raise RuntimeError("codex app-server thread/list failed: %s" % response["error"])
+        rows = ((response.get("result") or {}).get("data") or [])
+        sessions = []
+        for thread in rows:
+            session_id = thread.get("id")
+            if not session_id:
+                continue
+            preview = thread.get("preview") or ""
+            path = thread.get("path")
+            try:
+                size = os.path.getsize(path) if path else 0
+            except OSError:
+                size = 0
+            sessions.append({
+                "id": session_id,
+                "title": _session_title(preview) if preview.strip() else session_id[:8],
+                "mtime": int(thread.get("updatedAt") or 0),
+                "size": size,
+            })
+        return sessions
+    finally:
+        try:
+            process.stdin.close()
+        except Exception:
+            pass
+        process.terminate()
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
+def op_agent_sessions(a):
+    cwd = a["cwd"]
+    explicit_root = a.get("root")
+    if not explicit_root:
+        try:
+            return {"sessions": _codex_app_server_sessions(cwd)}
+        except Exception:
+            pass
+    root = explicit_root or os.path.join(os.path.expanduser("~"), ".codex", "sessions")
+    sessions = []
+    for mtime, size, path in _codex_session_candidates(root):
+        meta = _codex_session_meta(path)
+        if not meta or meta["is_subagent"] or not meta["is_interactive"] or not meta["cwd"]:
+            continue
+        if not _same_session_project(meta["cwd"], cwd):
+            continue
+        fallback = os.path.splitext(os.path.basename(path))[0]
+        session_id = meta["id"] or fallback
+        sessions.append({
+            "id": session_id,
+            "title": meta["title"] or session_id[:8],
+            "mtime": mtime,
+            "size": size,
+        })
+        if len(sessions) >= _SESSION_LIMIT:
+            break
+    return {"sessions": sessions}
+
+
+def op_agent_session_delete(a):
+    session_id = a["id"]
+    cwd = a["cwd"]
+    if not session_id or "/" in session_id or "\\" in session_id or ".." in session_id:
+        raise ValueError("invalid session id")
+    root = a.get("root") or os.path.join(os.path.expanduser("~"), ".codex", "sessions")
+    for _mtime, _size, path in _codex_session_candidates(root):
+        meta = _codex_session_meta(path)
+        if not meta or meta["is_subagent"] or not meta["is_interactive"] or not meta["cwd"]:
+            continue
+        fallback = os.path.splitext(os.path.basename(path))[0]
+        if (meta["id"] or fallback) != session_id:
+            continue
+        if not _same_session_project(meta["cwd"], cwd):
+            continue
+        os.remove(path)
+        return {"deleted": True}
+    return {"deleted": False}
 
 
 # ---------- 影子快照(本轮 agent 改动):与项目 git 无关的独立影子仓库 ----------
@@ -1201,6 +1467,8 @@ OPS = {
     "search_files": op_search_files, "grep": op_grep,
     "search_cancel": op_search_cancel,
     "git": op_git, "shell": op_shell, "ps": op_ps,
+    "agent_sessions": op_agent_sessions,
+    "agent_session_delete": op_agent_session_delete,
     "shadow_begin": op_shadow_begin,
     "shadow_changed": op_shadow_changed,
     "shadow_diff": op_shadow_diff,

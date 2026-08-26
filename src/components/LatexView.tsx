@@ -24,6 +24,7 @@ import {
   PanelRightOpen,
   Play,
   RefreshCw,
+  Users,
   X
 } from 'lucide-react'
 import LatexVisualEditor, {
@@ -43,6 +44,8 @@ import {
   compileLatex,
   type LatexPolishMode,
   overleafClone,
+  overleafCollaborationApply,
+  overleafCollaborationPoll,
   overleafProjectInfo,
   overleafPublish,
   overleafPull,
@@ -102,10 +105,23 @@ const PDF_PANE_MIN_WIDTH = 340
 const editorPaneWidthMemory = { value: 620 }
 
 type Engine = 'pdflatex' | 'xelatex' | 'lualatex'
+type CollaborationState =
+  | 'idle'
+  | 'checking'
+  | 'queued'
+  | 'publishing'
+  | 'pending'
+  | 'conflict'
+  | 'offline'
+  | 'paused'
 
 const TEXT_EXTENSIONS = new Set(['tex', 'bib', 'sty', 'cls', 'bst'])
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'pdf', 'svg', 'eps'])
 const SKIP_DIRECTORIES = new Set(['.git', '.linco-latex', 'node_modules', 'build', 'dist'])
+const LIVE_PUBLISH_IDLE_MS = 5_000
+const LIVE_POLL_ACTIVE_MS = 5_000
+const LIVE_POLL_BACKGROUND_MS = 30_000
+const LIVE_POLL_PENDING_MS = 15_000
 
 function joinPath(root: string, child: string, remote: boolean): string {
   const separator = remote ? '/' : root.includes('\\') ? '\\' : '/'
@@ -393,6 +409,11 @@ export default function LatexView({
   const [projectInfo, setProjectInfo] = useState<OverleafProjectInfo | null>(null)
   const [syncing, setSyncing] = useState<'pull' | 'publish' | ''>('')
   const [syncError, setSyncError] = useState('')
+  const [collaborationEnabled, setCollaborationEnabled] = useState(true)
+  const [collaborationState, setCollaborationState] =
+    useState<CollaborationState>('idle')
+  const [collaborationAuthBlocked, setCollaborationAuthBlocked] = useState(false)
+  const [collaborationApplying, setCollaborationApplying] = useState(false)
   const [connectOpen, setConnectOpen] = useState(false)
   const [connectUrl, setConnectUrl] = useState('')
   const [connectToken, setConnectToken] = useState('')
@@ -409,8 +430,21 @@ export default function LatexView({
   const dirtyRef = useRef(dirty)
   const selectedPathRef = useRef(selectedPath)
   const hostRef = useRef(host)
+  const paperRootRef = useRef(paperRoot)
+  const projectInfoRef = useRef(projectInfo)
+  const connectTokenRef = useRef(connectToken)
+  const savingRef = useRef(saving)
+  const collaborationEnabledRef = useRef(collaborationEnabled)
+  const collaborationAuthBlockedRef = useRef(collaborationAuthBlocked)
   const saveTimerRef = useRef<number | null>(null)
+  const livePublishTimerRef = useRef<number | null>(null)
   const ownWriteAtRef = useRef(0)
+  const collaborationMutationUntilRef = useRef(0)
+  const collaborationBusyRef = useRef(false)
+  const collaborationPollRef = useRef(false)
+  const localLiveChangeRef = useRef(false)
+  const localLiveRevisionRef = useRef(0)
+  const queueLivePublishRef = useRef<() => void>(() => {})
   const writeChainRef = useRef<Promise<void>>(Promise.resolve())
   const loadGenerationRef = useRef(0)
   const refreshGenerationRef = useRef(0)
@@ -421,6 +455,12 @@ export default function LatexView({
   dirtyRef.current = dirty
   selectedPathRef.current = selectedPath
   hostRef.current = host
+  paperRootRef.current = paperRoot
+  projectInfoRef.current = projectInfo
+  connectTokenRef.current = connectToken
+  savingRef.current = saving
+  collaborationEnabledRef.current = collaborationEnabled
+  collaborationAuthBlockedRef.current = collaborationAuthBlocked
 
   const refreshProject = useCallback(async (preferredRoot?: string): Promise<void> => {
     if (!cwd) return
@@ -495,6 +535,13 @@ export default function LatexView({
       setProjectInfo(null)
       return
     }
+    const remembered = window.localStorage.getItem(
+      storageKey(host, paperRoot, 'liveCollaboration')
+    )
+    setCollaborationEnabled(remembered !== 'off')
+    setCollaborationState('checking')
+    setCollaborationAuthBlocked(false)
+    collaborationAuthBlockedRef.current = false
     let cancelled = false
     overleafProjectInfo(paperRoot, host)
       .then((info) => {
@@ -520,6 +567,15 @@ export default function LatexView({
     setPdfSrc('')
     setProjectInfo(null)
     setSyncError('')
+    setCollaborationState('idle')
+    setCollaborationAuthBlocked(false)
+    setCollaborationApplying(false)
+    localLiveChangeRef.current = false
+    localLiveRevisionRef.current = 0
+    if (livePublishTimerRef.current !== null) {
+      window.clearTimeout(livePublishTimerRef.current)
+      livePublishTimerRef.current = null
+    }
     if (cwd) {
       setConnectDestination(joinPath(cwd, 'overleaf-paper', !!host))
       void refreshProject()
@@ -592,6 +648,12 @@ export default function LatexView({
     setExternalConflict(false)
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
     saveTimerRef.current = window.setTimeout(() => void saveNow(), 700)
+    localLiveChangeRef.current = true
+    localLiveRevisionRef.current += 1
+    if (collaborationEnabledRef.current && projectInfoRef.current?.connected) {
+      setCollaborationState('queued')
+    }
+    queueLivePublishRef.current()
   }
 
   const startEditorResize = (event: React.MouseEvent): void => {
@@ -657,13 +719,34 @@ export default function LatexView({
     onRemoteFsChange((change) => {
       if (disposed || (change.host || '') !== (hostRef.current || '')) return
       const current = selectedPathRef.current
+      const ownWrite = Date.now() - ownWriteAtRef.current < 3_000
       if (current && change.paths.some((path) => path === current)) {
-        if (Date.now() - ownWriteAtRef.current < 1200) return
+        if (ownWrite) return
         if (dirtyRef.current) setExternalConflict(true)
         else void loadFile(current, true)
       }
+      const relevantProjectChange =
+        !!paperRootRef.current &&
+        change.paths.some(
+          (path) =>
+            isPathInside(paperRootRef.current, path, !hostRef.current) &&
+            fileKind(baseName(path)) !== null
+        )
       if (cwd && change.paths.some((path) => fileKind(baseName(path)) !== null)) {
         window.setTimeout(() => void refreshProject(), 250)
+      }
+      if (
+        relevantProjectChange &&
+        !ownWrite &&
+        !collaborationPollRef.current &&
+        Date.now() > collaborationMutationUntilRef.current
+      ) {
+        localLiveChangeRef.current = true
+        localLiveRevisionRef.current += 1
+        if (collaborationEnabledRef.current && projectInfoRef.current?.connected) {
+          setCollaborationState('queued')
+        }
+        queueLivePublishRef.current()
       }
     })
       .then((stop) => {
@@ -680,6 +763,9 @@ export default function LatexView({
   useEffect(
     () => () => {
       if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+      if (livePublishTimerRef.current !== null) {
+        window.clearTimeout(livePublishTimerRef.current)
+      }
       if (dirtyRef.current && selectedPathRef.current) {
         void writeFile(selectedPathRef.current, contentRef.current, hostRef.current)
       }
@@ -719,8 +805,11 @@ export default function LatexView({
   }
 
   const sync = async (kind: 'pull' | 'publish'): Promise<void> => {
-    if (!paperRoot || syncing) return
+    if (!paperRoot || syncing || collaborationBusyRef.current) return
     await saveNow()
+    if (collaborationBusyRef.current) return
+    collaborationBusyRef.current = true
+    collaborationPollRef.current = true
     setSyncing(kind)
     setSyncError('')
     try {
@@ -733,20 +822,319 @@ export default function LatexView({
               connectToken,
               host
             )
+      projectInfoRef.current = next
       setProjectInfo(next)
+      setCollaborationAuthBlocked(false)
+      collaborationAuthBlockedRef.current = false
+      if (kind === 'publish') {
+        localLiveChangeRef.current = false
+      }
+      collaborationMutationUntilRef.current = Date.now() + 5_000
       await refreshProject()
-      if (selectedPathRef.current) await loadFile(selectedPathRef.current, true)
+      if (selectedPathRef.current) {
+        if (dirtyRef.current) setExternalConflict(true)
+        else await loadFile(selectedPathRef.current, true)
+      }
+      setCollaborationState('idle')
     } catch (reason) {
       const message = compactError(reason)
-      setSyncError(message)
+      setSyncError(
+        message.includes('OVERLEAF_SYNC_CONFLICT')
+          ? t('latex.sync.conflictDetail')
+          : message
+      )
+      if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
+        setCollaborationAuthBlocked(true)
+        collaborationAuthBlockedRef.current = true
+        setCollaborationState('conflict')
+      }
       if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
         setPendingSync(kind)
         setConnectOpen(true)
+        setCollaborationAuthBlocked(true)
+        collaborationAuthBlockedRef.current = true
+        setCollaborationState('paused')
       }
     } finally {
       setSyncing('')
+      collaborationPollRef.current = false
+      collaborationBusyRef.current = false
     }
   }
+
+  const runLivePublish = useCallback(async (): Promise<void> => {
+    if (
+      !collaborationEnabledRef.current ||
+      collaborationAuthBlockedRef.current ||
+      !projectInfoRef.current?.connected ||
+      !paperRootRef.current ||
+      !localLiveChangeRef.current
+    ) {
+      return
+    }
+    if (collaborationBusyRef.current) {
+      queueLivePublishRef.current()
+      return
+    }
+
+    await saveNow()
+    if (!localLiveChangeRef.current) return
+    if (collaborationBusyRef.current) {
+      queueLivePublishRef.current()
+      return
+    }
+    const revision = localLiveRevisionRef.current
+    let published = false
+    collaborationBusyRef.current = true
+    collaborationPollRef.current = true
+    setCollaborationState('publishing')
+    try {
+      const next = await overleafPublish(
+        paperRootRef.current,
+        `Collaborative update from Linco (${new Date().toLocaleString()})`,
+        connectTokenRef.current,
+        hostRef.current
+      )
+      projectInfoRef.current = next
+      setProjectInfo(next)
+      setSyncError('')
+      setCollaborationAuthBlocked(false)
+      collaborationMutationUntilRef.current = Date.now() + 5_000
+      if (localLiveRevisionRef.current === revision) {
+        localLiveChangeRef.current = false
+      }
+      published = true
+      setCollaborationState('idle')
+    } catch (reason) {
+      const message = compactError(reason)
+      if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
+        setCollaborationAuthBlocked(true)
+        collaborationAuthBlockedRef.current = true
+        setCollaborationState('paused')
+      } else if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
+        setSyncError(t('latex.sync.conflictDetail'))
+        setCollaborationAuthBlocked(true)
+        collaborationAuthBlockedRef.current = true
+        setCollaborationState('conflict')
+      } else {
+        setCollaborationState('offline')
+      }
+    } finally {
+      collaborationPollRef.current = false
+      collaborationBusyRef.current = false
+      if (
+        published &&
+        localLiveChangeRef.current &&
+        collaborationEnabledRef.current
+      ) {
+        queueLivePublishRef.current()
+      }
+    }
+  }, [saveNow, t])
+
+  const queueLivePublish = useCallback((): void => {
+    if (livePublishTimerRef.current !== null) {
+      window.clearTimeout(livePublishTimerRef.current)
+      livePublishTimerRef.current = null
+    }
+    if (
+      !collaborationEnabledRef.current ||
+      collaborationAuthBlockedRef.current ||
+      !projectInfoRef.current?.connected ||
+      !localLiveChangeRef.current
+    ) {
+      return
+    }
+    livePublishTimerRef.current = window.setTimeout(() => {
+      livePublishTimerRef.current = null
+      void runLivePublish()
+    }, LIVE_PUBLISH_IDLE_MS)
+  }, [runLivePublish])
+  queueLivePublishRef.current = queueLivePublish
+
+  const toggleCollaboration = (): void => {
+    const next = !collaborationEnabled
+    setCollaborationEnabled(next)
+    collaborationEnabledRef.current = next
+    if (paperRoot) {
+      window.localStorage.setItem(
+        storageKey(host, paperRoot, 'liveCollaboration'),
+        next ? 'on' : 'off'
+      )
+    }
+    if (!next) {
+      if (livePublishTimerRef.current !== null) {
+        window.clearTimeout(livePublishTimerRef.current)
+        livePublishTimerRef.current = null
+      }
+      setCollaborationState('paused')
+      return
+    }
+    setCollaborationAuthBlocked(false)
+    collaborationAuthBlockedRef.current = false
+    setCollaborationState('checking')
+    if (projectInfoRef.current?.dirty || (projectInfoRef.current?.ahead || 0) > 0) {
+      localLiveChangeRef.current = true
+      localLiveRevisionRef.current += 1
+      queueLivePublishRef.current()
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !paperRoot ||
+      !projectInfo?.connected ||
+      !collaborationEnabled ||
+      collaborationAuthBlocked
+    ) {
+      return
+    }
+    let stopped = false
+    let timer: number | null = null
+
+    const schedule = (delay: number): void => {
+      if (stopped) return
+      if (timer !== null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => void poll(), delay)
+    }
+
+    const poll = async (): Promise<void> => {
+      if (stopped) return
+      if (collaborationBusyRef.current) {
+        schedule(1_000)
+        return
+      }
+      collaborationBusyRef.current = true
+      collaborationPollRef.current = true
+      setCollaborationState((current) =>
+        current === 'idle' || current === 'offline' ? 'checking' : current
+      )
+      let nextDelay =
+        active && document.visibilityState === 'visible'
+          ? LIVE_POLL_ACTIVE_MS
+          : LIVE_POLL_BACKGROUND_MS
+      let authBlocked = false
+      try {
+        const result = await overleafCollaborationPoll(
+          paperRoot,
+          connectTokenRef.current,
+          hostRef.current
+        )
+        if (stopped) return
+        if (result.info) {
+          projectInfoRef.current = result.info
+          setProjectInfo(result.info)
+        }
+        if (result.pending) {
+          setCollaborationState('pending')
+          nextDelay = LIVE_POLL_PENDING_MS
+          const revision = localLiveRevisionRef.current
+          if (
+            !dirtyRef.current &&
+            !savingRef.current &&
+            !localLiveChangeRef.current
+          ) {
+            setCollaborationApplying(true)
+            await new Promise<void>((resolve) => {
+              window.requestAnimationFrame(() => resolve())
+            })
+            if (
+              !dirtyRef.current &&
+              !savingRef.current &&
+              localLiveRevisionRef.current === revision
+            ) {
+              const applied = await overleafCollaborationApply(
+                paperRoot,
+                hostRef.current
+              )
+              if (applied.info) {
+                projectInfoRef.current = applied.info
+                setProjectInfo(applied.info)
+              }
+              if (applied.applied) {
+                collaborationMutationUntilRef.current = Date.now() + 5_000
+                await refreshProject()
+                if (selectedPathRef.current && !dirtyRef.current) {
+                  await loadFile(selectedPathRef.current, true)
+                }
+              }
+              if (applied.pending) {
+                localLiveChangeRef.current = true
+                localLiveRevisionRef.current += 1
+                queueLivePublishRef.current()
+                setCollaborationState('queued')
+              } else {
+                setCollaborationState('idle')
+              }
+            } else {
+              localLiveChangeRef.current = true
+              queueLivePublishRef.current()
+              setCollaborationState('queued')
+            }
+            setCollaborationApplying(false)
+          } else {
+            localLiveChangeRef.current = true
+            localLiveRevisionRef.current += 1
+            queueLivePublishRef.current()
+          }
+        } else {
+          if (
+            result.info &&
+            (result.info.dirty || result.info.ahead > 0)
+          ) {
+            localLiveChangeRef.current = true
+            localLiveRevisionRef.current += 1
+            queueLivePublishRef.current()
+          }
+          if (localLiveChangeRef.current) {
+            queueLivePublishRef.current()
+            setCollaborationState('queued')
+          } else {
+            setCollaborationState('idle')
+          }
+        }
+      } catch (reason) {
+        const message = compactError(reason)
+        if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
+          authBlocked = true
+          setCollaborationAuthBlocked(true)
+          collaborationAuthBlockedRef.current = true
+          setCollaborationState('paused')
+        } else if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
+          setSyncError(t('latex.sync.conflictDetail'))
+          authBlocked = true
+          setCollaborationAuthBlocked(true)
+          collaborationAuthBlockedRef.current = true
+          setCollaborationState('conflict')
+          nextDelay = LIVE_POLL_BACKGROUND_MS
+        } else {
+          setCollaborationState('offline')
+          nextDelay = LIVE_POLL_BACKGROUND_MS
+        }
+      } finally {
+        setCollaborationApplying(false)
+        collaborationPollRef.current = false
+        collaborationBusyRef.current = false
+        if (!authBlocked) schedule(nextDelay)
+      }
+    }
+
+    schedule(800)
+    return () => {
+      stopped = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [
+    active,
+    collaborationAuthBlocked,
+    collaborationEnabled,
+    host,
+    loadFile,
+    paperRoot,
+    projectInfo?.connected,
+    refreshProject,
+    t
+  ])
 
   const connect = async (): Promise<void> => {
     if (!cwd || !connectUrl.trim() || !connectToken.trim() || !connectDestination.trim()) return
@@ -780,6 +1168,9 @@ export default function LatexView({
     setSyncError('')
     try {
       await overleafStoreToken(paperRoot, connectToken, rememberToken, host)
+      setCollaborationAuthBlocked(false)
+      collaborationAuthBlockedRef.current = false
+      setCollaborationState('checking')
       const retry = pendingSync
       setPendingSync('')
       setConnectOpen(false)
@@ -823,6 +1214,26 @@ export default function LatexView({
     cwd && paperRoot && normalizedPath(paperRoot, !host) !== normalizedPath(cwd, !host)
       ? relativePath(cwd, paperRoot)
       : ''
+  const collaborationStatus =
+    collaborationEnabled && collaborationState !== 'idle'
+      ? t(`latex.sync.liveState.${collaborationState}`)
+      : projectInfo?.behind
+        ? t('latex.sync.behind', { n: projectInfo.behind })
+        : projectInfo?.ahead || projectInfo?.dirty
+          ? t('latex.sync.localChanges')
+          : collaborationEnabled
+            ? t('latex.sync.liveState.idle')
+            : t('latex.sync.synced')
+  const collaborationStatusTone =
+    !collaborationEnabled
+      ? 'text-ink-faint'
+      : collaborationState === 'conflict' || collaborationState === 'offline'
+      ? 'text-red-600'
+      : collaborationState === 'pending' ||
+          collaborationState === 'paused' ||
+          collaborationState === 'queued'
+        ? 'text-amber-600'
+        : 'text-emerald-600'
   const requestLatexSuggestion = useCallback(
     ({
       before,
@@ -955,14 +1366,43 @@ export default function LatexView({
         </div>
         {projectInfo?.connected ? (
           <div className="ml-1 flex shrink-0 items-center gap-0.5">
-            <span className="mr-1 flex items-center gap-1 text-[10px] text-emerald-600">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={collaborationEnabled}
+              onClick={toggleCollaboration}
+              className={`mr-1 flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[10px] hover:bg-black/5 ${
+                collaborationEnabled ? 'text-emerald-700' : 'text-ink-faint'
+              }`}
+              title={t('latex.sync.liveHint')}
+            >
+              <Users size={12} />
+              <span>{t('latex.sync.live')}</span>
+              <span
+                className={`relative inline-block h-4 w-7 shrink-0 rounded-full transition-colors ${
+                  collaborationEnabled ? 'bg-emerald-500' : 'bg-black/15'
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-[left]"
+                  style={{ left: collaborationEnabled ? 14 : 2 }}
+                />
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={!collaborationAuthBlocked}
+              onClick={() => setConnectOpen(true)}
+              className={`mr-1 flex items-center gap-1 text-[10px] disabled:cursor-default ${collaborationStatusTone}`}
+              title={
+                collaborationAuthBlocked
+                  ? t('latex.authTitle')
+                  : collaborationStatus
+              }
+            >
               <Cloud size={12} />
-              {projectInfo.behind > 0
-                ? t('latex.sync.behind', { n: projectInfo.behind })
-                : projectInfo.ahead > 0 || projectInfo.dirty
-                  ? t('latex.sync.localChanges')
-                  : t('latex.sync.synced')}
-            </span>
+              {collaborationStatus}
+            </button>
             <button
               onClick={() => void sync('pull')}
               disabled={!!syncing}
@@ -1135,7 +1575,11 @@ export default function LatexView({
 
         <main ref={editorPreviewRef} className="relative flex min-w-0 flex-1 overflow-hidden">
           <div
-            className={previewOpen ? 'min-w-[480px] shrink-0' : 'min-w-[480px] flex-1'}
+            className={
+              previewOpen
+                ? 'relative min-w-[480px] shrink-0'
+                : 'relative min-w-[480px] flex-1'
+            }
             style={previewOpen ? { width: editorPaneWidth } : undefined}
           >
             {!loaded ? (
@@ -1151,6 +1595,7 @@ export default function LatexView({
                 mode={editorMode}
                 dirty={dirty}
                 saving={saving}
+                readOnly={collaborationApplying}
                 active={active}
                 repositoryLabel={baseName(cwd)}
                 navigationTarget={editorNavigation}
@@ -1161,12 +1606,20 @@ export default function LatexView({
                 onReviewSegments={reviewLatexSegments}
               />
             ) : null}
+            {collaborationApplying && (
+              <div
+                className="absolute inset-0 z-50 flex cursor-wait items-center justify-center bg-canvas/35"
+                aria-label={t('latex.sync.liveState.pending')}
+              >
+                <Loader2 size={17} className="animate-spin text-emerald-600" />
+              </div>
+            )}
           </div>
 
           {previewOpen && (
             <div
               onMouseDown={startEditorResize}
-              className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-[#5c8bd6]/50"
+              className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-accent/50"
               title={t('files.resizeHint')}
             >
               <div className="absolute inset-y-0 -left-[3px] -right-[3px]" />

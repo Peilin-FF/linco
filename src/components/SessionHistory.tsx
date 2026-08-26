@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
-import { History, Trash2, Loader2, CheckSquare, Square, ListChecks, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  History,
+  Trash2,
+  Loader2,
+  CheckSquare,
+  Square,
+  ListChecks,
+  X,
+  RefreshCw
+} from 'lucide-react'
 import { agentSessions, agentSessionDelete, type SessionInfo } from '@/lib/sessions'
 import { useI18n } from '@/lib/i18n'
 
@@ -33,6 +42,8 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
   const { t } = useI18n()
   const [items, setItems] = useState<SessionInfo[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const refreshGenerationRef = useRef(0)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
@@ -45,19 +56,24 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
   const projectName = cwd ? cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd : ''
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGenerationRef.current
     if (!cwd) {
       setItems([])
+      setLoading(false)
       return
     }
     setLoading(true)
+    setLoadFailed(false)
     try {
       const list = await agentSessions(cwd, provider, host)
+      if (generation !== refreshGenerationRef.current) return
       setItems(list)
       setNow(Math.floor(Date.now() / 1000))
     } catch {
-      setItems([])
+      if (generation !== refreshGenerationRef.current) return
+      setLoadFailed(true)
     } finally {
-      setLoading(false)
+      if (generation === refreshGenerationRef.current) setLoading(false)
     }
   }, [cwd, provider, host])
 
@@ -68,6 +84,14 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
     setSelected(new Set())
     setBatchConfirm(false)
   }, [refresh])
+
+  // A remote Codex rollout appears shortly after its terminal starts. Retry
+  // once so that startup race cannot leave a new project's history empty.
+  useEffect(() => {
+    if (!host || !cwd) return
+    const timer = window.setTimeout(() => void refresh(), 2500)
+    return () => window.clearTimeout(timer)
+  }, [cwd, host, refresh])
 
   // 点别处取消「确认删除」态
   useEffect(() => {
@@ -136,8 +160,8 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
   }
 
   if (!cwd) return null
-  // 没有历史也不显示空面板(避免占地方)
-  if (!loading && items.length === 0) return null
+  // Remote failures must not remove the whole left rail.
+  if (!host && !loading && items.length === 0) return null
 
   return (
     <div className="flex h-full flex-col px-1.5 py-1.5">
@@ -149,6 +173,17 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
             <span className="text-ink-faint/70">· {items.length}</span>
           )}
           <span className="flex-1" />
+          {host && (
+            <button
+              type="button"
+              onClick={() => void refresh()}
+              disabled={loading}
+              title={t('history.refresh')}
+              className="shrink-0 rounded p-0.5 text-ink-faint transition-colors hover:bg-black/10 hover:text-ink disabled:cursor-default"
+            >
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            </button>
+          )}
           {/* 进入/退出批量选择模式 */}
           {items.length > 0 && (
             <button
@@ -217,6 +252,15 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
       </div>
       {/* 列表区:一屏约 3 条,超出上下滚动 */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
+        {!loading && items.length === 0 && (
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="flex min-h-0 flex-1 items-center justify-center px-2 text-center text-[10px] leading-4 text-ink-faint hover:text-ink-muted"
+          >
+            {t(loadFailed ? 'history.loadFailed' : 'history.empty')}
+          </button>
+        )}
         {items.map((s) => {
           const confirming = confirmId === s.id
           const busy = busyId === s.id
@@ -282,7 +326,7 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
                 <button
                   onClick={() => setConfirmId(s.id)}
                   title={t('history.delete')}
-                  className="shrink-0 rounded p-1 text-ink-faint opacity-0 transition-opacity hover:bg-black/10 hover:text-red-600 group-hover:opacity-100"
+                  className="shrink-0 rounded p-1 text-ink-faint opacity-0 transition-opacity hover:bg-black/10 hover:text-error group-hover:opacity-100"
                 >
                   <Trash2 size={12} />
                 </button>

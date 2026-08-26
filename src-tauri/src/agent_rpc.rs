@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::remote::{shq, ssh_opts};
 
-const AGENT_VERSION: &str = "21";
+const AGENT_VERSION: &str = "25";
 const AGENT_SRC: &str = include_str!("agent/linco_agent.py");
 const RPC_TIMEOUT: Duration = Duration::from_secs(45);
 static SEQ: AtomicU64 = AtomicU64::new(1);
@@ -623,6 +623,80 @@ mod tests {
             .iter()
             .any(|e| e.get("name").and_then(|n| n.as_str()) == Some("x.txt")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rpc_lists_and_deletes_remote_codex_sessions() {
+        let s = local_agent();
+        let root = std::env::temp_dir().join(format!(
+            "linco_rpc_sessions_{}",
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let day = root.join("2026").join("07").join("25");
+        let project = root.join("project");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+
+        let direct = day.join("rollout-direct-id.jsonl");
+        std::fs::write(
+            &direct,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"direct-id\",\"cwd\":{},\"source\":\"cli\"}}}}\n\
+                 {{\"type\":\"response_item\",\"payload\":{{\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"Fix remote history\"}}]}}}}\n",
+                serde_json::to_string(&project.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            day.join("rollout-child-id.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"child-id\",\"cwd\":{},\"source\":{{\"subagent\":{{}}}}}}}}\n",
+                serde_json::to_string(&project.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+
+        let listed = rpc_on(
+            &s,
+            "agent_sessions",
+            json!({
+                "cwd": project.to_string_lossy(),
+                "root": root.to_string_lossy()
+            }),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let sessions = listed
+            .get("sessions")
+            .and_then(|value| value.as_array())
+            .unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("id").and_then(|value| value.as_str()),
+            Some("direct-id")
+        );
+        assert_eq!(
+            sessions[0].get("title").and_then(|value| value.as_str()),
+            Some("Fix remote history")
+        );
+
+        let deleted = rpc_on(
+            &s,
+            "agent_session_delete",
+            json!({
+                "cwd": project.to_string_lossy(),
+                "id": "direct-id",
+                "root": root.to_string_lossy()
+            }),
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(
+            deleted.get("deleted").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(!direct.exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

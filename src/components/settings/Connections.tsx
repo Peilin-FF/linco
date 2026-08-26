@@ -117,7 +117,7 @@ export default function Connections({
               </button>
               <button
                 onClick={() => remove(c.id)}
-                className="rounded-md p-1 text-ink-faint hover:text-[#cf222e]"
+                className="rounded-md p-1 text-ink-faint hover:text-error"
               >
                 <Trash2 size={15} />
               </button>

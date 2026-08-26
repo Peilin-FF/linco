@@ -130,7 +130,7 @@ export default function AgentTaskOutput({
         <span className="truncate font-mono" title={file}>
           {file}
         </span>
-        {exited && <span className="ml-auto text-amber-400/80">{t('task.exited')}</span>}
+        {exited && <span className="ml-auto text-warning">{t('task.exited')}</span>}
       </div>
       <div ref={wrapRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />
     </div>

@@ -33,6 +33,9 @@ mod legacy_guard;
 
 use terminal::TerminalState;
 
+#[cfg(windows)]
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -43,6 +46,11 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_drag::init())
         .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_decorations(false)?;
+            }
+
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
             powerpoint_live::prepare(app.handle().clone())?;
@@ -133,6 +141,8 @@ pub fn run() {
             latex::overleaf_store_token,
             latex::overleaf_pull,
             latex::overleaf_publish,
+            latex::overleaf_collaboration_poll,
+            latex::overleaf_collaboration_apply,
             latex::latex_compile,
             latex_ai::latex_ai_suggest,
             latex_ai::latex_ai_review,

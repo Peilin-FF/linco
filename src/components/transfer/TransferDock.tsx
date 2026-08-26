@@ -357,7 +357,7 @@ function JobRow({
   return (
     <div className="px-3 py-2">
       <div className="flex items-center gap-2 text-[12.5px]">
-        <DirIcon size={13} className="shrink-0 text-[#5c8bd6]" />
+        <DirIcon size={13} className="shrink-0 text-accent" />
         <span className="truncate font-medium text-ink">{job.label || '传输'}</span>
         <span className="ml-auto shrink-0 text-[11px] text-ink-faint">
           {job.phase === 'scanning'
@@ -386,7 +386,7 @@ function JobRow({
       <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/10">
         <div
           className={`h-full rounded-full transition-[width] duration-200 ${
-            job.phase === 'done' && !job.ok ? 'bg-[#D97757]' : 'bg-[#5c8bd6]'
+            job.phase === 'done' && !job.ok ? 'bg-error' : 'bg-accent'
           }`}
           style={{ width: `${pct}%` }}
         />

@@ -1,0 +1,19 @@
+{
+  "identifier": "ai.linco.app.cdp",
+  "app": {
+    "windows": [
+      {
+        "title": "Linco",
+        "width": 1280,
+        "height": 832,
+        "minWidth": 900,
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#ffffff",
+        "dataDirectory": "dev-cdp",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port=9223"
+      }
+    ]
+  }
+}

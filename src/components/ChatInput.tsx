@@ -376,7 +376,7 @@ export default function ChatInput({
             disabled={!canSend}
             className={`mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors ${
               canSend
-                ? 'bg-ink text-canvas hover:opacity-90'
+                ? 'bg-accent text-white hover:bg-[var(--button-hover)]'
                 : 'bg-black/10 text-ink-faint'
             }`}
           >
@@ -523,7 +523,7 @@ export default function ChatInput({
             disabled={!canSend}
             className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
               canSend
-                ? 'bg-ink text-canvas hover:opacity-90'
+                ? 'bg-accent text-white hover:bg-[var(--button-hover)]'
                 : 'bg-black/10 text-ink-faint'
             }`}
           >

@@ -47,7 +47,7 @@ export default function ResizeHandle({
         onPointerDown={onPointerDown}
         className="group relative flex h-full w-4 shrink-0 cursor-ew-resize items-center justify-center"
       >
-        <div className="h-10 w-[3px] rounded-full bg-black/15 transition-colors group-hover:bg-[#5c8bd6]/70" />
+        <div className="h-10 w-[3px] rounded-full bg-black/15 transition-colors group-hover:bg-accent/70" />
       </div>
     )
   }
@@ -56,7 +56,7 @@ export default function ResizeHandle({
       onPointerDown={onPointerDown}
       className="group relative flex h-4 shrink-0 cursor-ns-resize items-center justify-center"
     >
-      <div className="h-[3px] w-10 rounded-full bg-black/15 transition-colors group-hover:bg-[#5c8bd6]/70" />
+      <div className="h-[3px] w-10 rounded-full bg-black/15 transition-colors group-hover:bg-accent/70" />
     </div>
   )
 }

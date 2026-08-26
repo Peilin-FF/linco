@@ -34,7 +34,7 @@ export default function ChangeOverviewRuler({
       aria-valuemin={1}
       aria-valuemax={totalLines}
       title={label}
-      className="absolute bottom-1 right-[16px] top-1 z-30 w-[7px] cursor-ns-resize touch-none rounded-sm bg-black/[0.035] ring-1 ring-black/[0.06]"
+      className="absolute bottom-1 right-[16px] top-1 z-30 w-[7px] cursor-ns-resize touch-none rounded-sm bg-widget ring-1 ring-[color:var(--border)]"
       onPointerDown={(event) => {
         event.currentTarget.setPointerCapture(event.pointerId)
         jumpFromPointer(event)
@@ -55,8 +55,8 @@ export default function ChangeOverviewRuler({
             key={`${marker.kind}-${start}-${end}-${index}`}
             className={`pointer-events-none absolute rounded-[1px] ${
               marker.kind === 'add'
-                ? 'left-0 w-[4px] bg-[#2da44e]/80'
-                : 'right-0 w-[4px] bg-[#cf222e]/75'
+                ? 'left-0 w-[4px] bg-diff-added-foreground/80'
+                : 'right-0 w-[4px] bg-diff-deleted-foreground/75'
             }`}
             style={{
               top: `${top}%`,

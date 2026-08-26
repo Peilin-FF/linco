@@ -518,7 +518,7 @@ export default function FilesView({
       {/* 可拖拽分隔条:拉宽左栏以查看长文件名。视觉上是细线,hover/拖拽时高亮。 */}
       <div
         onMouseDown={startResize}
-        className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-[#5c8bd6]/50"
+        className="group relative w-px shrink-0 cursor-col-resize bg-black/8 hover:bg-accent/50"
         title={t('files.resizeHint')}
       >
         {/* 加宽命中区(左右各 3px),让细线更好点中,但不占布局宽度 */}

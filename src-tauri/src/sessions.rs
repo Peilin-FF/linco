@@ -10,11 +10,16 @@
 // 远程连接(host 非空)时,会话在远端机器上,经持久 SSH 通道用 shell 读取。
 
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SessionInfo {
     /// 文件名去掉 .jsonl —— 删除时回传这个做定位
     pub id: String,
@@ -105,6 +110,7 @@ struct CodexMeta {
     session_id: Option<String>,
     title: Option<String>,
     is_subagent: bool,
+    is_interactive: bool,
 }
 
 /// Read the resumable UUID, project path, title, and source from a Codex rollout.
@@ -113,6 +119,7 @@ fn codex_meta(content: &str) -> CodexMeta {
     let mut session_id: Option<String> = None;
     let mut title: Option<String> = None;
     let mut is_subagent = false;
+    let mut is_interactive = false;
     for line in content.lines() {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -127,10 +134,12 @@ fn codex_meta(content: &str) -> CodexMeta {
             if let Some(id) = payload.get("id").and_then(|id| id.as_str()) {
                 session_id = Some(id.to_string());
             }
-            is_subagent = payload
-                .get("source")
-                .and_then(|source| source.get("subagent"))
-                .is_some();
+            if let Some(source) = payload.get("source") {
+                is_subagent = source.get("subagent").is_some();
+                is_interactive = source
+                    .as_str()
+                    .is_some_and(|kind| kind == "cli" || kind == "vscode");
+            }
         } else if ty == "response_item" && title.is_none() {
             let p = v.get("payload").unwrap_or(&v);
             if p.get("role").and_then(|r| r.as_str()) == Some("user") {
@@ -155,6 +164,7 @@ fn codex_meta(content: &str) -> CodexMeta {
         session_id,
         title,
         is_subagent,
+        is_interactive,
     }
 }
 
@@ -175,6 +185,114 @@ fn normalize_project_path(raw: &str) -> String {
 
 fn same_project_path(left: &str, right: &str) -> bool {
     normalize_project_path(left) == normalize_project_path(right)
+}
+
+const CODEX_RESUME_PAGE_SIZE: usize = 25;
+
+/// Ask Codex's own app-server for the same first page shown by `/resume`.
+fn list_codex_via_app_server(cwd: &str) -> Result<Vec<SessionInfo>, String> {
+    let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
+    let mut child = Command::new(executable)
+        .args(["app-server", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to start Codex app-server: {error}"))?;
+
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Codex app-server stdin unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Codex app-server stdout unavailable".to_string())?;
+    let requests = [
+        json!({
+            "method": "initialize",
+            "id": 1,
+            "params": {
+                "clientInfo": { "name": "linco", "title": "Linco", "version": env!("CARGO_PKG_VERSION") }
+            }
+        }),
+        json!({ "method": "initialized", "params": {} }),
+        json!({
+            "method": "thread/list",
+            "id": 2,
+            "params": {
+                "limit": CODEX_RESUME_PAGE_SIZE,
+                "sortKey": "updated_at",
+                "modelProviders": ["openai"],
+                "sourceKinds": ["cli", "vscode"],
+                "archived": false,
+                "cwd": cwd,
+                "useStateDbOnly": true
+            }
+        }),
+    ];
+    for request in requests {
+        serde_json::to_writer(&mut stdin, &request).map_err(|error| error.to_string())?;
+        stdin.write_all(b"\n").map_err(|error| error.to_string())?;
+    }
+    stdin.flush().map_err(|error| error.to_string())?;
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if value.get("id").and_then(|id| id.as_i64()) == Some(2) {
+                let _ = sender.send(value);
+                break;
+            }
+        }
+    });
+
+    let response = receiver
+        .recv_timeout(Duration::from_secs(15))
+        .map_err(|_| "Codex app-server thread/list timed out".to_string());
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    let response = response?;
+    if let Some(error) = response.get("error") {
+        return Err(format!("Codex app-server thread/list failed: {error}"));
+    }
+
+    let rows = response
+        .pointer("/result/data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| "Codex app-server returned an invalid thread list".to_string())?;
+    Ok(rows
+        .iter()
+        .filter_map(|thread| {
+            let id = thread.get("id")?.as_str()?.to_string();
+            let title = thread
+                .get("preview")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .map(make_title)
+                .unwrap_or_else(|| short_id(&id));
+            let mtime = thread
+                .get("updatedAt")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let size = thread
+                .get("path")
+                .and_then(|value| value.as_str())
+                .and_then(|path| fs::metadata(path).ok())
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            Some(SessionInfo {
+                id,
+                title,
+                mtime,
+                size,
+            })
+        })
+        .collect())
 }
 
 /// 本地:列 Claude 项目目录下的会话。
@@ -217,6 +335,9 @@ fn list_claude_local(cwd: &str) -> Result<Vec<SessionInfo>, String> {
 
 /// 本地:扫 Codex 全量会话,按 cwd 过滤出本项目的。
 fn list_codex_local(cwd: &str) -> Result<Vec<SessionInfo>, String> {
+    if let Ok(sessions) = list_codex_via_app_server(cwd) {
+        return Ok(sessions);
+    }
     let root = home()?.join(".codex").join("sessions");
     if !root.is_dir() {
         return Ok(vec![]);
@@ -224,6 +345,7 @@ fn list_codex_local(cwd: &str) -> Result<Vec<SessionInfo>, String> {
     let mut out = Vec::new();
     collect_codex(&root, cwd, &mut out)?;
     out.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    out.truncate(CODEX_RESUME_PAGE_SIZE);
     Ok(out)
 }
 
@@ -245,6 +367,7 @@ fn collect_codex(dir: &Path, cwd: &str, out: &mut Vec<SessionInfo>) -> Result<()
         };
         let session = codex_meta(&content);
         if session.is_subagent
+            || !session.is_interactive
             || !session
                 .cwd
                 .as_deref()
@@ -293,22 +416,31 @@ fn read_head(path: &Path, n: u64) -> Result<String, String> {
 
 /// 远程:经 SSH 列会话目录(claude)。标题取不到,用 id + 时间。
 fn list_remote(host: &str, provider: &str, cwd: &str) -> Result<Vec<SessionInfo>, String> {
+    if is_codex(provider) {
+        let value = crate::agent_rpc::call_background_timeout(
+            host,
+            "agent_sessions",
+            json!({ "cwd": cwd }),
+            Duration::from_secs(30),
+        )?;
+        let sessions = value
+            .get("sessions")
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+        return serde_json::from_value(sessions).map_err(|error| error.to_string());
+    }
+
     // 远端 HOME
     let home = crate::remote::run_remote(host, "printf %s \"$HOME\"")
         .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
     if home.is_empty() {
         return Ok(vec![]);
     }
-    let dir = if is_codex(provider) {
-        // codex 远端按日期存,过滤成本高;暂只支持 claude 远端,codex 返回空
-        return Ok(vec![]);
-    } else {
-        format!(
-            "{}/.claude/projects/{}",
-            home.trim_end_matches('/'),
-            encode_project_path(cwd)
-        )
-    };
+    let dir = format!(
+        "{}/.claude/projects/{}",
+        home.trim_end_matches('/'),
+        encode_project_path(cwd)
+    );
     // 每行: "<mtime秒> <字节> <文件名>"
     let script = format!(
         "d={}; [ -d \"$d\" ] || exit 0; for f in \"$d\"/*.jsonl; do [ -e \"$f\" ] || continue; \
@@ -375,13 +507,19 @@ pub async fn agent_session_delete(
             return Err("非法会话 id".into());
         }
         if let Some(h) = host.filter(|s| !s.is_empty()) {
+            if is_codex(&provider) {
+                crate::agent_rpc::call_background_timeout(
+                    &h,
+                    "agent_session_delete",
+                    json!({ "cwd": cwd, "id": id }),
+                    Duration::from_secs(30),
+                )?;
+                return Ok(());
+            }
             let home = crate::remote::run_remote(&h, "printf %s \"$HOME\"")
                 .map(|b| String::from_utf8_lossy(&b).trim().to_string())?;
             if home.is_empty() {
                 return Err("无法解析远端 HOME".into());
-            }
-            if is_codex(&provider) {
-                return Err("远程暂不支持删除 Codex 会话".into());
             }
             let path = format!(
                 "{}/.claude/projects/{}/{}.jsonl",
@@ -469,12 +607,19 @@ mod tests {
         assert_eq!(meta.cwd.as_deref(), Some(r"C:\work\app"));
         assert_eq!(meta.title.as_deref(), Some("Fix the history list"));
         assert!(!meta.is_subagent);
+        assert!(meta.is_interactive);
     }
 
     #[test]
     fn codex_meta_marks_subagent_sessions() {
         let jsonl = r#"{"type":"session_meta","payload":{"id":"child","cwd":"/work/app","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}}}"#;
         assert!(codex_meta(jsonl).is_subagent);
+    }
+
+    #[test]
+    fn codex_meta_excludes_non_interactive_sessions() {
+        let jsonl = r#"{"type":"session_meta","payload":{"id":"worker","cwd":"/work/app","source":"app_server"}}"#;
+        assert!(!codex_meta(jsonl).is_interactive);
     }
 
     #[test]

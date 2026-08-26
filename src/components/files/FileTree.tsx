@@ -40,11 +40,11 @@ export interface TreeContextTarget {
 function gitColor(ch: string): string {
   switch (ch) {
     case 'A':
-      return 'text-[#27894e]'
+      return 'text-diff-added-foreground'
     case 'M':
-      return 'text-[#b8860b]'
+      return 'text-accent'
     case 'D':
-      return 'text-[#c0392b]'
+      return 'text-diff-deleted-foreground'
     default:
       return 'text-ink-faint' // ? 未跟踪
   }
@@ -300,11 +300,11 @@ const Node = memo(function Node({
         }}
         className={`flex cursor-pointer items-center gap-1 rounded py-[3px] pr-2 text-[13px] ${
           dragOver
-            ? 'bg-[#5c8bd6]/15 ring-1 ring-[#5c8bd6]/40'
+            ? 'bg-accent/15 ring-1 ring-accent/40'
             : isMulti
-              ? 'bg-[#5c8bd6]/25 text-ink ring-1 ring-[#5c8bd6]/40'
+              ? 'bg-[var(--selection)] text-ink ring-1 ring-accent/40'
               : isSelected
-                ? 'bg-[#5c8bd6]/15 text-ink'
+                ? 'bg-[var(--selection)] text-ink'
                 : 'text-ink hover:bg-black/[0.07]'
         }`}
         style={{ paddingLeft: depth * 12 + 6 }}
@@ -317,9 +317,9 @@ const Node = memo(function Node({
               <ChevronRight size={14} className="shrink-0 text-ink-faint" />
             )}
             {open ? (
-              <FolderOpen size={15} className="shrink-0 text-[#5c8bd6]" />
+              <FolderOpen size={15} className="shrink-0 text-accent" />
             ) : (
-              <Folder size={15} className="shrink-0 text-[#5c8bd6]" />
+              <Folder size={15} className="shrink-0 text-accent" />
             )}
           </>
         ) : (
@@ -603,7 +603,7 @@ export default function FileTree({
       title={title}
       className={`rounded p-0.5 ${
         active
-          ? 'bg-[#5c8bd6]/20 text-[#2f6fd0]'
+          ? 'bg-accent/20 text-accent'
           : 'text-ink-faint hover:bg-black/10 hover:text-ink'
       }`}
     >
@@ -627,7 +627,7 @@ export default function FileTree({
 
           <div className="min-w-0 flex-1 space-y-1">
             {/* Search */}
-            <div className="flex items-center gap-1 rounded-md border border-black/10 bg-canvas px-1.5 py-1 focus-within:border-[#5c8bd6]">
+            <div className="flex items-center gap-1 rounded-md border border-black/10 bg-canvas px-1.5 py-1 focus-within:border-accent">
               <Search size={12} className="shrink-0 text-ink-faint" />
               <input
                 value={query}
@@ -667,7 +667,7 @@ export default function FileTree({
             {/* Replace */}
             {showReplace && (
               <div className="flex items-center gap-1">
-                <div className="flex flex-1 items-center gap-1 rounded-md border border-black/10 bg-canvas px-1.5 py-1 focus-within:border-[#5c8bd6]">
+                <div className="flex flex-1 items-center gap-1 rounded-md border border-black/10 bg-canvas px-1.5 py-1 focus-within:border-accent">
                   <Replace size={12} className="shrink-0 text-ink-faint" />
                   <input
                     value={replacement}
@@ -700,7 +700,7 @@ export default function FileTree({
                       setOpts((o) => ({ ...o, include: e.target.value }))
                     }
                     placeholder={t('tree.includePlaceholder')}
-                    className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6] placeholder:text-ink-faint"
+                    className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-accent placeholder:text-ink-faint"
                   />
                 </div>
                 <div>
@@ -713,7 +713,7 @@ export default function FileTree({
                       setOpts((o) => ({ ...o, exclude: e.target.value }))
                     }
                     placeholder={t('tree.excludePlaceholder')}
-                    className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6] placeholder:text-ink-faint"
+                    className="w-full rounded-md border border-black/10 bg-canvas px-1.5 py-1 text-[12px] text-ink outline-none focus:border-accent placeholder:text-ink-faint"
                   />
                 </div>
               </div>
@@ -844,7 +844,7 @@ function HighlightedLine({
     if (s > cursor)
       parts.push(<span key={`p${i}`}>{chars.slice(cursor, s).join('')}</span>)
     parts.push(
-      <span key={`m${i}`} className="rounded-sm bg-[#f8d775] text-ink">
+      <span key={`m${i}`} className="rounded-sm bg-[var(--find-highlight)] text-ink">
         {chars.slice(s, e).join('')}
       </span>
     )

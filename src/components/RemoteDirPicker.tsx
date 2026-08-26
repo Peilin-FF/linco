@@ -142,7 +142,7 @@ export default function RemoteDirPicker({
             onChange={(e) => setInput(e.target.value)}
             placeholder={t('remoteDir.pathPlaceholder')}
             spellCheck={false}
-            className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1.5 font-mono text-[12.5px] text-ink outline-none focus:border-[#5c8bd6]"
+            className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1.5 font-mono text-[12.5px] text-ink outline-none focus:border-accent"
           />
           {loading && (
             <Loader2 size={14} className="shrink-0 animate-spin text-ink-faint" />
@@ -164,7 +164,7 @@ export default function RemoteDirPicker({
                 onClick={() => enter(d)}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] text-ink hover:bg-black/[0.05]"
               >
-                <Folder size={15} className="shrink-0 text-[#5c8bd6]" />
+                <Folder size={15} className="shrink-0 text-accent" />
                 <span className="flex-1 truncate">
                   {filter ? <Highlight text={d} q={filter} /> : d}
                 </span>

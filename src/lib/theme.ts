@@ -1,4 +1,4 @@
-// 主题系统:VSCode 风格多主题 + 字体/字号。
+// Theme system: VS Code Light/Dark Modern plus configurable fonts.
 //
 // 架构:全 app 颜色经 tailwind 的 canvas/sidebar/ink/accent 引用 CSS 变量(见 tailwind.config.js),
 // 换主题 = 改 document.documentElement 上的 --canvas/--sidebar/... 变量值,无需改任何组件。
@@ -14,10 +14,45 @@ export interface ThemeVars {
   inkMuted: string
   inkFaint: string
   accent: string
-  border?: string
-  hover?: string
-  selection?: string
-  shadow?: string
+  border: string
+  hover: string
+  selection: string
+  inputBackground: string
+  inputBorder: string
+  inputPlaceholder: string
+  widget: string
+  buttonHover: string
+  buttonSecondary: string
+  buttonSecondaryHover: string
+  link: string
+  error: string
+  warning: string
+  editorSelection: string
+  editorCursor: string
+  editorLineNumber: string
+  editorLineNumberActive: string
+  diffAdded: string
+  diffDeleted: string
+  diffAddedForeground: string
+  diffDeletedForeground: string
+  diffHunk: string
+  shadow: string
+}
+
+export interface SyntaxColors {
+  comment: string
+  keyword: string
+  controlKeyword: string
+  variable: string
+  function: string
+  type: string
+  property: string
+  string: string
+  number: string
+  regexp: string
+  tag: string
+  attribute: string
+  invalid: string
 }
 
 export interface Theme {
@@ -25,9 +60,42 @@ export interface Theme {
   name: string
   dark: boolean
   vars: ThemeVars
+  syntax: SyntaxColors
 }
 
-// VSCode 热门主题的近似配色(取其编辑器背景/前景/强调)。
+// Workbench values are copied from VS Code's bundled Modern themes.
+export const VSCODE_LIGHT_SYNTAX: SyntaxColors = {
+  comment: '#008000',
+  keyword: '#0000ff',
+  controlKeyword: '#af00db',
+  variable: '#001080',
+  function: '#795e26',
+  type: '#267f99',
+  property: '#0451a5',
+  string: '#a31515',
+  number: '#098658',
+  regexp: '#811f3f',
+  tag: '#800000',
+  attribute: '#ff0000',
+  invalid: '#cd3131'
+}
+
+export const VSCODE_DARK_SYNTAX: SyntaxColors = {
+  comment: '#6a9955',
+  keyword: '#569cd6',
+  controlKeyword: '#c586c0',
+  variable: '#9cdcfe',
+  function: '#dcdcaa',
+  type: '#4ec9b0',
+  property: '#9cdcfe',
+  string: '#ce9178',
+  number: '#b5cea8',
+  regexp: '#d16969',
+  tag: '#569cd6',
+  attribute: '#9cdcfe',
+  invalid: '#f44747'
+}
+
 export const THEMES: Theme[] = [
   {
     id: 'vscode-light',
@@ -43,8 +111,28 @@ export const THEMES: Theme[] = [
       border: '#e5e5e5',
       hover: '#f2f2f2',
       selection: '#e8e8e8',
+      inputBackground: '#ffffff',
+      inputBorder: '#cecece',
+      inputPlaceholder: '#767676',
+      widget: '#f8f8f8',
+      buttonHover: '#0258a8',
+      buttonSecondary: '#e5e5e5',
+      buttonSecondaryHover: '#cccccc',
+      link: '#005fb8',
+      error: '#f85149',
+      warning: '#bf8803',
+      editorSelection: '#add6ff',
+      editorCursor: '#000000',
+      editorLineNumber: '#6e7681',
+      editorLineNumberActive: '#171184',
+      diffAdded: '#9bb95533',
+      diffDeleted: '#ff000033',
+      diffAddedForeground: '#2ea043',
+      diffDeletedForeground: '#f85149',
+      diffHunk: '#005fb81a',
       shadow: '0 2px 8px rgba(0, 0, 0, 0.16)'
-    }
+    },
+    syntax: VSCODE_LIGHT_SYNTAX
   },
   {
     id: 'vscode-dark',
@@ -60,86 +148,28 @@ export const THEMES: Theme[] = [
       border: '#2b2b2b',
       hover: '#2b2b2b',
       selection: '#37373d',
+      inputBackground: '#313131',
+      inputBorder: '#3c3c3c',
+      inputPlaceholder: '#989898',
+      widget: '#202020',
+      buttonHover: '#026ec1',
+      buttonSecondary: '#00000000',
+      buttonSecondaryHover: '#2b2b2b',
+      link: '#4daafc',
+      error: '#f85149',
+      warning: '#cca700',
+      editorSelection: '#264f78',
+      editorCursor: '#aeafad',
+      editorLineNumber: '#6e7681',
+      editorLineNumberActive: '#cccccc',
+      diffAdded: '#9bb95533',
+      diffDeleted: '#ff000033',
+      diffAddedForeground: '#2ea043',
+      diffDeletedForeground: '#f85149',
+      diffHunk: '#0078d41f',
       shadow: '0 2px 8px rgba(0, 0, 0, 0.36)'
-    }
-  },
-  {
-    id: 'one-dark',
-    name: 'One Dark Pro',
-    dark: true,
-    vars: {
-      canvas: '#282c34',
-      sidebar: '#21252b',
-      ink: '#abb2bf',
-      inkMuted: '#828997',
-      inkFaint: '#5c6370',
-      accent: '#61afef'
-    }
-  },
-  {
-    id: 'monokai',
-    name: 'Monokai',
-    dark: true,
-    vars: {
-      canvas: '#272822',
-      sidebar: '#1e1f1c',
-      ink: '#f8f8f2',
-      inkMuted: '#a6a59b',
-      inkFaint: '#75715e',
-      accent: '#a6e22e'
-    }
-  },
-  {
-    id: 'dracula',
-    name: 'Dracula',
-    dark: true,
-    vars: {
-      canvas: '#282a36',
-      sidebar: '#21222c',
-      ink: '#f8f8f2',
-      inkMuted: '#a8aac0',
-      inkFaint: '#6272a4',
-      accent: '#bd93f9'
-    }
-  },
-  {
-    id: 'solarized-light',
-    name: 'Solarized Light',
-    dark: false,
-    vars: {
-      canvas: '#fdf6e3',
-      sidebar: '#eee8d5',
-      ink: '#586e75',
-      inkMuted: '#839496',
-      inkFaint: '#93a1a1',
-      accent: '#268bd2'
-    }
-  },
-  {
-    id: 'solarized-dark',
-    name: 'Solarized Dark',
-    dark: true,
-    vars: {
-      canvas: '#002b36',
-      sidebar: '#073642',
-      ink: '#93a1a1',
-      inkMuted: '#839496',
-      inkFaint: '#586e75',
-      accent: '#268bd2'
-    }
-  },
-  {
-    id: 'nord',
-    name: 'Nord',
-    dark: true,
-    vars: {
-      canvas: '#2e3440',
-      sidebar: '#3b4252',
-      ink: '#eceff4',
-      inkMuted: '#d8dee9',
-      inkFaint: '#7b88a1',
-      accent: '#88c0d0'
-    }
+    },
+    syntax: VSCODE_DARK_SYNTAX
   }
 ]
 
@@ -147,7 +177,13 @@ export const DEFAULT_THEME_ID = 'vscode-light'
 
 const LEGACY_THEME_IDS: Record<string, string> = {
   'github-light': 'vscode-light',
-  'github-dark': 'vscode-dark'
+  'github-dark': 'vscode-dark',
+  'solarized-light': 'vscode-light',
+  'one-dark': 'vscode-dark',
+  monokai: 'vscode-dark',
+  dracula: 'vscode-dark',
+  'solarized-dark': 'vscode-dark',
+  nord: 'vscode-dark'
 }
 
 export function themeById(id: string | undefined): Theme {
@@ -166,19 +202,29 @@ export function applyTheme(id: string | undefined): void {
   root.style.setProperty('--ink-muted', v.inkMuted)
   root.style.setProperty('--ink-faint', v.inkFaint)
   root.style.setProperty('--accent', v.accent)
-  root.style.setProperty('--border', v.border || (t.dark ? '#3c3c3c' : '#e5e5e5'))
-  root.style.setProperty('--hover', v.hover || (t.dark ? '#ffffff12' : '#0000000d'))
-  root.style.setProperty(
-    '--selection',
-    v.selection || (t.dark ? '#ffffff1a' : '#00000012')
-  )
-  root.style.setProperty(
-    '--shadow-card',
-    v.shadow ||
-      (t.dark
-        ? '0 2px 8px rgba(0, 0, 0, 0.36)'
-        : '0 2px 8px rgba(0, 0, 0, 0.16)')
-  )
+  root.style.setProperty('--border', v.border)
+  root.style.setProperty('--hover', v.hover)
+  root.style.setProperty('--selection', v.selection)
+  root.style.setProperty('--input-background', v.inputBackground)
+  root.style.setProperty('--input-border', v.inputBorder)
+  root.style.setProperty('--input-placeholder', v.inputPlaceholder)
+  root.style.setProperty('--widget', v.widget)
+  root.style.setProperty('--button-hover', v.buttonHover)
+  root.style.setProperty('--button-secondary', v.buttonSecondary)
+  root.style.setProperty('--button-secondary-hover', v.buttonSecondaryHover)
+  root.style.setProperty('--link', v.link)
+  root.style.setProperty('--error', v.error)
+  root.style.setProperty('--warning', v.warning)
+  root.style.setProperty('--editor-selection', v.editorSelection)
+  root.style.setProperty('--editor-cursor', v.editorCursor)
+  root.style.setProperty('--editor-line-number', v.editorLineNumber)
+  root.style.setProperty('--editor-line-number-active', v.editorLineNumberActive)
+  root.style.setProperty('--diff-added', v.diffAdded)
+  root.style.setProperty('--diff-deleted', v.diffDeleted)
+  root.style.setProperty('--diff-added-foreground', v.diffAddedForeground)
+  root.style.setProperty('--diff-deleted-foreground', v.diffDeletedForeground)
+  root.style.setProperty('--diff-hunk', v.diffHunk)
+  root.style.setProperty('--shadow-card', v.shadow)
   root.style.colorScheme = t.dark ? 'dark' : 'light'
   root.setAttribute('data-theme', t.id)
   root.setAttribute('data-theme-dark', t.dark ? '1' : '0')
@@ -278,10 +324,9 @@ export function terminalTheme(theme: Theme = currentTheme()): ITheme {
   return {
     background: theme.vars.canvas,
     foreground: theme.vars.ink,
-    cursor: theme.vars.accent,
+    cursor: theme.dark ? theme.vars.ink : theme.vars.accent,
     cursorAccent: theme.vars.canvas,
-    selectionBackground:
-      theme.vars.selection || (theme.dark ? '#ffffff1a' : '#00000012'),
+    selectionBackground: theme.vars.editorSelection,
     extendedAnsi,
     ...ansi
   }

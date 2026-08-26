@@ -27,6 +27,9 @@ import {
 } from '@/lib/usage'
 import { useI18n } from '@/lib/i18n'
 import { observeTheme, terminalTheme } from '@/lib/theme'
+import { TerminalReplayBatcher } from '@/lib/terminalReplay'
+import { enableTerminalWebgl } from '@/lib/terminalWebgl'
+import { TmuxWheelThrottle } from '@/lib/terminalWheel'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 function commandName(command?: string): string | undefined {
@@ -56,6 +59,8 @@ export interface TerminalHandle {
 
 interface TerminalViewProps {
   id: string
+  /** Whether this persistent terminal is currently visible to the user. */
+  visible?: boolean
   cwd?: string
   env?: Record<string, string>
   /** PTY 起来后自动执行的命令(如 `claude`) */
@@ -73,7 +78,18 @@ interface TerminalViewProps {
 
 const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
   function TerminalView(
-    { id, cwd, env, initialCommand, host, identity, onActivity, onExit, usage },
+    {
+      id,
+      visible = true,
+      cwd,
+      env,
+      initialCommand,
+      host,
+      identity,
+      onActivity,
+      onExit,
+      usage
+    },
     ref
   ) {
     const hostRef = useRef<HTMLDivElement>(null)
@@ -103,6 +119,8 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const outputQueueRef = useRef<Uint8Array[]>([])
     const outputFrameRef = useRef<number | null>(null)
     const decoderRef = useRef(new TextDecoder())
+    const visibleRef = useRef(visible)
+    const syncVisibleRef = useRef<(() => void) | null>(null)
     hostRef2.current = host
     identityRef.current = identity
     cwdRef.current = cwd
@@ -111,6 +129,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     onActivityRef.current = onActivity
     onExitRef.current = onExit
     usageRef.current = usage
+    visibleRef.current = visible
 
     useImperativeHandle(ref, () => ({
       send: (text: string) => {
@@ -170,7 +189,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       }
       // 让 host 内边距区域也跟随终端背景,避免深色下出现白边框
       host.style.background = terminalTheme().background || ''
+      const webgl = enableTerminalWebgl(term, (kind) => {
+        host.dataset.terminalRenderer = kind
+      })
+      const recordTerminalDimensions = (): void => {
+        host.dataset.terminalCols = String(term.cols)
+        host.dataset.terminalRows = String(term.rows)
+      }
       fit.fit()
+      recordTerminalDimensions()
       termRef.current = term
       fitRef.current = fit
 
@@ -183,6 +210,63 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         | { kind: 'output'; gen: number; bytes: Uint8Array }
         | { kind: 'exit'; gen: number }
       let startupEvents: StartupEvent[] = []
+      let codexActive = isCodexCommand(initCmdRef.current, usageRef.current)
+      let codexProbe = ''
+      let codexBannerSeen = false
+      let commandProbe = ''
+      const codexOutputDecoder = new TextDecoder()
+      let replayRevealFrame: number | null = null
+      const replayBatcher = new TerminalReplayBatcher({
+        write: (bytes, onParsed) => term.write(bytes, onParsed),
+        onStart: () => {
+          if (replayRevealFrame !== null) {
+            window.cancelAnimationFrame(replayRevealFrame)
+            replayRevealFrame = null
+          }
+          host.style.visibility = 'hidden'
+        },
+        onComplete: () => {
+          term.scrollToBottom()
+          replayRevealFrame = window.requestAnimationFrame(() => {
+            replayRevealFrame = null
+            if (disposed) return
+            host.style.visibility = 'visible'
+            term.refresh(0, Math.max(0, term.rows - 1))
+          })
+        },
+        onError: (error) => console.warn('[terminal] replay batch failed', error)
+      })
+
+      const inspectTerminalInput = (data: string): void => {
+        if (codexActive) return
+        for (const char of data) {
+          if (char === '\r' || char === '\n') {
+            if (/(^|\s)(?:[^\s/\\]+[/\\])?codex(?:\.exe)?(?=\s|$)/i.test(commandProbe)) {
+              codexActive = true
+            }
+            commandProbe = ''
+          } else if (char === '\x7f' || char === '\b') {
+            commandProbe = commandProbe.slice(0, -1)
+          } else if (char >= ' ' && char !== '\x7f') {
+            commandProbe = (commandProbe + char).slice(-512)
+          }
+        }
+      }
+
+      const inspectTerminalOutput = (
+        bytes: Uint8Array
+      ): { startsReplay: boolean } => {
+        codexProbe = (
+          codexProbe + codexOutputDecoder.decode(bytes, { stream: true })
+        ).slice(-4096)
+        const hasBanner = /OpenAI Codex/i.test(codexProbe)
+        const startsReplay = hasBanner && !codexBannerSeen
+        if (hasBanner || /Ask Codex to do anything/i.test(codexProbe)) {
+          codexActive = true
+          codexBannerSeen ||= hasBanner
+        }
+        return { startsReplay }
+      }
 
       const flushTerminalOutput = (): void => {
         outputFrameRef.current = null
@@ -198,7 +282,11 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           offset += chunk.length
         }
 
-        term.write(bytes)
+        const inspection = inspectTerminalOutput(bytes)
+        if (inspection.startsReplay) replayBatcher.begin()
+        if (!replayBatcher.push(bytes)) {
+          term.write(bytes)
+        }
         const usage = usageRef.current
         if (usage) {
           usageBufferRef.current += decoderRef.current.decode(bytes, { stream: true })
@@ -236,7 +324,13 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       }
 
       // 用户在终端里键入 → 写回 PTY
-      const dataSub = term.onData((d) => termWrite(id, d))
+      const dataSub = term.onData((d) => {
+        inspectTerminalInput(d)
+        termWrite(id, d)
+      })
+      const titleSub = term.onTitleChange((title) => {
+        if (/\bcodex\b/i.test(title)) codexActive = true
+      })
 
       // 复制/粘贴键处理(尤其 Windows:Ctrl+C/V 默认不是复制粘贴)。
       // 平台区分:macOS 用 Cmd(metaKey),Ctrl+C 保持 SIGINT 中断不动;
@@ -298,13 +392,64 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         return true
       })
 
+      interface TmuxWheelSnapshot {
+        clientX: number
+        clientY: number
+        deltaY: number
+        altKey: boolean
+      }
+
+      let forwardingTmuxWheel = false
+      const tmuxWheelThrottle = new TmuxWheelThrottle<TmuxWheelSnapshot>((snapshot) => {
+        if (
+          disposed ||
+          term.modes.mouseTrackingMode === 'none' ||
+          !term.element
+        ) {
+          return
+        }
+
+        forwardingTmuxWheel = true
+        try {
+          term.element.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              clientX: snapshot.clientX,
+              clientY: snapshot.clientY,
+              deltaY: snapshot.deltaY,
+              deltaMode: WheelEvent.DOM_DELTA_LINE,
+              altKey: snapshot.altKey
+            })
+          )
+        } finally {
+          forwardingTmuxWheel = false
+        }
+      })
+
       let wheelRemainder = 0
       term.attachCustomWheelEventHandler((event): boolean => {
+        if (forwardingTmuxWheel) return true
         if (event.ctrlKey || event.metaKey || event.shiftKey || event.deltaY === 0) {
           return true
         }
 
-        if (!isCodexCommand(initCmdRef.current, usageRef.current)) return true
+        // Mouse tracking sends every wheel event through SSH and makes tmux redraw
+        // the pane. Coalesce high-frequency events so remote input cannot backlog.
+        if (term.modes.mouseTrackingMode !== 'none') {
+          wheelRemainder = 0
+          event.preventDefault()
+          event.stopPropagation()
+          tmuxWheelThrottle.push({
+            clientX: event.clientX,
+            clientY: event.clientY,
+            deltaY: event.deltaY < 0 ? -1 : 1,
+            altKey: event.altKey
+          })
+          return false
+        }
+
+        if (!codexActive) return true
 
         const lineHeight =
           Number(term.options.fontSize ?? 13.5) * Number(term.options.lineHeight ?? 1)
@@ -329,12 +474,61 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
       // 启动(或重启)PTY 会话:重连时复用同一函数。
       let started = false // 会话建好前不发 resize(减少无谓调用)
+      let resizeFrame: number | null = null
+      let sentCols = 0
+      let sentRows = 0
+      const fitAndResize = (force = false): void => {
+        if (!visibleRef.current) return
+        try {
+          const proposed = fit.proposeDimensions()
+          const ptyWillResize =
+            started &&
+            proposed !== undefined &&
+            (proposed.cols !== sentCols || proposed.rows !== sentRows)
+          if (!force && ptyWillResize && codexActive && codexBannerSeen) {
+            // Hide before fit() reflows the local buffer, then batch the Codex
+            // redraw produced by the matching PTY resize below.
+            codexProbe = ''
+            replayBatcher.begin()
+          }
+          fit.fit()
+          recordTerminalDimensions()
+          const sizeChanged = term.cols !== sentCols || term.rows !== sentRows
+          if (started && (force || sizeChanged)) {
+            sentCols = term.cols
+            sentRows = term.rows
+            termResize(id, term.cols, term.rows)
+          }
+        } catch {
+          /* 容器临时为 0 时忽略 */
+        }
+      }
+      const syncStartedPtySize = (): void => {
+        fitAndResize(true)
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null
+          fitAndResize()
+        })
+      }
+      const syncVisibleSize = (): void => {
+        fitAndResize()
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+        resizeFrame = window.requestAnimationFrame(() => {
+          resizeFrame = null
+          fitAndResize()
+        })
+      }
+      syncVisibleRef.current = syncVisibleSize
       const start = (): void => {
         const sequence = ++startSequence
         setExited(false)
         started = false
         activeGen = null
         startupEvents = []
+        codexActive = isCodexCommand(initCmdRef.current, usageRef.current)
+        codexBannerSeen = false
+        codexProbe = ''
         // Codex otherwise inserts history through a partial DEC scroll region, which
         // xterm.js may discard. Its Windows Terminal strategy uses full-screen line
         // feeds, producing native scrollback without rewriting the ANSI output.
@@ -356,6 +550,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
             activeGen = gen
             started = true
+            // Initial fit happens before the PTY exists. Send the final WebView
+            // dimensions after SSH starts so the remote tty and tmux receive WINCH.
+            syncStartedPtySize()
             const buffered = startupEvents
             startupEvents = []
             for (const event of buffered) {
@@ -421,14 +618,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       })
 
       // 尺寸自适应:容器变化时 fit + 同步 PTY(会话建好后才发 resize)
-      const ro = new ResizeObserver(() => {
-        try {
-          fit.fit()
-          if (started) termResize(id, term.cols, term.rows)
-        } catch {
-          /* 容器临时为 0 时忽略 */
-        }
-      })
+      const ro = new ResizeObserver(() => fitAndResize())
       ro.observe(host)
 
       const stopObservingTheme = observeTheme(() => {
@@ -443,10 +633,19 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         const gen = activeGen
         activeGen = null
         startupEvents = []
+        syncVisibleRef.current = null
         ro.disconnect()
+        if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
+        tmuxWheelThrottle.dispose()
+        replayBatcher.dispose()
+        if (replayRevealFrame !== null) {
+          window.cancelAnimationFrame(replayRevealFrame)
+        }
+        webgl.dispose()
         stopObservingTheme()
         host.removeEventListener('keydown', onKeyDownCapture, true)
         dataSub.dispose()
+        titleSub.dispose()
         const timer = usageTimerRef.current
         window.clearTimeout(timer ?? undefined)
         if (outputFrameRef.current !== null) {
@@ -467,9 +666,20 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id])
 
+    useEffect(() => {
+      if (visible) syncVisibleRef.current?.()
+    }, [visible])
+
     return (
       <div className="relative h-full w-full">
-        <div ref={hostRef} className="h-full w-full px-3 pt-2" />
+        <div
+          ref={hostRef}
+          data-terminal-id={id}
+          data-terminal-kind={
+            id.startsWith('chat:') ? 'chat' : id.startsWith('dock:') ? 'dock' : 'shell'
+          }
+          className="h-full w-full px-3 pt-2"
+        />
         {exited && (
           <div className="pointer-events-none absolute right-2.5 top-2 flex justify-end">
             <button

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::env;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,15 @@ pub struct OverleafProjectInfo {
     pub dirty: bool,
     pub ahead: i32,
     pub behind: i32,
+}
+
+#[derive(Serialize)]
+pub struct OverleafCollaborationResult {
+    pub remote_updated: bool,
+    pub incoming: bool,
+    pub applied: bool,
+    pub pending: bool,
+    pub info: Option<OverleafProjectInfo>,
 }
 
 #[derive(Serialize)]
@@ -55,7 +64,10 @@ fn proxy_for(host: &Option<String>) -> String {
 }
 
 fn auth_env(token: Option<&str>) -> HashMap<String, String> {
-    let mut env = HashMap::from([("GIT_TERMINAL_PROMPT".into(), "0".into())]);
+    let mut env = HashMap::from([
+        ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+        ("GCM_INTERACTIVE".into(), "Never".into()),
+    ]);
     if let Some(token) = token.filter(|value| !value.trim().is_empty()) {
         env.insert("GIT_CONFIG_COUNT".into(), "1".into());
         env.insert("GIT_CONFIG_KEY_0".into(), "http.extraHeader".into());
@@ -70,12 +82,7 @@ fn auth_env(token: Option<&str>) -> HashMap<String, String> {
     env
 }
 
-fn run_git(
-    host: &Option<String>,
-    cwd: &str,
-    args: &[&str],
-    token: Option<&str>,
-) -> Result<GitOutput, String> {
+fn git_env(host: &Option<String>, token: Option<&str>) -> HashMap<String, String> {
     let mut env = auth_env(token);
     let proxy = proxy_for(host);
     if !proxy.trim().is_empty() {
@@ -83,6 +90,71 @@ fn run_git(
             env.insert(name.into(), proxy.trim().into());
         }
     }
+    env
+}
+
+fn kill_child_tree(child: &mut Child) {
+    #[cfg(windows)]
+    {
+        let mut command = Command::new("taskkill");
+        command.args(["/PID", &child.id().to_string(), "/T", "/F"]);
+        crate::proc_ext::no_window(&mut command);
+        let _ = command.output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+fn wait_child_output(mut child: Child, timeout: Duration) -> Result<GitOutput, String> {
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                kill_child_tree(&mut child);
+                return Err(format!(
+                    "Git operation timed out after {} seconds",
+                    timeout.as_secs()
+                ));
+            }
+            Err(error) => {
+                kill_child_tree(&mut child);
+                return Err(format!("Unable to wait for Git: {error}"));
+            }
+        }
+    };
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    if let Some(ref mut pipe) = stdout {
+        pipe.read_to_end(&mut stdout_bytes)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(ref mut pipe) = stderr {
+        pipe.read_to_end(&mut stderr_bytes)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(GitOutput {
+        code: status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout_bytes).to_string(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+    })
+}
+
+fn run_git(
+    host: &Option<String>,
+    cwd: &str,
+    args: &[&str],
+    token: Option<&str>,
+) -> Result<GitOutput, String> {
+    let env = git_env(host, token);
 
     if let Some(remote_host) = host.as_deref().filter(|value| !value.is_empty()) {
         let value = crate::agent_rpc::call_background_timeout(
@@ -122,6 +194,53 @@ fn run_git(
     })
 }
 
+fn run_git_quick(
+    host: &Option<String>,
+    cwd: &str,
+    args: &[&str],
+    token: Option<&str>,
+) -> Result<GitOutput, String> {
+    const QUICK_TIMEOUT: Duration = Duration::from_secs(15);
+    let env = git_env(host, token);
+    if let Some(remote_host) = host.as_deref().filter(|value| !value.is_empty()) {
+        let value = crate::agent_rpc::call_background_timeout(
+            remote_host,
+            "git",
+            serde_json::json!({ "repo": cwd, "args": args, "env": env, "timeout": 15 }),
+            Duration::from_secs(20),
+        )?;
+        return Ok(GitOutput {
+            code: value
+                .get("code")
+                .and_then(|item| item.as_i64())
+                .unwrap_or(-1) as i32,
+            stdout: value
+                .get("stdout")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            stderr: value
+                .get("stderr")
+                .and_then(|item| item.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+
+    let mut command = Command::new("git");
+    command
+        .args(args)
+        .current_dir(cwd)
+        .envs(env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::proc_ext::no_window(&mut command);
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Unable to run Git: {error}"))?;
+    wait_child_output(child, QUICK_TIMEOUT)
+}
+
 fn git_ok(
     host: &Option<String>,
     cwd: &str,
@@ -129,6 +248,25 @@ fn git_ok(
     token: Option<&str>,
 ) -> Result<String, String> {
     let output = run_git(host, cwd, args, token)?;
+    if output.code == 0 {
+        Ok(output.stdout)
+    } else {
+        let detail = if output.stderr.trim().is_empty() {
+            output.stdout
+        } else {
+            output.stderr
+        };
+        Err(detail.trim().to_string())
+    }
+}
+
+fn git_ok_quick(
+    host: &Option<String>,
+    cwd: &str,
+    args: &[&str],
+    token: Option<&str>,
+) -> Result<String, String> {
+    let output = run_git_quick(host, cwd, args, token)?;
     if output.code == 0 {
         Ok(output.stdout)
     } else {
@@ -192,6 +330,8 @@ fn remember_token(url: &str, token: &str) -> Result<(), String> {
     let mut child = Command::new("git");
     child
         .args(["credential", "approve"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -205,13 +345,11 @@ fn remember_token(url: &str, token: &str) -> Result<(), String> {
             )
             .map_err(|error| error.to_string())?;
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
+    let output = wait_child_output(child, Duration::from_secs(10))?;
+    if output.code == 0 {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(output.stderr.trim().to_string())
     }
 }
 
@@ -221,6 +359,7 @@ fn saved_token(url: &str) -> Option<String> {
     command
         .args(["credential", "fill"])
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -231,13 +370,36 @@ fn saved_token(url: &str) -> Option<String> {
         .take()?
         .write_all(format!("protocol=https\nhost={host}\nusername=git\n\n").as_bytes())
         .ok()?;
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
+    let output = wait_child_output(child, Duration::from_secs(3)).ok()?;
+    if output.code != 0 {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
+    output
+        .stdout
         .lines()
         .find_map(|line| line.strip_prefix("password=").map(str::to_string))
+}
+
+fn token_cache() -> &'static Mutex<HashMap<String, String>> {
+    static TOKENS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    TOKENS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn token_cache_key(url: &str) -> String {
+    url_host(url).unwrap_or(url).to_ascii_lowercase()
+}
+
+fn cache_token(url: &str, token: &str) {
+    if let Ok(mut tokens) = token_cache().lock() {
+        tokens.insert(token_cache_key(url), token.to_string());
+    }
+}
+
+fn cached_token(url: &str) -> Option<String> {
+    token_cache()
+        .lock()
+        .ok()
+        .and_then(|tokens| tokens.get(&token_cache_key(url)).cloned())
 }
 
 fn overleaf_remote(host: &Option<String>, repo: &str) -> Result<(String, String), String> {
@@ -251,6 +413,111 @@ fn overleaf_remote(host: &Option<String>, repo: &str) -> Result<(String, String)
         }
     }
     Err("This repository is not connected to Overleaf".into())
+}
+
+fn collaboration_heads() -> &'static Mutex<HashMap<String, String>> {
+    static HEADS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    HEADS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn collaboration_remotes() -> &'static Mutex<HashMap<String, (String, String)>> {
+    static REMOTES: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
+    REMOTES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn collaboration_repo_key(host: &Option<String>, repo: &str) -> String {
+    format!("{}\n{repo}", host.as_deref().unwrap_or_default())
+}
+
+fn collaboration_remote(host: &Option<String>, repo: &str) -> Result<(String, String), String> {
+    let key = collaboration_repo_key(host, repo);
+    if let Some(remote) = collaboration_remotes()
+        .lock()
+        .ok()
+        .and_then(|remotes| remotes.get(&key).cloned())
+    {
+        return Ok(remote);
+    }
+    let remote = overleaf_remote(host, repo)?;
+    if let Ok(mut remotes) = collaboration_remotes().lock() {
+        remotes.insert(key, remote.clone());
+    }
+    Ok(remote)
+}
+
+fn collaboration_key(host: &Option<String>, repo: &str, remote: &str) -> String {
+    format!("{}\n{repo}\n{remote}", host.as_deref().unwrap_or_default())
+}
+
+fn remember_collaboration_head(key: String, oid: String) {
+    if let Ok(mut heads) = collaboration_heads().lock() {
+        heads.insert(key, oid);
+    }
+}
+
+fn remembered_collaboration_head(key: &str) -> Option<String> {
+    collaboration_heads()
+        .lock()
+        .ok()
+        .and_then(|heads| heads.get(key).cloned())
+}
+
+fn remote_master_ref(remote: &str) -> String {
+    format!("refs/remotes/{remote}/master")
+}
+
+fn parse_ls_remote_head(output: &str) -> Result<String, String> {
+    output
+        .lines()
+        .find_map(|line| line.split_whitespace().next())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| "Overleaf did not return a master branch".into())
+}
+
+fn overleaf_master_oid(
+    host: &Option<String>,
+    repo: &str,
+    remote: &str,
+    token: &str,
+) -> Result<String, String> {
+    parse_ls_remote_head(&git_ok_quick(
+        host,
+        repo,
+        &["ls-remote", "--heads", remote, "refs/heads/master"],
+        Some(token),
+    )?)
+}
+
+fn fetch_overleaf_master(
+    host: &Option<String>,
+    repo: &str,
+    remote: &str,
+    token: &str,
+) -> Result<(), String> {
+    let destination = remote_master_ref(remote);
+    git_ok(
+        host,
+        repo,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            remote,
+            &format!("+refs/heads/master:{destination}"),
+        ],
+        Some(token),
+    )?;
+    Ok(())
+}
+
+fn remember_published_head(host: &Option<String>, repo: &str, remote: &str) {
+    if let Ok(oid) = git_ok(host, repo, &["rev-parse", "HEAD"], None) {
+        remember_collaboration_head(
+            collaboration_key(host, repo, remote),
+            oid.trim().to_string(),
+        );
+    }
 }
 
 fn empty_info(branch: String) -> OverleafProjectInfo {
@@ -316,11 +583,18 @@ fn info(host: &Option<String>, repo: &str) -> Result<OverleafProjectInfo, String
 }
 
 fn token_for(url: &str, supplied: Option<&str>) -> Result<String, String> {
-    supplied
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| saved_token(url))
-        .ok_or_else(|| "OVERLEAF_AUTH_REQUIRED: Enter your Overleaf Git token".into())
+    if let Some(token) = supplied.filter(|value| !value.trim().is_empty()) {
+        cache_token(url, token);
+        return Ok(token.to_string());
+    }
+    if let Some(token) = cached_token(url) {
+        return Ok(token);
+    }
+    if let Some(token) = saved_token(url) {
+        cache_token(url, &token);
+        return Ok(token);
+    }
+    Err("OVERLEAF_AUTH_REQUIRED: Enter your Overleaf Git token".into())
 }
 
 #[tauri::command]
@@ -372,6 +646,7 @@ pub async fn overleaf_clone(
             &["clone", "--origin", "overleaf", "--", &url, &name],
             Some(token.trim()),
         )?;
+        cache_token(&url, token.trim());
         if remember {
             remember_token(&url, token.trim())?;
         }
@@ -389,12 +664,24 @@ pub async fn overleaf_pull(
     crate::blocking::run(move || {
         let (remote, url) = overleaf_remote(&host, &repo)?;
         let auth = token_for(&url, token.as_deref())?;
-        git_ok(
-            &host,
-            &repo,
-            &["pull", "--rebase", "--autostash", &remote, "master"],
-            Some(&auth),
-        )?;
+        fetch_overleaf_master(&host, &repo, &remote, &auth)?;
+        let remote_ref = remote_master_ref(&remote);
+        let rebase = run_git(&host, &repo, &["rebase", "--autostash", &remote_ref], None)?;
+        if rebase.code != 0 {
+            let _ = run_git(&host, &repo, &["rebase", "--abort"], None);
+            let detail = if rebase.stderr.trim().is_empty() {
+                rebase.stdout
+            } else {
+                rebase.stderr
+            };
+            return Err(format!("OVERLEAF_SYNC_CONFLICT: {}", detail.trim()));
+        }
+        if let Ok(oid) = git_ok(&host, &repo, &["rev-parse", &remote_ref], None) {
+            remember_collaboration_head(
+                collaboration_key(&host, &repo, &remote),
+                oid.trim().to_string(),
+            );
+        }
         info(&host, &repo)
     })
     .await
@@ -414,6 +701,9 @@ pub async fn overleaf_store_token(
         if remember {
             let (_, url) = overleaf_remote(&host, &repo)?;
             remember_token(&url, token.trim())?;
+            cache_token(&url, token.trim());
+        } else if let Ok((_, url)) = overleaf_remote(&host, &repo) {
+            cache_token(&url, token.trim());
         }
         Ok(())
     })
@@ -436,6 +726,9 @@ pub async fn overleaf_publish(
             let name = git_ok(&host, &repo, &["config", "user.name"], None).unwrap_or_default();
             if name.trim().is_empty() {
                 git_ok(&host, &repo, &["config", "user.name", "Linco Author"], None)?;
+            }
+            let email = git_ok(&host, &repo, &["config", "user.email"], None).unwrap_or_default();
+            if email.trim().is_empty() {
                 git_ok(&host, &repo, &["config", "user.email", "linco@local"], None)?;
             }
             let commit_message = if message.trim().is_empty() {
@@ -447,16 +740,113 @@ pub async fn overleaf_publish(
         } else if staged.code != 0 {
             return Err(staged.stderr);
         }
-        git_ok(
-            &host,
-            &repo,
-            &["pull", "--rebase", "--autostash", &remote, "master"],
-            Some(&auth),
-        )?;
+        fetch_overleaf_master(&host, &repo, &remote, &auth)?;
+        let remote_ref = remote_master_ref(&remote);
+        let rebase = run_git(&host, &repo, &["rebase", &remote_ref], None)?;
+        if rebase.code != 0 {
+            let _ = run_git(&host, &repo, &["rebase", "--abort"], None);
+            let detail = if rebase.stderr.trim().is_empty() {
+                rebase.stdout
+            } else {
+                rebase.stderr
+            };
+            return Err(format!("OVERLEAF_SYNC_CONFLICT: {}", detail.trim()));
+        }
         git_ok(&host, &repo, &["push", &remote, "HEAD:master"], Some(&auth))?;
+        remember_published_head(&host, &repo, &remote);
         info(&host, &repo)
     })
     .await
+}
+
+fn collaboration_poll(
+    repo: &str,
+    token: Option<&str>,
+    host: &Option<String>,
+) -> Result<OverleafCollaborationResult, String> {
+    let (remote, url) = collaboration_remote(host, repo)?;
+    let auth = token_for(&url, token)?;
+    let remote_oid = overleaf_master_oid(host, repo, &remote, &auth)?;
+    let key = collaboration_key(host, repo, &remote);
+    if remembered_collaboration_head(&key).as_deref() == Some(remote_oid.as_str()) {
+        return Ok(OverleafCollaborationResult {
+            remote_updated: false,
+            incoming: false,
+            applied: false,
+            pending: false,
+            info: None,
+        });
+    }
+
+    let remote_ref = remote_master_ref(&remote);
+    let tracked_oid =
+        git_ok(host, repo, &["rev-parse", "--verify", &remote_ref], None).unwrap_or_default();
+    if tracked_oid.trim() != remote_oid {
+        fetch_overleaf_master(host, repo, &remote, &auth)?;
+    }
+
+    let next = info(host, repo)?;
+    let incoming = next.behind > 0;
+    let pending = next.behind > 0;
+    if !pending {
+        remember_collaboration_head(key, remote_oid);
+    }
+    Ok(OverleafCollaborationResult {
+        remote_updated: true,
+        incoming,
+        applied: false,
+        pending,
+        info: Some(next),
+    })
+}
+
+fn collaboration_apply(
+    repo: &str,
+    host: &Option<String>,
+) -> Result<OverleafCollaborationResult, String> {
+    let (remote, _) = collaboration_remote(host, repo)?;
+    let remote_ref = remote_master_ref(&remote);
+    let mut next = info(host, repo)?;
+    let incoming = next.behind > 0;
+    let mut applied = false;
+    if incoming && !next.dirty && next.ahead == 0 {
+        git_ok(host, repo, &["merge", "--ff-only", &remote_ref], None)?;
+        next = info(host, repo)?;
+        applied = true;
+    }
+    let pending = next.behind > 0;
+    if !pending {
+        if let Ok(oid) = git_ok(host, repo, &["rev-parse", &remote_ref], None) {
+            remember_collaboration_head(
+                collaboration_key(host, repo, &remote),
+                oid.trim().to_string(),
+            );
+        }
+    }
+    Ok(OverleafCollaborationResult {
+        remote_updated: false,
+        incoming,
+        applied,
+        pending,
+        info: Some(next),
+    })
+}
+
+#[tauri::command]
+pub async fn overleaf_collaboration_poll(
+    repo: String,
+    token: Option<String>,
+    host: Option<String>,
+) -> Result<OverleafCollaborationResult, String> {
+    crate::blocking::run(move || collaboration_poll(&repo, token.as_deref(), &host)).await
+}
+
+#[tauri::command]
+pub async fn overleaf_collaboration_apply(
+    repo: String,
+    host: Option<String>,
+) -> Result<OverleafCollaborationResult, String> {
+    crate::blocking::run(move || collaboration_apply(&repo, &host)).await
 }
 
 fn compile_output_dir(repo: &str, host: &Option<String>) -> String {
@@ -947,6 +1337,30 @@ pub async fn latex_compile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_git(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .expect("git should run in collaboration test");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn configure_test_author(repo: &Path) {
+        test_git(repo, &["config", "user.name", "Linco Test"]);
+        test_git(
+            repo,
+            &["config", "user.email", "linco-test@example.invalid"],
+        );
+    }
 
     #[test]
     fn normalizes_cloud_project_urls() {
@@ -963,5 +1377,108 @@ mod tests {
     #[test]
     fn rejects_non_http_git_urls() {
         assert!(normalize_overleaf_url("git@git.overleaf.com:abc123").is_err());
+    }
+
+    #[test]
+    fn parses_remote_master_oid() {
+        assert_eq!(
+            parse_ls_remote_head("0123456789abcdef0123456789abcdef01234567\trefs/heads/master\n")
+                .unwrap(),
+            "0123456789abcdef0123456789abcdef01234567"
+        );
+        assert!(parse_ls_remote_head("").is_err());
+    }
+
+    #[test]
+    fn collaboration_poll_fetches_only_new_heads_and_preserves_dirty_drafts() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = env::temp_dir().join(format!("linco-overleaf-collaboration-{nonce}"));
+        let remote = root.join("overleaf-origin.git");
+        let author = root.join("author");
+        let local = root.join("local");
+        std::fs::create_dir_all(&root).unwrap();
+
+        test_git(&root, &["init", "--bare", remote.to_str().unwrap()]);
+        std::fs::create_dir_all(&author).unwrap();
+        test_git(&author, &["init", "-b", "master"]);
+        configure_test_author(&author);
+        std::fs::write(author.join("main.tex"), "version one\n").unwrap();
+        test_git(&author, &["add", "main.tex"]);
+        test_git(&author, &["commit", "-m", "initial"]);
+        test_git(
+            &author,
+            &["remote", "add", "overleaf", remote.to_str().unwrap()],
+        );
+        test_git(&author, &["push", "-u", "overleaf", "master"]);
+        test_git(
+            &root,
+            &[
+                "clone",
+                "--origin",
+                "overleaf",
+                remote.to_str().unwrap(),
+                local.to_str().unwrap(),
+            ],
+        );
+        configure_test_author(&local);
+
+        let local_path = local.to_string_lossy().to_string();
+        let first = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
+        assert!(first.remote_updated);
+        assert!(!first.incoming);
+        assert!(!first.pending);
+        let unchanged = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
+        assert!(!unchanged.remote_updated);
+        assert!(unchanged.info.is_none());
+
+        std::fs::write(author.join("main.tex"), "version two\n").unwrap();
+        test_git(&author, &["add", "main.tex"]);
+        test_git(&author, &["commit", "-m", "collaborator update"]);
+        test_git(&author, &["push", "overleaf", "master"]);
+
+        let fetched = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
+        assert!(fetched.remote_updated);
+        assert!(fetched.incoming);
+        assert!(!fetched.applied);
+        assert!(fetched.pending);
+        assert_eq!(
+            std::fs::read_to_string(local.join("main.tex")).unwrap(),
+            "version one\n"
+        );
+
+        let applied = collaboration_apply(&local_path, &None).unwrap();
+        assert!(applied.applied);
+        assert!(!applied.pending);
+        assert_eq!(
+            std::fs::read_to_string(local.join("main.tex")).unwrap(),
+            "version two\n"
+        );
+
+        std::fs::write(local.join("main.tex"), "local draft\n").unwrap();
+        std::fs::write(author.join("main.tex"), "version three\n").unwrap();
+        test_git(&author, &["add", "main.tex"]);
+        test_git(
+            &author,
+            &["commit", "-m", "overlapping collaborator update"],
+        );
+        test_git(&author, &["push", "overleaf", "master"]);
+
+        let pending = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
+        assert!(pending.remote_updated);
+        assert!(pending.incoming);
+        assert!(!pending.applied);
+        assert!(pending.pending);
+        let guarded = collaboration_apply(&local_path, &None).unwrap();
+        assert!(!guarded.applied);
+        assert!(guarded.pending);
+        assert_eq!(
+            std::fs::read_to_string(local.join("main.tex")).unwrap(),
+            "local draft\n"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

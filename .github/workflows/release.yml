@@ -66,9 +66,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.4:
-            - Fix native mouse-wheel scrollback in embedded Codex conversations without opening transcript mode.
-            - Preserve Codex ANSI rendering while supporting local Windows and remote Linux PTY sessions.
+            Linco 1.0.5:
+            - Add smooth Codex scrollback across Windows, remote Linux, and tmux, including fast long-session restore.
+            - Align local and remote Codex history with `/resume`.
+            - Add VS Code Light Modern and Dark Modern themes across the workbench, terminal, and code editor.
+            - Add live Overleaf collaboration while preserving dirty local drafts.
+            - Integrate Windows window controls into the Linco title bar.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

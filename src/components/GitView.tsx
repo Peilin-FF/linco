@@ -297,18 +297,18 @@ export default function GitView({
     const code = f.untracked ? '?' : (f.staged ? f.index : f.work).trim() || 'M'
     const codeColor =
       code === '?'
-        ? 'text-[#1a7f37]'
+        ? 'text-diff-added-foreground'
         : code === 'D'
-          ? 'text-[#cf222e]'
+          ? 'text-diff-deleted-foreground'
           : code === 'A'
-            ? 'text-[#1a7f37]'
-            : 'text-[#9a6700]'
+            ? 'text-diff-added-foreground'
+            : 'text-warning'
     return (
       <div
         onClick={() => setSel(f)}
         className={`group flex cursor-pointer items-center gap-1.5 px-2 py-1 text-[12.5px] ${
           sel?.path === f.path && sel?.staged === f.staged
-            ? 'bg-[#5c8bd6]/15'
+            ? 'bg-[var(--selection)]'
             : 'hover:bg-black/[0.05]'
         }`}
       >
@@ -383,10 +383,10 @@ export default function GitView({
                 !conn
                   ? 'bg-ink-faint/40'
                   : conn.status && conn.status >= 200 && conn.status < 300
-                    ? 'bg-emerald-500'
+                    ? 'bg-diff-added-foreground'
                     : conn.status
-                      ? 'bg-amber-500'
-                      : 'bg-red-500'
+                      ? 'bg-warning'
+                      : 'bg-error'
               }`}
             />
           )}
@@ -450,7 +450,7 @@ export default function GitView({
 
       {/* 远端有新提交:醒目提示拉取(behind>0) */}
       {!!status && status.behind > 0 && (
-        <div className="flex shrink-0 items-center gap-2 bg-[#5c8bd6]/12 px-3 py-1.5 text-[12.5px] text-[#2f6fd0]">
+        <div className="flex shrink-0 items-center gap-2 bg-accent/15 px-3 py-1.5 text-[12.5px] text-link">
           <ArrowDown size={14} className="shrink-0" />
           <span className="flex-1">
             {t('git.behindHint', { behind: status.behind })}
@@ -459,7 +459,7 @@ export default function GitView({
           <button
             onClick={() => run(() => gitPull(repo, host), t('git.toast.pulled'))}
             disabled={busy}
-            className="shrink-0 rounded-md bg-[#2f6fd0] px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="shrink-0 rounded-md bg-accent px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--button-hover)] disabled:opacity-50"
           >
             {t('git.pull')}
           </button>
@@ -561,7 +561,7 @@ export default function GitView({
                       void doCommit()
                     }
                   }}
-                  className="w-full resize-none rounded-md border border-black/10 bg-canvas px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-[#5c8bd6] placeholder:text-ink-faint"
+                  className="w-full resize-none rounded-md border border-black/10 bg-canvas px-2 py-1.5 text-[12.5px] text-ink outline-none focus:border-accent placeholder:text-ink-faint"
                 />
                 <button
                   onClick={() => void doCommit()}
@@ -589,7 +589,7 @@ export default function GitView({
                         onClick={() =>
                           run(() => gitDiscard(repo, sel.path, sel.untracked, host))
                         }
-                        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-faint hover:bg-black/5 hover:text-[#cf222e]"
+                        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-ink-faint hover:bg-black/5 hover:text-error"
                         title={t('git.discardTitle')}
                       >
                         <Undo2 size={12} />{t('git.discard')}
@@ -617,7 +617,7 @@ export default function GitView({
               <select
                 value={historyRev}
                 onChange={(e) => setHistoryRev(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 text-[12px] text-ink outline-none focus:border-[#5c8bd6]"
+                className="min-w-0 flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 text-[12px] text-ink outline-none focus:border-accent"
               >
                 <option value="">{t('git.currentBranch', { branch: status?.branch || 'HEAD' })}</option>
                 {branches
@@ -639,7 +639,7 @@ export default function GitView({
                     className="cursor-pointer border-b border-black/5 px-3 py-1.5 hover:bg-black/[0.04]"
                   >
                     <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[11px] text-[#2f6fd0]">
+                      <span className="font-mono text-[11px] text-link">
                         {c.short}
                       </span>
                       <span className="truncate text-[12.5px] text-ink">
@@ -684,12 +684,12 @@ export default function GitView({
                   !b.current && run(() => gitCheckout(repo, b.name, host), t('git.toast.switched', { name: b.name }))
                 }
                 className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-[12.5px] ${
-                  b.current ? 'bg-[#5c8bd6]/15 text-ink' : 'text-ink-muted hover:bg-black/5'
+                  b.current ? 'bg-[var(--selection)] text-ink' : 'text-ink-muted hover:bg-black/5'
                 }`}
               >
                 <BranchIcon size={13} className="shrink-0" />
                 <span className="truncate">{b.name}</span>
-                {b.current && <Check size={12} className="shrink-0 text-[#2f6fd0]" />}
+                {b.current && <Check size={12} className="shrink-0 text-accent" />}
                 {b.upstream && (
                   <span className="ml-auto truncate text-[11px] text-ink-faint">
                     {b.upstream}
@@ -736,7 +736,7 @@ export default function GitView({
                   </button>
                   <button
                     onClick={() => run(() => gitStashDrop(repo, s.index, host), t('git.toast.dropped'))}
-                    className="rounded px-1.5 py-0.5 text-[11px] text-[#cf222e] hover:bg-black/10"
+                    className="rounded px-1.5 py-0.5 text-[11px] text-error hover:bg-black/10"
                   >
                     drop
                   </button>

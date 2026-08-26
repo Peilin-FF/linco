@@ -98,7 +98,7 @@ export default function DiffView({ diff }: { diff: string }): JSX.Element {
               <div
                 key={i}
                 data-diff-row={i + 1}
-                className="bg-[#5c8bd6]/10 px-3 py-0.5 text-[11px] text-[#2f6fd0]"
+                className="bg-diff-hunk px-3 py-0.5 text-[11px] text-link"
               >
                 {r.text}
               </div>
@@ -106,16 +106,16 @@ export default function DiffView({ diff }: { diff: string }): JSX.Element {
           }
           const bg =
             r.kind === 'add'
-              ? 'bg-[#e6ffec]'
+              ? 'bg-diff-added'
               : r.kind === 'del'
-                ? 'bg-[#ffebe9]'
+                ? 'bg-diff-deleted'
                 : ''
           const sign = r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ' '
           const signColor =
             r.kind === 'add'
-              ? 'text-[#1a7f37]'
+              ? 'text-diff-added-foreground'
               : r.kind === 'del'
-                ? 'text-[#cf222e]'
+                ? 'text-diff-deleted-foreground'
                 : 'text-ink-faint'
           return (
             <div key={i} data-diff-row={i + 1} className={`flex ${bg}`}>

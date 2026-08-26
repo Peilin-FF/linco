@@ -21,7 +21,8 @@ interface Props {
 // 设置 → 常规:界面语言 + 主题(预览卡)+ 字体/字号(预览)。改动即时生效 + 持久化。
 export default function GeneralSettings({ config, onChange }: Props): JSX.Element {
   const { t, lang, setLang } = useI18n()
-  const curTheme = themeById(config.theme || DEFAULT_THEME_ID).id
+  const activeTheme = themeById(config.theme || DEFAULT_THEME_ID)
+  const curTheme = activeTheme.id
   const curFont = config.uiFont || ''
   const curSize = config.uiFontSize || DEFAULT_FONT_SIZE
 
@@ -157,15 +158,18 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
             {t('settings.general.fontPreview.text')}
           </p>
           <pre
-            className="mt-2 overflow-x-auto rounded-lg bg-[#0d1117] p-3 text-[#e6edf3]"
+            className="mt-2 overflow-x-auto rounded-lg border p-3"
             style={{
+              background: activeTheme.vars.canvas,
+              borderColor: activeTheme.vars.border,
+              color: activeTheme.vars.ink,
               fontFamily: 'ui-monospace, Menlo, monospace',
               fontSize: curSize
             }}
           >
-            <span style={{ color: '#ff7b72' }}>const</span>{' '}
-            <span style={{ color: '#79c0ff' }}>theme</span> ={' '}
-            <span style={{ color: '#a5d6ff' }}>"{curTheme}"</span>;
+            <span style={{ color: activeTheme.syntax.keyword }}>const</span>{' '}
+            <span style={{ color: activeTheme.syntax.variable }}>theme</span> ={' '}
+            <span style={{ color: activeTheme.syntax.string }}>"{curTheme}"</span>;
           </pre>
         </div>
       </section>
@@ -186,6 +190,7 @@ function ThemeCard({
   onClick: () => void
 }): JSX.Element {
   const v = theme.vars
+  const syntax = theme.syntax
   return (
     <button
       onClick={onClick}
@@ -208,14 +213,14 @@ function ThemeCard({
         style={{ background: v.canvas, color: v.ink }}
       >
         <div>
-          <span style={{ color: v.accent }}>const</span>{' '}
-          <span style={{ color: v.ink }}>themePreview</span> = {'{'}
+          <span style={{ color: syntax.keyword }}>const</span>{' '}
+          <span style={{ color: syntax.variable }}>themePreview</span> = {'{'}
         </div>
         <div style={{ paddingLeft: 12 }}>
-          surface: <span style={{ color: v.accent }}>"{theme.id}"</span>,
+          surface: <span style={{ color: syntax.string }}>"{theme.id}"</span>,
         </div>
         <div style={{ paddingLeft: 12, color: v.inkMuted }}>
-          accent: <span style={{ color: v.accent }}>"{v.accent}"</span>,
+          accent: <span style={{ color: syntax.string }}>"{v.accent}"</span>,
         </div>
         <div>{'}'};</div>
       </div>

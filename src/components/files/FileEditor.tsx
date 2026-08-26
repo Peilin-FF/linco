@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Save, FileText } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
-import { githubLight, githubDark } from '@uiw/codemirror-theme-github'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import {
@@ -21,6 +20,10 @@ import { yaml } from '@codemirror/lang-yaml'
 import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
 import { useIsDark } from '@/lib/theme'
+import {
+  vscodeDarkEditorTheme,
+  vscodeLightEditorTheme
+} from '@/lib/codeMirrorTheme'
 import { useI18n } from '@/lib/i18n'
 import ChangeOverviewRuler, {
   type ChangeOverviewMarker
@@ -265,7 +268,7 @@ export default function FileEditor({ path, host, diff = '' }: FileEditorProps): 
               editorViewRef.current = view
             }}
             extensions={extensions}
-            theme={dark ? githubDark : githubLight}
+            theme={dark ? vscodeDarkEditorTheme : vscodeLightEditorTheme}
             height="100%"
             basicSetup={{
               lineNumbers: true,

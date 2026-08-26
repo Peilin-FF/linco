@@ -11,6 +11,14 @@ export interface OverleafProjectInfo {
   behind: number
 }
 
+export interface OverleafCollaborationResult {
+  remote_updated: boolean
+  incoming: boolean
+  applied: boolean
+  pending: boolean
+  info: OverleafProjectInfo | null
+}
+
 export interface LatexCompileResult {
   success: boolean
   pdf_path: string
@@ -120,6 +128,28 @@ export function overleafPublish(
     repo,
     message,
     token: sessionToken(token),
+    host: remoteHost(host)
+  })
+}
+
+export function overleafCollaborationPoll(
+  repo: string,
+  token: string | undefined,
+  host?: string
+): Promise<OverleafCollaborationResult> {
+  return invoke('overleaf_collaboration_poll', {
+    repo,
+    token: sessionToken(token),
+    host: remoteHost(host)
+  })
+}
+
+export function overleafCollaborationApply(
+  repo: string,
+  host?: string
+): Promise<OverleafCollaborationResult> {
+  return invoke('overleaf_collaboration_apply', {
+    repo,
     host: remoteHost(host)
   })
 }

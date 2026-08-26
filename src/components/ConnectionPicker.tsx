@@ -109,7 +109,7 @@ export default function ConnectionPicker({
           <div className="px-2 pb-1.5 pt-1">
             <div
               className={`flex items-center gap-1.5 rounded-lg border bg-sidebar px-2 py-1.5 transition-colors ${
-                sshErr ? 'border-[#cf222e]/50' : 'border-black/10 focus-within:border-[#5c8bd6]'
+                sshErr ? 'border-error/50' : 'border-black/10 focus-within:border-accent'
               }`}
             >
               {adding ? (
@@ -154,7 +154,7 @@ export default function ConnectionPicker({
           >
             <Monitor size={14} className="text-ink-muted" />
             <span className="flex-1">{t('common.local')}</span>
-            {isLocal && <Check size={13} className="text-[#2f6fd0]" />}
+            {isLocal && <Check size={13} className="text-accent" />}
           </button>
 
           {/* 已保存连接 */}
@@ -179,7 +179,7 @@ export default function ConnectionPicker({
                     </span>
                   </span>
                   {c.id === activeId && (
-                    <Check size={13} className="text-[#2f6fd0]" />
+                    <Check size={13} className="text-accent" />
                   )}
                 </button>
               ))}

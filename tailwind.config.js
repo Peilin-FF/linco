@@ -13,7 +13,23 @@ export default {
           muted: 'var(--ink-muted, #6b6b6b)',
           faint: 'var(--ink-faint, #9a9a9a)'
         },
-        accent: 'var(--accent, #d97a2b)'
+        accent: 'var(--accent, #005fb8)',
+        input: {
+          DEFAULT: 'var(--input-background, #ffffff)',
+          border: 'var(--input-border, #cecece)',
+          placeholder: 'var(--input-placeholder, #767676)'
+        },
+        widget: 'var(--widget, #f8f8f8)',
+        link: 'var(--link, #005fb8)',
+        error: 'var(--error, #f85149)',
+        warning: 'var(--warning, #bf8803)',
+        diff: {
+          added: 'var(--diff-added, #9bb95533)',
+          deleted: 'var(--diff-deleted, #ff000033)',
+          'added-foreground': 'var(--diff-added-foreground, #2ea043)',
+          'deleted-foreground': 'var(--diff-deleted-foreground, #f85149)',
+          hunk: 'var(--diff-hunk, #005fb81a)'
+        }
       },
       fontFamily: {
         // 用户可选字体经 --app-font 注入;为空时整条 var() 回退到后面的系统字体链。
