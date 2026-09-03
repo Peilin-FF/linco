@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "linco-core"
-version = "1.0.5"
+version = "1.0.6"
 dependencies = [
  "bytes",
  "libc",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "linco-protocol"
-version = "1.0.5"
+version = "1.0.6"
 dependencies = [
  "proptest",
  "schemars",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "linco-server"
-version = "1.0.5"
+version = "1.0.6"
 dependencies = [
  "anyhow",
  "axum",

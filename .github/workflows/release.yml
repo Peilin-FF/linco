@@ -66,12 +66,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.5:
-            - Add smooth Codex scrollback across Windows, remote Linux, and tmux, including fast long-session restore.
-            - Align local and remote Codex history with `/resume`.
-            - Add VS Code Light Modern and Dark Modern themes across the workbench, terminal, and code editor.
-            - Add live Overleaf collaboration while preserving dirty local drafts.
-            - Integrate Windows window controls into the Linco title bar.
+            Linco 1.0.6:
+            - Show agent background tasks on local Windows sessions as live Terminal tabs, tailing the real stdout redirect file resolved from the process's standard handles (with a command-line fallback for PowerShell redirects).
+            - Detect background tasks started from project subdirectories on Windows.
+            - Collapse duplicate task tabs: worker and launcher processes sharing one output file (multiprocessing, DataLoader, DDP, venv launchers) now appear once.
+            - Explain empty task panels instead of leaving them blank when no output file was detected or the log is unreadable.
+            - Reset the task list when switching projects or connections so stale paths are never tailed on the new host.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
