@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -9,6 +9,8 @@ import { observeTheme, terminalTheme } from '@/lib/theme'
 interface Props {
   // 输出文件路径(agent 后台任务的 stdout 落盘文件)
   file: string
+  // 命令行(没拿到输出文件时至少告诉用户后台在跑什么)
+  args?: string
   host?: string
   // 仅可见时轮询(tab 选中)
   active: boolean
@@ -25,6 +27,7 @@ const TAIL_MS = 1000
 /// 只读:不接受键盘输入,纯展示。
 export default function AgentTaskOutput({
   file,
+  args,
   host,
   active,
   exited
@@ -34,6 +37,8 @@ export default function AgentTaskOutput({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const offsetRef = useRef(0)
+  // 最近一次 tail 的错误(文件被删/暂不可读);成功后清空。以前静默吞掉 → 面板空白无解释。
+  const [tailError, setTailError] = useState('')
 
   // 挂载 xterm(一次)
   useEffect(() => {
@@ -85,6 +90,7 @@ export default function AgentTaskOutput({
   // 切换文件:清屏 + 重置 offset(切到另一个任务的输出)
   useEffect(() => {
     offsetRef.current = 0
+    setTailError('')
     termRef.current?.clear()
     termRef.current?.reset()
   }, [file, host])
@@ -97,12 +103,20 @@ export default function AgentTaskOutput({
       try {
         const chunk = await tailFile(file, offsetRef.current, host)
         if (stop) return
+        // 文件被截断/重写(后端从头返回)→ 清屏再写,避免旧内容重复堆叠
+        if (chunk.start < offsetRef.current && offsetRef.current > 0) {
+          termRef.current?.clear()
+          termRef.current?.reset()
+        }
         if (chunk.data && termRef.current) {
           termRef.current.write(chunk.data)
         }
-        offsetRef.current = chunk.size
-      } catch {
-        // 文件暂不可读:静默重试
+        // 用本次实际读到的末尾作下次 offset(后端单次最多返回 256KB;直接用 size 会跳过中间内容)
+        const read = chunk.start + new TextEncoder().encode(chunk.data).length
+        offsetRef.current = Math.min(read, chunk.size)
+        setTailError('')
+      } catch (e) {
+        if (!stop) setTailError(String(e))
       }
     }
     void pull()
@@ -127,12 +141,23 @@ export default function AgentTaskOutput({
   return (
     <div className="flex h-full flex-col bg-canvas text-ink">
       <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1 text-[11px] text-ink-faint">
-        <span className="truncate font-mono" title={file}>
-          {file}
+        <span className="truncate font-mono" title={file || args}>
+          {file || args}
         </span>
-        {exited && <span className="ml-auto text-warning">{t('task.exited')}</span>}
+        {tailError && (
+          <span className="truncate text-warning" title={tailError}>
+            {t('task.tailError')}
+          </span>
+        )}
+        {exited && <span className="ml-auto shrink-0 text-warning">{t('task.exited')}</span>}
       </div>
-      <div ref={wrapRef} className="min-h-0 flex-1 overflow-hidden px-1 py-1" />
+      {!file && (
+        <div className="shrink-0 border-b border-black/8 px-3 py-2 text-[12px] text-ink-muted">
+          <div className="font-mono text-ink">{args}</div>
+          <div className="mt-1 text-ink-faint">{t('task.noFileHint')}</div>
+        </div>
+      )}
+      <div ref={wrapRef} className="agent-task-output min-h-0 flex-1 overflow-hidden px-1 py-1" />
     </div>
   )
 }

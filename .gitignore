@@ -35,3 +35,15 @@ tmp/
 src-tauri/resources/tex/*.exe
 src-tauri/resources/tex/*.tar.xz
 src-tauri/resources/tex/*.part
+
+# local scratch: process ids, python bytecode, smoke-test screenshots, Office lock files
+*.pid
+__pycache__/
+*.pyc
+artifacts/*.png
+/*.png
+!/logo.png
+~$*
+
+# the paper is its own git repo, not part of Linco
+paper/

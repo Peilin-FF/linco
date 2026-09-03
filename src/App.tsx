@@ -270,7 +270,7 @@ export default function App(): JSX.Element {
   const [shells, setShells] = useState<Shell[]>([])
   const [activeShell, setActiveShell] = useState<string>('')
   // agent 起的后台任务(输出落盘可实时看):每个 → 终端区一个 tab,自动出现/消失。
-  const [tasks, setTasks] = useState<AgentTask[]>([])
+  const [tasks, setTasks] = useState<(AgentTask & { exited?: boolean })[]>([])
 
   // 启动时加载本地配置 + 读取 ssh config 主机
   useEffect(() => {
@@ -547,8 +547,26 @@ export default function App(): JSX.Element {
       for (const [pid, v] of seen) {
         if (now - v.at > GRACE_MS) seen.delete(pid)
       }
+      // 同一输出文件只留一个 tab(多进程任务:启动器→python、DataLoader worker、DDP 子进程
+      // 共享同一日志,后端已按进程树收敛;这里再兜底一次,远端/宽限期内的残留也收掉)。
+      // 存活的优先于宽限期内已消失的;其次 pid 小的(通常是父进程)。
+      const ordered = [...seen.values()].sort((a, b) => {
+        const la = a.at === now ? 0 : 1
+        const lb = b.at === now ? 0 : 1
+        return la - lb || a.task.pid - b.task.pid
+      })
+      const byFile = new Set<string>()
+      const merged: (AgentTask & { exited?: boolean })[] = []
+      for (const v of ordered) {
+        const f = v.task.file ? v.task.file.replace(/\\/g, '/').toLowerCase() : ''
+        if (f) {
+          if (byFile.has(f)) continue
+          byFile.add(f)
+        }
+        merged.push({ ...v.task, exited: v.at !== now })
+      }
       // 按 pid 稳定排序,保持 tab 顺序不乱跳
-      const merged = [...seen.values()].map((v) => v.task).sort((a, b) => a.pid - b.pid)
+      merged.sort((a, b) => a.pid - b.pid)
       if (!stop) setTasks(merged)
     }
     const pull = (): void => {
@@ -563,8 +581,18 @@ export default function App(): JSX.Element {
     return () => {
       stop = true
       window.clearInterval(t)
+      // 切项目/切连接:上一个目录的任务不能带到下一个(否则会拿旧路径去新 host 上 tail)
+      taskSeenRef.current.clear()
     }
   }, [host, cwd, remoteDataReady, agentCommandBase])
+
+  // 选中的任务 tab 消失后(进程结束、被去重合并)要回落到默认,否则右侧一片空白且没有
+  // 任何 tab 高亮——这是「看不到后台任务日志」最常见的一种表现。
+  useEffect(() => {
+    if (activeShell.startsWith('task:') && !tasks.some((x) => `task:${x.pid}` === activeShell)) {
+      setActiveShell('')
+    }
+  }, [tasks, activeShell])
 
 
   // 对话会话自动启动 claude/codex
@@ -1291,21 +1319,30 @@ export default function App(): JSX.Element {
                 {tasks.length > 0 && (
                   <div className="mx-1 h-4 w-px shrink-0 bg-black/10" />
                 )}
-                {tasks.map((t) => (
-                  <button
-                    key={`task:${t.pid}`}
-                    onClick={() => setActiveShell(`task:${t.pid}`)}
-                    className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
-                      activeShell === `task:${t.pid}`
-                        ? 'bg-sidebar text-ink'
-                        : 'text-ink-muted hover:bg-black/5'
-                    }`}
-                    title={t.args}
-                  >
-                    <Activity size={12} className="text-emerald-500" />
-                    {taskLabel(t.args)}
-                  </button>
-                ))}
+                {tasks.map((task) => {
+                  const label = taskLabel(task.args)
+                  // 同名脚本多次运行时用 pid 区分,否则几个 main.py 分不清谁是谁
+                  const dupName = tasks.filter((x) => taskLabel(x.args) === label).length > 1
+                  return (
+                    <button
+                      key={`task:${task.pid}`}
+                      onClick={() => setActiveShell(`task:${task.pid}`)}
+                      className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
+                        activeShell === `task:${task.pid}`
+                          ? 'bg-sidebar text-ink'
+                          : 'text-ink-muted hover:bg-black/5'
+                      }`}
+                      title={`${task.args}\n${task.file || t('task.noFile')}`}
+                    >
+                      <Activity
+                        size={12}
+                        className={task.exited ? 'text-ink-faint' : 'text-emerald-500'}
+                      />
+                      {label}
+                      {dupName && <span className="text-ink-faint">#{task.pid}</span>}
+                    </button>
+                  )
+                })}
               </div>
               {/* 终端内容 */}
               <div className="relative min-h-0 flex-1">
@@ -1341,8 +1378,10 @@ export default function App(): JSX.Element {
                         >
                           <AgentTaskOutput
                             file={t.file}
+                            args={t.args}
                             host={host}
                             active={view === 'terminal' && selected}
+                            exited={t.exited}
                           />
                         </div>
                       )

@@ -101,6 +101,14 @@ iframe {
   overflow-x: hidden;
 }
 
+/* 上面的 `.xterm { contain: strict }` 含 size containment:.xterm 自身高度不再由子元素撑开,
+   没有显式高度就是 0 → 后台任务面板的 xterm 曾整块被裁掉,日志明明 tail 到了却一片空白。
+   任务面板的 xterm 显式撑满其容器。 */
+.agent-task-output .xterm {
+  height: 100%;
+  width: 100%;
+}
+
 /* Scale the bottom workbench as a unit instead of floating fixed-width rails. */
 .app-bottom-grid {
   display: grid;

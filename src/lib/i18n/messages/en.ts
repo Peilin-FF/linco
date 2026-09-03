@@ -370,6 +370,10 @@ export const en: Record<string, string> = {
   'settings.onboarding': 'Onboarding',
   'settings.placeholder': 'This section is not yet available.',
   'task.exited': 'Exited',
+  'task.noFile': 'No output file detected',
+  'task.noFileHint':
+    'No stdout redirect file was found for this process, so its output cannot be tailed. Launch long tasks as `python -u main.py > main.log 2>&1 &` so the log shows here in real time.',
+  'task.tailError': 'Log file unreadable',
   'cmdlog.title': 'Agent commands',
   'cmdlog.empty': 'No commands from the agent this turn yet',
   'connSet.title': 'Connections',

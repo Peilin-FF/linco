@@ -390,6 +390,10 @@ export const zh: Record<string, string> = {
   'settings.placeholder': '该模块待接入。',
   // agent 任务
   'task.exited': '已结束',
+  'task.noFile': '未检测到输出文件',
+  'task.noFileHint':
+    '没有找到这个进程的 stdout 重定向文件,无法实时 tail 输出。请用 `python -u main.py > main.log 2>&1 &` 这种方式启动长任务,日志会在这里实时显示。',
+  'task.tailError': '日志文件暂不可读',
   'cmdlog.title': 'Agent 命令',
   'cmdlog.empty': '本回合 agent 还没执行命令',
   // 连接设置

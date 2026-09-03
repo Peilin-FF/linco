@@ -60,7 +60,8 @@ pub async fn agent_tasks(
                 serde_json::json!({ "command_base": base, "cwd": cwd }),
             ) {
                 if let Some(arr) = v.get("tasks").and_then(|x| x.as_array()) {
-                    return Ok(arr.iter().filter_map(task_from_json).collect());
+                    let tasks: Vec<AgentTask> = arr.iter().filter_map(task_from_json).collect();
+                    return Ok(dedup_tasks(tasks, &HashMap::new()));
                 }
             }
             // 回退:列进程后逐个解析 fd(多往返,少用)
@@ -89,8 +90,7 @@ pub async fn agent_tasks(
         // 任务(命令/PID),但拿不到 stdout 重定向文件 → file 留空(前端会优雅留白)。
         #[cfg(windows)]
         {
-            let procs = snapshot_procs();
-            let cwds = snapshot_cwds();
+            let (procs, cwds) = snapshot_all();
             let mut cand: HashMap<i64, ProcInfo> = HashMap::new();
             // (a) agent 子树
             for p in filter_descendants(&procs, &base) {
@@ -147,16 +147,24 @@ pub async fn agent_tasks(
                 if is_noise(&p) || etime_secs(&p.etime) < 5 {
                     continue;
                 }
-                // Windows 拿不到 stdout 重定向文件,file 留空(前端不 tail、留白)。
-                tasks.push(AgentTask {
-                    pid: p.pid,
-                    args: p.args,
-                    file: String::new(),
-                    etime: p.etime,
-                });
+                // 输出文件:先从进程 PEB 的 StandardOutput/StandardError 句柄解析真实重定向
+                // 文件(Git Bash / cmd 的 `> x.log` 传的就是文件句柄);拿不到(PowerShell 的
+                // `>` 走管道、跨权限进程)再从本进程及祖先 shell 的命令行里找 `> xxx.log`。
+                let file = windows_output_file(
+                    p.pid,
+                    &by_pid,
+                    cwds.get(&p.pid).map(|s| s.as_str()),
+                    &cwd,
+                )
+                .unwrap_or_default();
+                // 与 macOS/Linux 同一契约:只列输出落盘的任务。stdout 是管道/控制台的前台
+                // 命令没有文件可 tail,列出来也只是一个空白 tab(此前 Windows 上全是这种)。
+                if file.is_empty() {
+                    continue;
+                }
+                tasks.push(AgentTask { pid: p.pid, args: p.args, file, etime: p.etime });
             }
-            tasks.sort_by_key(|t| t.pid);
-            return Ok(tasks);
+            return Ok(dedup_tasks(tasks, &by_pid));
         }
         #[cfg(not(windows))]
         {
@@ -246,8 +254,7 @@ pub async fn agent_tasks(
                 tasks.push(AgentTask { pid: p.pid, args: p.args, file: f, etime: p.etime });
             }
         }
-        tasks.sort_by_key(|t| t.pid);
-        Ok(tasks)
+        Ok(dedup_tasks(tasks, &by_pid))
         }
     })
     .await
@@ -352,8 +359,8 @@ pub async fn proc_output_file(host: Option<String>, pid: i64) -> Result<ProcOutp
         // 本地:Linux 读 /proc,macOS 用 lsof;Windows 拿不到(返回空)。
         #[cfg(windows)]
         {
-            let _ = pid;
-            return Ok(ProcOutput { fd1: None, fd2: None });
+            let (fd1, fd2) = crate::win_stdout::std_files(pid);
+            return Ok(ProcOutput { fd1, fd2 });
         }
         #[cfg(not(windows))]
         Ok(local_proc_output(pid))
@@ -586,13 +593,266 @@ fn cwd_matches(proc_cwd: Option<&str>, project_cwd: &str) -> bool {
         } else {
             s.to_string()
         };
-        std::fs::canonicalize(&expanded)
+        let s = std::fs::canonicalize(&expanded)
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| expanded.trim_end_matches('/').to_string())
+            .unwrap_or(expanded);
+        normalize_path_str(&s)
     };
     let a = norm(pc);
     let b = norm(project_cwd);
     a == b || a.starts_with(&format!("{}/", b.trim_end_matches('/')))
+}
+
+/// 路径归一化供前缀比较:`\` → `/`、剥 `\\?\` verbatim 前缀、去尾斜杠;Windows 大小写不敏感。
+/// 修复点:此前 Windows 上 canonicalize 得到 `\\?\C:\..\linco`,再用 `/` 拼前缀永远匹配不上
+/// 子目录 → 在项目子目录里起的后台任务全部漏掉。
+fn normalize_path_str(s: &str) -> String {
+    let mut s = s.replace('\\', "/");
+    if let Some(r) = s.strip_prefix("//?/UNC/") {
+        s = format!("//{r}");
+    } else if let Some(r) = s.strip_prefix("//?/") {
+        s = r.to_string();
+    }
+    let s = s.trim_end_matches('/').to_string();
+    if cfg!(windows) {
+        s.to_ascii_lowercase()
+    } else {
+        s
+    }
+}
+
+/// 从一条 shell 命令行里找出 stdout 重定向目标(`> x.log` / `>> x.log` / `1> x.log` / `&> x.log`),
+/// 优先 stdout,没有再取 `2> x.log`;跳过 `&1`/`&2`/`/dev/null`/`nul`。
+/// 用途:Windows 上拿不到句柄时,从 `bash -c "python -u main.py > main.log 2>&1 &"` 这类
+/// 祖先 shell 的命令行里推断日志文件。
+fn redirect_target_from_cmdline(cmd: &str) -> Option<String> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?:^|[\s;&|(])(&>|1?>>?|2>>?)\s*(?:"([^"]*)"|'([^']*)'|([^\s;&|)]+))"#)
+            .expect("redirect regex")
+    });
+    let mut stderr_only: Option<String> = None;
+    for cap in re.captures_iter(cmd) {
+        let op = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+        let target = cap
+            .get(2)
+            .or_else(|| cap.get(3))
+            .or_else(|| cap.get(4))
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
+        if target.is_empty() || target.starts_with('&') {
+            continue;
+        }
+        let tl = target.to_ascii_lowercase();
+        if tl == "/dev/null" || tl == "nul" {
+            continue;
+        }
+        if op.starts_with('2') {
+            if stderr_only.is_none() {
+                stderr_only = Some(target);
+            }
+            continue;
+        }
+        return Some(target);
+    }
+    stderr_only
+}
+
+/// 把重定向目标解析成存在的绝对路径:绝对路径直接验存在;相对路径依次按进程 cwd、项目 cwd 拼接。
+#[cfg_attr(not(windows), allow(dead_code))]
+fn resolve_log_path(target: &str, proc_cwd: Option<&str>, project_cwd: &str) -> Option<String> {
+    use std::path::{Path, PathBuf};
+    let p = Path::new(target);
+    let cands: Vec<PathBuf> = if p.is_absolute() {
+        vec![p.to_path_buf()]
+    } else {
+        [proc_cwd, Some(project_cwd)]
+            .into_iter()
+            .flatten()
+            .filter(|d| !d.is_empty())
+            .map(|d| Path::new(d).join(target))
+            .collect()
+    };
+    cands
+        .into_iter()
+        .find(|c| c.is_file())
+        .map(|c| c.to_string_lossy().to_string())
+}
+
+/// Windows:后台任务的输出文件。① PEB 标准句柄(精确);② 本进程与最多 4 层祖先命令行里的
+/// `> xxx.log`(启发式,PowerShell 重定向走管道时唯一线索)。
+#[cfg(windows)]
+fn windows_output_file(
+    pid: i64,
+    by_pid: &HashMap<i64, ProcInfo>,
+    proc_cwd: Option<&str>,
+    project_cwd: &str,
+) -> Option<String> {
+    let (out, err) = crate::win_stdout::std_files(pid);
+    if let Some(f) = out.or(err) {
+        return Some(f);
+    }
+    let own = by_pid.get(&pid)?;
+    let needle = task_needle(&own.args);
+    let mut cur = Some(own);
+    let mut hops = 0;
+    while let Some(p) = cur {
+        // 祖先 shell 的 -c 脚本可能串了好几条命令(`cat > a.txt <<EOF ... && python x.py > x.log`),
+        // 只在提到本任务脚本名的那一段里找重定向,避免把别的命令的 `>` 当成日志。
+        let segment: Option<&str> = if p.pid == pid {
+            Some(p.args.as_str())
+        } else {
+            command_segment_mentioning(&p.args, &needle)
+        };
+        if let Some(seg) = segment {
+            if let Some(t) = redirect_target_from_cmdline(seg) {
+                if let Some(abs) = resolve_log_path(&t, proc_cwd, project_cwd) {
+                    return Some(abs);
+                }
+            }
+        }
+        hops += 1;
+        if hops > 4 || p.ppid == p.pid {
+            break;
+        }
+        cur = by_pid.get(&p.ppid);
+    }
+    None
+}
+
+/// 任务的"识别词":命令行里第一个脚本文件名(main.py / run.sh),没有就是程序裸名(python)。
+fn task_needle(args: &str) -> String {
+    for t in args.split_whitespace() {
+        let base = t.trim_matches('"').rsplit(['/', '\\']).next().unwrap_or(t);
+        let bl = base.to_ascii_lowercase();
+        if [".py", ".sh", ".js", ".mjs", ".ts", ".ps1", ".bat", ".cmd", ".rb", ".pl", ".r"]
+            .iter()
+            .any(|suf| bl.ends_with(suf))
+        {
+            return base.to_string();
+        }
+    }
+    exe_name(args)
+}
+
+/// 在多条命令串起来的 shell 脚本里,截出「提到 needle 的那一条命令」(从 needle 所在位置
+/// 起,到下一个 `;`/`&&`/`||`/换行为止;`2>&1 &` 里的 `&` 不截)。找不到 needle 返回 None。
+fn command_segment_mentioning<'a>(script: &'a str, needle: &str) -> Option<&'a str> {
+    if needle.is_empty() {
+        return None;
+    }
+    let start = script.find(needle)?;
+    let rest = &script[start..];
+    let mut end = rest.len();
+    for (i, ch) in rest.char_indices() {
+        let two = rest.get(i..i + 2).unwrap_or("");
+        if ch == ';' || ch == '\n' || two == "&&" || two == "||" {
+            end = i;
+            break;
+        }
+    }
+    Some(&rest[..end])
+}
+
+/// a 是否为 b 的祖先(沿 ppid 上溯,最多 32 层;by_pid 为空时恒 false)。
+fn is_ancestor(a: i64, b: i64, by_pid: &HashMap<i64, ProcInfo>) -> bool {
+    let mut cur = b;
+    for _ in 0..32 {
+        let p = match by_pid.get(&cur) {
+            Some(p) => p.ppid,
+            None => return false,
+        };
+        if p == a {
+            return true;
+        }
+        if p <= 0 || p == cur {
+            return false;
+        }
+        cur = p;
+    }
+    false
+}
+
+/// 一个后台任务只留一个 tab:
+/// - 共享同一输出文件的多进程(launcher→python、multiprocessing/DataLoader worker、DDP 子进程)
+///   只保留树上最顶层那个(没有的话取运行最久 / pid 最小);
+/// - 没拿到输出文件的,若祖先里已有命令行完全相同的任务(venv/py 启动器再起一个同参 python),去掉子进程。
+/// 这就是「终端区一次冒出好几个 main.py」的修复点。
+fn dedup_tasks(mut tasks: Vec<AgentTask>, by_pid: &HashMap<i64, ProcInfo>) -> Vec<AgentTask> {
+    tasks.sort_by_key(|t| t.pid);
+    let key = |f: &str| normalize_path_str(f);
+    // ① 按输出文件分组
+    let mut groups: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, t) in tasks.iter().enumerate() {
+        if !t.file.is_empty() {
+            groups.entry(key(&t.file)).or_default().push(i);
+        }
+    }
+    let mut drop = vec![false; tasks.len()];
+    for idxs in groups.values() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let mut best: Option<usize> = None;
+        for &i in idxs {
+            let has_ancestor_in_group = idxs
+                .iter()
+                .any(|&j| j != i && is_ancestor(tasks[j].pid, tasks[i].pid, by_pid));
+            if has_ancestor_in_group {
+                continue;
+            }
+            best = Some(match best {
+                None => i,
+                Some(b) => {
+                    let (eb, ei) = (etime_secs(&tasks[b].etime), etime_secs(&tasks[i].etime));
+                    if ei > eb {
+                        i
+                    } else {
+                        b
+                    }
+                }
+            });
+        }
+        let keep = best.unwrap_or(idxs[0]);
+        for &i in idxs {
+            if i != keep {
+                drop[i] = true;
+            }
+        }
+    }
+    // ② 祖先/后代命令行完全相同(py/venv 启动器再起一个同参 python):只留一个——
+    //    优先留拿到输出文件的那个;都没有文件则留祖先。两个都有(不同)文件的不动。
+    for i in 0..tasks.len() {
+        if drop[i] {
+            continue;
+        }
+        for j in 0..tasks.len() {
+            if i == j || drop[j] || tasks[i].args != tasks[j].args {
+                continue;
+            }
+            let (fi, fj) = (!tasks[i].file.is_empty(), !tasks[j].file.is_empty());
+            if fi && fj {
+                continue;
+            }
+            let j_is_anc = is_ancestor(tasks[j].pid, tasks[i].pid, by_pid);
+            let related = j_is_anc || is_ancestor(tasks[i].pid, tasks[j].pid, by_pid);
+            if !related {
+                continue;
+            }
+            if (!fi && fj) || (!fi && !fj && j_is_anc) {
+                drop[i] = true;
+                break;
+            }
+        }
+    }
+    tasks
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !drop[*i])
+        .map(|(_, t)| t)
+        .collect()
 }
 
 // 一闪而过的短命工具 / 纯 shell 外壳:不是用户想看的训练任务,剔除。
@@ -700,6 +960,13 @@ const NOISE_CMDS: &[&str] = &[
 /// 这样 `C:\...\powershell.exe` / `node_repl.exe` 都能正确取到 `powershell` / `node_repl`,
 /// 与 NOISE_CMDS 里不带后缀的名字比对得上(否则 Windows 上 shell/外壳全都漏过滤)。
 fn exe_name(args: &str) -> String {
+    // 首 token 带引号(路径含空格,如 `"C:\Program Files\nodejs\node.exe" x.js`)→ 整段取出
+    let trimmed = args.trim_start();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return strip_exe_suffix(&rest[..end]);
+        }
+    }
     let toks: Vec<&str> = args.split_whitespace().collect();
     let mut i = 0;
     while i < toks.len()
@@ -708,9 +975,12 @@ fn exe_name(args: &str) -> String {
         i += 1;
     }
     let t = toks.get(i).or_else(|| toks.first()).copied().unwrap_or("");
-    // basename:Windows 路径用 `\`,POSIX 用 `/`,两者都切。
+    strip_exe_suffix(t)
+}
+
+/// 路径 → 裸程序名:basename(`/` 与 `\` 都切)+ 剥掉 Windows 可执行后缀(大小写不敏感)。
+fn strip_exe_suffix(t: &str) -> String {
     let base = t.rsplit(['/', '\\']).next().unwrap_or(t);
-    // 剥掉 Windows 可执行后缀(大小写不敏感),归一成裸名。
     let lower = base.to_ascii_lowercase();
     for suf in [".exe", ".cmd", ".bat", ".com"] {
         if let Some(stripped) = lower.strip_suffix(suf) {
@@ -718,6 +988,16 @@ fn exe_name(args: &str) -> String {
         }
     }
     lower
+}
+
+/// argv 元素含空白/引号时加双引号(内部 `"` 转义为 `\"`),供拼成一行命令行。
+#[cfg_attr(not(windows), allow(dead_code))]
+fn quote_arg(s: &str) -> String {
+    if s.is_empty() || s.chars().any(|c| c.is_whitespace() || c == '"') {
+        format!("\"{}\"", s.replace('"', "\\\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// shell 调用是否在"跑一个脚本文件"(如 `bash deploy.sh` / `powershell -File run.ps1`),
@@ -873,20 +1153,43 @@ fn proc_from_json(v: &serde_json::Value) -> Option<ProcInfo> {
     })
 }
 
-/// Windows:用 sysinfo 拿全部进程的快照,映射成 ProcInfo(零子进程,不闪黑窗)。
-/// 字段对齐 ps:etime 用 run_time() 秒格式化成 MM:SS / HH:MM:SS(供 etime_secs 解析)。
+/// Windows:用 sysinfo 拿全部进程的快照(零子进程,不闪黑窗),一次扫描同时产出
+/// ProcInfo 列表与 pid→cwd 映射。
+///
+/// 关键:必须显式要 `cmd` 与 `cwd`。sysinfo 0.39 的 `refresh_processes()` 默认只刷
+/// memory/cpu/disk/exe,**不读 PEB 里的命令行和工作目录** → 此前 cwd 映射恒为空,
+/// 「cwd 命中项目目录」这条锚点在 Windows 上从未生效;后台任务一旦脱离 agent 子树
+/// (Git Bash 的 `cmd &` 子壳退出后 python 的父进程已死)就完全检测不到——这就是
+/// Windows 上「终端区看不到 agent 后台任务日志」的根因之一。
 #[cfg(windows)]
-fn snapshot_procs() -> Vec<ProcInfo> {
-    use sysinfo::System;
+fn snapshot_all() -> (Vec<ProcInfo>, HashMap<i64, String>) {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    sys.processes()
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing()
+            .with_cpu()
+            .with_memory()
+            .with_exe(UpdateKind::OnlyIfNotSet)
+            .with_cmd(UpdateKind::Always)
+            .with_cwd(UpdateKind::Always),
+    );
+    let mut cwds = HashMap::new();
+    let procs = sys
+        .processes()
         .iter()
         .map(|(pid, p)| {
+            let id = pid.as_u32() as i64;
+            if let Some(cwd) = p.cwd() {
+                cwds.insert(id, cwd.to_string_lossy().to_string());
+            }
+            // argv 元素含空白(`C:\Program Files\nodejs\node.exe`)时加引号,否则按空白分词的
+            // exe_name/去噪会把 `C:\Program` 当程序名 → node/npm 等噪声全部漏过滤、标签也乱。
             let args = p
                 .cmd()
                 .iter()
-                .map(|s| s.to_string_lossy().to_string())
+                .map(|s| quote_arg(&s.to_string_lossy()))
                 .collect::<Vec<_>>()
                 .join(" ");
             let args = if args.trim().is_empty() {
@@ -895,7 +1198,7 @@ fn snapshot_procs() -> Vec<ProcInfo> {
                 args
             };
             ProcInfo {
-                pid: pid.as_u32() as i64,
+                pid: id,
                 ppid: p.parent().map(|pp| pp.as_u32() as i64).unwrap_or(0),
                 etime: fmt_etime(p.run_time()),
                 pcpu: format!("{:.1}", p.cpu_usage()),
@@ -904,22 +1207,8 @@ fn snapshot_procs() -> Vec<ProcInfo> {
                 args,
             }
         })
-        .collect()
-}
-
-/// Windows:进程 pid→cwd 映射(从同一 sysinfo 快照拿,复用 cwd_matches)。
-#[cfg(windows)]
-fn snapshot_cwds() -> HashMap<i64, String> {
-    use sysinfo::System;
-    let mut sys = System::new();
-    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    let mut out = HashMap::new();
-    for (pid, p) in sys.processes() {
-        if let Some(cwd) = p.cwd() {
-            out.insert(pid.as_u32() as i64, cwd.to_string_lossy().to_string());
-        }
-    }
-    out
+        .collect();
+    (procs, cwds)
 }
 
 /// run_time(秒)→ ps 风格 ELAPSED 字符串(MM:SS / HH:MM:SS / DD-HH:MM:SS)。
@@ -1170,6 +1459,145 @@ mod tests {
         ] {
             assert!(noise(c), "Windows 壳/宿主应被过滤: {c}");
         }
+    }
+
+    #[test]
+    fn quoted_windows_exe_with_spaces_is_recognized() {
+        // sysinfo 的 argv 拼接会给含空格的路径加引号;exe_name 必须整段取出再取 basename。
+        assert_eq!(exe_name(r#""C:\Program Files\nodejs\node.exe" tmp/x.mjs"#), "node");
+        assert!(noise(r#""C:\Program Files\nodejs\node.exe" tmp/x.mjs"#));
+        assert!(!noise(r#""C:\Program Files\Python312\python.exe" -u main.py"#));
+        assert_eq!(quote_arg(r"C:\Program Files\x.exe"), r#""C:\Program Files\x.exe""#);
+        assert_eq!(quote_arg("plain"), "plain");
+    }
+
+    #[test]
+    fn segment_picks_the_command_mentioning_the_task() {
+        let script = "cd /c/p && cat > tmp/helper.mjs <<'EOF'\nfoo\nEOF\npython -u main.py > main.log 2>&1 &";
+        assert_eq!(task_needle("python -u main.py"), "main.py");
+        let seg = command_segment_mentioning(script, "main.py").unwrap();
+        assert_eq!(seg, "main.py > main.log 2>&1 &");
+        assert_eq!(redirect_target_from_cmdline(seg).as_deref(), Some("main.log"));
+        // 没提到本任务 → None(不会误拿 `cat > tmp/helper.mjs`)
+        assert!(command_segment_mentioning(script, "train.py").is_none());
+        assert_eq!(task_needle(r#""C:\Program Files\nodejs\node.exe" tmp/x.mjs"#), "x.mjs");
+    }
+
+    #[test]
+    fn redirect_target_prefers_stdout() {
+        assert_eq!(
+            redirect_target_from_cmdline("python -u main.py > main.log 2>&1 &").as_deref(),
+            Some("main.log")
+        );
+        assert_eq!(
+            redirect_target_from_cmdline(
+                r#"bash -c "cd /c/x && python train.py >> logs/train.log 2>&1""#
+            )
+            .as_deref(),
+            Some("logs/train.log")
+        );
+        assert_eq!(
+            redirect_target_from_cmdline(r#"cmd.exe /c python main.py 1>"C:\my dir\out.log" 2>err.log"#)
+                .as_deref(),
+            Some(r"C:\my dir\out.log")
+        );
+        // 只有 stderr 重定向 → 退而取之;/dev/null、nul、&1 跳过
+        assert_eq!(
+            redirect_target_from_cmdline("python x.py > /dev/null 2> err.log").as_deref(),
+            Some("err.log")
+        );
+        assert_eq!(redirect_target_from_cmdline("python x.py 2>&1 | tee t.log"), None);
+        assert_eq!(redirect_target_from_cmdline("python x.py"), None);
+    }
+
+    fn task(pid: i64, args: &str, file: &str, etime: &str) -> AgentTask {
+        AgentTask { pid, args: args.into(), file: file.into(), etime: etime.into() }
+    }
+
+    fn tree(edges: &[(i64, i64, &str)]) -> HashMap<i64, ProcInfo> {
+        edges
+            .iter()
+            .map(|(pid, ppid, args)| {
+                (
+                    *pid,
+                    ProcInfo {
+                        pid: *pid,
+                        ppid: *ppid,
+                        etime: "01:00".into(),
+                        pcpu: "0".into(),
+                        pmem: "0".into(),
+                        stat: "S".into(),
+                        args: (*args).into(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dedup_keeps_topmost_process_sharing_a_log_file() {
+        // python main.py(300)起了两个 DataLoader worker(301/302)共享同一 stdout 文件
+        // + 启动器 py.exe(250)同命令行无文件 → 只剩 300 一个 tab。
+        let by_pid = tree(&[
+            (200, 100, "bash -c \"python -u main.py > main.log 2>&1\""),
+            (250, 200, "python -u main.py"),
+            (300, 250, "python -u main.py"),
+            (301, 300, "python -c from multiprocessing.spawn import spawn_main --multiprocessing-fork"),
+            (302, 300, "python -c from multiprocessing.spawn import spawn_main --multiprocessing-fork"),
+        ]);
+        let got = dedup_tasks(
+            vec![
+                task(302, "python -c ...", r"C:\p\main.log", "00:50"),
+                task(300, "python -u main.py", r"C:\p\main.log", "00:59"),
+                task(301, "python -c ...", r"c:\P\MAIN.LOG", "00:50"),
+                task(250, "python -u main.py", "", "01:00"),
+            ],
+            &by_pid,
+        );
+        let pids: Vec<i64> = got.iter().map(|t| t.pid).collect();
+        if cfg!(windows) {
+            assert_eq!(pids, vec![300]);
+        } else {
+            // 非 Windows 路径大小写敏感:301 视作另一个文件;250(无文件)被同命令行、有文件的 300 收掉
+            assert_eq!(pids, vec![300, 301]);
+        }
+    }
+
+    #[test]
+    fn dedup_drops_same_cmdline_child_without_file() {
+        // 启动器(250)→ 真 python(300)同命令行、都没拿到文件 → 只留祖先 250。
+        let by_pid = tree(&[(250, 1, "python main.py"), (300, 250, "python main.py")]);
+        let got = dedup_tasks(
+            vec![task(300, "python main.py", "", "00:30"), task(250, "python main.py", "", "00:31")],
+            &by_pid,
+        );
+        let pids: Vec<i64> = got.iter().map(|t| t.pid).collect();
+        assert_eq!(pids, vec![250]);
+    }
+
+    #[test]
+    fn dedup_keeps_unrelated_tasks_and_longest_running_sibling() {
+        // 无树信息(远端)时:同文件取运行最久的;不同文件都保留。
+        let got = dedup_tasks(
+            vec![
+                task(10, "python a.py", "/p/a.log", "00:10"),
+                task(11, "python a.py", "/p/a.log", "05:00"),
+                task(12, "python b.py", "/p/b.log", "00:10"),
+                task(13, "python c.py", "", "00:10"),
+            ],
+            &HashMap::new(),
+        );
+        let pids: Vec<i64> = got.iter().map(|t| t.pid).collect();
+        assert_eq!(pids, vec![11, 12, 13]);
+    }
+
+    #[test]
+    fn normalize_path_handles_windows_forms() {
+        assert_eq!(
+            normalize_path_str(r"\\?\C:\Users\me\proj\"),
+            if cfg!(windows) { "c:/users/me/proj" } else { "C:/Users/me/proj" }
+        );
+        assert_eq!(normalize_path_str("/home/me/proj/"), "/home/me/proj");
     }
 
     #[test]

@@ -27,6 +27,8 @@ mod terminal;
 mod transfer;
 mod usage;
 mod watch;
+#[cfg(windows)]
+mod win_stdout;
 
 #[cfg(test)]
 mod legacy_guard;
