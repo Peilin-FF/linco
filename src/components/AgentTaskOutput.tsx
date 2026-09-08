@@ -50,7 +50,7 @@ export default function AgentTaskOutput({
   const [wrap, setWrap] = useState(true)
   const [follow, setFollow] = useState(true)
   const [fontSize, setFontSize] = useState(() => {
-    try { const saved = Number(localStorage.getItem('linco:log-font-size')); return saved >= 11 && saved <= 18 ? saved : 13 } catch { return 13 }
+    try { const saved = Number(localStorage.getItem('linco:log-font-size')); return saved >= 11 && saved <= 18 ? saved : 12 } catch { return 12 }
   })
   // 最近一次 tail 的错误(文件被删/暂不可读);成功后清空。以前静默吞掉 → 面板空白无解释。
   const [tailError, setTailError] = useState('')

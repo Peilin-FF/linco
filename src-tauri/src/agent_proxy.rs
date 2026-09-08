@@ -1,5 +1,7 @@
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::{Child, Stdio};
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
@@ -58,8 +60,7 @@ fn resolve_proxy_bin(app: &AppHandle) -> Option<PathBuf> {
     if built.is_file() {
         return Some(built);
     }
-    let ok = Command::new("cargo")
-        .args(["build", "--release"])
+    let ok = crate::proc_ext::cli_command("cargo", &["build", "--release"])
         .current_dir(&crate_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -101,7 +102,7 @@ pub fn proxy_start(app: AppHandle, upstream: String, session: String) -> Option<
     kill_stray_proxies();
 
     let bin = resolve_proxy_bin(&app)?;
-    let mut child = Command::new(&bin)
+    let mut child = crate::proc_ext::background_command(&bin)
         .env("LINCO_UPSTREAM_BASE_URL", &upstream)
         .env("LINCO_PROXY_PORT", "0")
         .env(

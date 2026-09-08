@@ -421,6 +421,11 @@ export const FONT_SIZE_MIN = 11
 export const FONT_SIZE_MAX = 20
 export const DEFAULT_FONT_SIZE = 12
 
+export function normalizeFontSize(size: number | undefined): number {
+  return typeof size === 'number' && Number.isFinite(size) && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX
+    ? size : DEFAULT_FONT_SIZE
+}
+
 /** 应用字体与字号。font='' 时清除 --app-font(回退系统字体链)。 */
 export function applyFont(font: string | undefined, size: number | undefined): void {
   const root = document.documentElement
@@ -429,6 +434,6 @@ export function applyFont(font: string | undefined, size: number | undefined): v
   } else {
     root.style.removeProperty('--app-font')
   }
-  const s = size && size >= FONT_SIZE_MIN && size <= FONT_SIZE_MAX ? size : DEFAULT_FONT_SIZE
+  const s = normalizeFontSize(size)
   root.style.setProperty('--app-font-size', `${s}px`)
 }

@@ -48,6 +48,7 @@ import {
   agentLaunchCommand,
   loadConfig,
   saveConfig,
+  mergeConfigChange,
   setLanguage,
   installRemotePlugins,
   type AppConfig
@@ -205,6 +206,10 @@ export default function App(): JSX.Element {
   const [filesTerminalProject, setFilesTerminalProject] = useState<string | null>(null)
   const [filesTerminalHeight, setFilesTerminalHeight] = useState(230)
   const [config, setConfig] = useState<AppConfig | null>(null)
+  const configRef = useRef(config)
+  configRef.current = config
+  const configSaveRevision = useRef(0)
+  const [configSaveError, setConfigSaveError] = useState(false)
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
   const [installingUpdate, setInstallingUpdate] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
@@ -321,15 +326,18 @@ export default function App(): JSX.Element {
 
   // 启动时加载本地配置 + 读取 ssh config 主机
   useEffect(() => {
+    let cancelled = false
     loadConfig()
       .then((c) => {
+        if (cancelled) return
         setConfig(c)
         // 应用主题 / 字体 / 界面语言(早于主界面渲染)
         applyTheme(c.theme)
         applyFont(c.uiFont, c.uiFontSize)
         if (c.language === 'zh' || c.language === 'en') setLang(c.language)
       })
-      .catch(() =>
+      .catch(() => {
+        if (cancelled) return
         setConfig({
           agents: [],
           defaultAgent: '',
@@ -339,8 +347,9 @@ export default function App(): JSX.Element {
           connections: [],
           activeConnection: ''
         })
-      )
+      })
     sshConfigHosts().then(setSshHosts).catch(() => {})
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -772,9 +781,19 @@ export default function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatSessions, exitedSessions, activityTick, config])
 
+  const persistConfig = (next: AppConfig): void => {
+    const revision = ++configSaveRevision.current
+    void saveConfig(next).then(() => {
+      if (revision === configSaveRevision.current) setConfigSaveError(false)
+    }).catch(() => {
+      if (revision === configSaveRevision.current) setConfigSaveError(true)
+    })
+  }
   const handleConfigChange = (next: AppConfig): void => {
-    setConfig(next)
-    saveConfig(next).catch((e) => console.error('保存配置失败', e))
+    const merged = config && configRef.current ? mergeConfigChange(config, next, configRef.current) : next
+    configRef.current = merged
+    setConfig(merged)
+    persistConfig(merged)
   }
 
   // 激活某连接后:尝试静默 connect(key/已有 master)。
@@ -1228,6 +1247,10 @@ export default function App(): JSX.Element {
         {IS_WINDOWS && <WindowControls />}
       </div>
 
+      {configSaveError && !showSettings && <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] bg-canvas px-3 py-2 text-[12px] text-ink">
+        <span>{t('settings.saveFailed')}</span>
+        <button className="shrink-0 text-link underline" onClick={() => { if (configRef.current) persistConfig(configRef.current) }}>{t('settings.retrySave')}</button>
+      </div>}
       <div className="workbench-body">
         {projectsOpen && <WorkspaceSidebar
           cwd={cwd} dark={dark} onClose={() => setProjectsOpen(false)}
@@ -1756,6 +1779,8 @@ export default function App(): JSX.Element {
           <Settings
             config={config}
             onChange={handleConfigChange}
+            saveError={configSaveError}
+            onRetrySave={() => { if (configRef.current) persistConfig(configRef.current) }}
             onClose={() => setShowSettings(false)}
           />
         </div>

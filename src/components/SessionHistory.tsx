@@ -9,7 +9,7 @@ import {
   X,
   RefreshCw
 } from 'lucide-react'
-import { agentSessions, agentSessionDelete, type SessionInfo } from '@/lib/sessions'
+import { agentSessions, cachedAgentSessions, agentSessionDelete, type SessionInfo } from '@/lib/sessions'
 import { useI18n } from '@/lib/i18n'
 
 interface Props {
@@ -39,10 +39,16 @@ function relTime(
 
 /// 会话历史面板:列出「当前项目」里该 agent 存的历史会话,可逐个或批量删除防堆积。
 /// 放在对话框左侧空白区(与右侧 SessionRail 镜像)。一屏约 3 条,超出滚动。
-export default function SessionHistory({ cwd, provider, host, active = true, onResume }: Props): JSX.Element | null {
+export default function SessionHistory(props: Props): JSX.Element {
+  // Reset selection and async UI state when context changes, never displaying
+  // the previous project's history while its replacement is loading.
+  return <SessionHistoryPanel key={JSON.stringify([props.host || null, props.cwd, props.provider])} {...props} />
+}
+
+function SessionHistoryPanel({ cwd, provider, host, active = true, onResume }: Props): JSX.Element | null {
   const { t } = useI18n()
-  const [items, setItems] = useState<SessionInfo[]>([])
-  const [loading, setLoading] = useState(false)
+  const [items, setItems] = useState<SessionInfo[]>(() => active ? cachedAgentSessions(cwd || '', provider, host) : [])
+  const [loading, setLoading] = useState(Boolean(cwd && active))
   const [loadFailed, setLoadFailed] = useState(false)
   const [resumeTarget, setResumeTarget] = useState<SessionInfo | null>(null)
   const refreshGenerationRef = useRef(0)
@@ -64,6 +70,7 @@ export default function SessionHistory({ cwd, provider, host, active = true, onR
       setLoading(false)
       return
     }
+    setItems(cachedAgentSessions(cwd, provider, host))
     setLoading(true)
     setLoadFailed(false)
     try {
@@ -271,6 +278,11 @@ export default function SessionHistory({ cwd, provider, host, active = true, onR
       </section>}
       {/* 列表区:一屏约 3 条,超出上下滚动 */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
+        {loading && items.length === 0 && (
+          <div role="status" className="flex items-center justify-center gap-2 px-2 py-4 text-[11px] text-ink-faint">
+            <Loader2 size={13} className="animate-spin" />{t('history.loading')}
+          </div>
+        )}
         {!loading && items.length === 0 && (
           <button
             type="button"

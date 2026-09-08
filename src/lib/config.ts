@@ -163,8 +163,23 @@ export async function loadConfig(): Promise<AppConfig> {
   return fromRaw(raw)
 }
 
-export async function saveConfig(cfg: AppConfig): Promise<void> {
-  await invoke('save_config', { config: toRaw(cfg) })
+// A slow earlier IPC save must never finish after a newer theme/settings save.
+// Capture each payload now, and continue the queue even if one write fails.
+let configSaveQueue: Promise<void> = Promise.resolve()
+export function saveConfig(cfg: AppConfig): Promise<void> {
+  const raw = toRaw(cfg)
+  const request = configSaveQueue.then(() => invoke<void>('save_config', { config: raw }))
+  configSaveQueue = request.catch(() => {})
+  return request
+}
+
+/** Apply only the fields an action changed, not its potentially stale snapshot.
+ * A directory picker / SSH setup can finish after the user selects a new theme.
+ */
+export function mergeConfigChange(base: AppConfig, next: AppConfig, current: AppConfig): AppConfig {
+  const changes = Object.fromEntries(Object.entries(next).filter(([key, value]) =>
+    JSON.stringify(value) !== JSON.stringify(base[key as keyof AppConfig])))
+  return { ...current, ...changes }
 }
 
 export async function testModelConnection(agent: AgentConfig): Promise<ModelTestResult> {

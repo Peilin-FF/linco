@@ -10,9 +10,14 @@ let config = {
   default_agent: 'codex', auto_start: true, cwd: params.has('empty') ? '' : project,
   recent_dirs: [project, 'C:\\Projects\\website'], connections: [], active_connection: '',
   language: params.get('lang') || 'en', plugin_agent: 'skip', theme: params.get('theme') || '',
+  ui_font_size: Number(params.get('font-size') || 0),
 }
 const calls: { cmd: string; args: any }[] = []
-if (params.has('persist-theme')) config.theme = sessionStorage.getItem('fixture:saved-theme') || config.theme
+if (params.has('persist-theme')) config.theme = localStorage.getItem('fixture:saved-theme') || config.theme
+let failConfigSave = false
+let finishDirectory: ((path: string) => void) | undefined
+let historyHeld = params.has('delay-history')
+const historyWaiters: (() => void)[] = []
 let taskLog = [
   '=== Baseline experiment ===',
   '[INFO] Reading dataset',
@@ -80,7 +85,12 @@ const fileFixtures: Record<string, string[]> = {
 }
 const normalizedProject = project.replaceAll('\\', '/')
 const pythonContent = '# Reproducible experiment\nfrom pathlib import Path\n\nSEED = 42\nOUTPUT = Path("results")\n\ndef run_experiment(seed: int = SEED):\n    """Record a baseline before changing the method."""\n    OUTPUT.mkdir(exist_ok=True)\n    print(f"Running baseline with seed {seed}")\n\nif __name__ == "__main__":\n    run_experiment()\n'
-Object.assign(window, { __workbench: { calls, getConfig: () => config, notionPages, researchRows, setTaskLog: (text: string) => { taskLog = text } } })
+Object.assign(window, { __workbench: { calls, getConfig: () => config, notionPages, researchRows,
+  failConfigSaves: (fail: boolean) => { failConfigSave = fail },
+  finishDirectory: (path: string) => { finishDirectory?.(path) },
+  holdHistory: () => { historyHeld = true },
+  releaseHistory: () => { historyHeld = false; historyWaiters.splice(0).forEach(resolve => resolve()) },
+  setTaskLog: (text: string) => { taskLog = text } } })
 mockWindows('main')
 mockIPC(async (cmd, payload) => {
   const args = (payload || {}) as Record<string, any>
@@ -140,10 +150,13 @@ mockIPC(async (cmd, payload) => {
     case 'notion_layout': case 'notion_action': return null
     case 'load_config': return config
     case 'save_config':
+      if (failConfigSave) throw new Error('Test settings disk unavailable')
       config = args.config
-      if (params.has('persist-theme')) sessionStorage.setItem('fixture:saved-theme', config.theme)
+      if (params.has('persist-theme')) localStorage.setItem('fixture:saved-theme', config.theme)
       return null
-    case 'plugin:dialog|open': return 'C:\\Projects\\website'
+    case 'plugin:dialog|open':
+      if (params.has('delay-directory')) return new Promise<string>(resolve => { finishDirectory = resolve })
+      return 'C:\\Projects\\website'
     case 'plugin:window|is_maximized': return false
     case 'agent_tasks': return params.has('logs') ? [{ pid: 42001, args: 'python -u train.py', file: 'C:/Projects/linco/runs/train.log', etime: '02:10' }] : []
     case 'tail_file': {
@@ -155,6 +168,7 @@ mockIPC(async (cmd, payload) => {
     case 'ssh_config_hosts': case 'agent_processes':
     case 'git_branches': case 'git_log': case 'git_stash_list': case 'list_plugins': return []
     case 'agent_sessions':
+      if (historyHeld) await new Promise<void>(resolve => historyWaiters.push(resolve))
       if (params.has('history-error')) throw new Error('History unavailable')
       if (params.has('history-empty')) return []
       return [

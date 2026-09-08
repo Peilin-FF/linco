@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_FONT_SIZE, THEMES, terminalTheme, themeById } from '@/lib/theme'
+import { DEFAULT_FONT_SIZE, normalizeFontSize, THEMES, terminalTheme, themeById } from '@/lib/theme'
 
 describe('workbench themes', () => {
   it('offers Linco themes and retains the VS Code alternatives', () => {
@@ -24,6 +24,14 @@ describe('workbench themes', () => {
 
   it('uses compact interface typography by default', () => {
     expect(DEFAULT_FONT_SIZE).toBe(12)
+  })
+
+  it.each([undefined, 0, -1, 21, Infinity, NaN])('uses 12px for missing or invalid saved sizes: %s', (size) => {
+    expect(normalizeFontSize(size)).toBe(12)
+  })
+
+  it.each([11, 12, 16, 20])('preserves an explicitly selected size: %s', (size) => {
+    expect(normalizeFontSize(size)).toBe(size)
   })
 
   it.each(['github-dark-default', 'tokyo-night', 'catppuccin-mocha'])('has a complete, distinct dark palette for %s', (id) => {

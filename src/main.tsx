@@ -12,7 +12,7 @@ async function mount(): Promise<void> {
   let fontTimeout: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
-      document.fonts.load('13.5px "JetBrains Mono"'),
+      document.fonts.load('12px "JetBrains Mono"'),
       new Promise<void>((resolve) => { fontTimeout = setTimeout(resolve, 1000) })
     ])
   } catch {

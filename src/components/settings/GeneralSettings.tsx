@@ -11,6 +11,7 @@ import {
   FONT_SIZE_MIN,
   FONT_SIZE_MAX,
   DEFAULT_FONT_SIZE,
+  normalizeFontSize,
   DEFAULT_THEME_ID,
   themeById
 } from '@/lib/theme'
@@ -29,7 +30,7 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
   const activeTheme = themeById(config.theme || DEFAULT_THEME_ID)
   const curTheme = activeTheme.id
   const curFont = config.uiFont || ''
-  const curSize = config.uiFontSize || DEFAULT_FONT_SIZE
+  const curSize = normalizeFontSize(config.uiFontSize)
 
   const pickLang = (l: 'zh' | 'en'): void => {
     setLang(l)
@@ -147,6 +148,9 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
               className="w-[200px]"
             />
           </label>
+          <button className="secondary-button" onClick={() => pickSize(DEFAULT_FONT_SIZE)}>
+            {t('settings.general.fontSizeReset')}
+          </button>
         </div>
         {/* 预览框:跟随当前字体/字号(用 var,因为已即时 apply 到 :root) */}
         <div className="rounded-xl border border-black/10 bg-sidebar p-4">

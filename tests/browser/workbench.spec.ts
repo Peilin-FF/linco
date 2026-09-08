@@ -193,7 +193,7 @@ test('interface typography follows saved sizes without zooming the editor or pre
   await expect(page.frameLocator('iframe').locator('body')).toHaveCSS('font-size', '14px')
   await page.getByRole('button', { name: 'Code', exact: true }).click()
   await page.getByText('Welcome.tsx', { exact: true }).click()
-  await expect(page.locator('.cm-editor').filter({ visible: true })).toHaveCSS('font-size', '13px')
+  await expect(page.locator('.cm-editor').filter({ visible: true })).toHaveCSS('font-size', '12px')
   expect(await page.evaluate(() => (window as any).__workbench.calls.filter((c: any) => c.cmd === 'term_start').length)).toBe(starts)
   expect(errors).toEqual([])
 })
@@ -206,7 +206,7 @@ test('cold-start terminal sizing waits for the bundled monospace face', async ({
   const errors = await openWorkbench(page)
   const terminal = page.locator('[data-terminal-kind="chat"]')
   await expect(terminal.locator('.xterm-screen')).toBeVisible()
-  expect(await page.evaluate(() => document.fonts.check('13.5px "JetBrains Mono"'))).toBe(true)
+  expect(await page.evaluate(() => document.fonts.check('12px "JetBrains Mono"'))).toBe(true)
   const metrics = await terminal.evaluate((host) => {
     const style = getComputedStyle(host.querySelector('.xterm')!)
     const available = host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)

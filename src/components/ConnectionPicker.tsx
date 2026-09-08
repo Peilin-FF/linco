@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   Monitor,
   Server,
@@ -43,6 +43,8 @@ export default function ConnectionPicker({
   const [sshErr, setSshErr] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const panelId = useId()
 
   const submitSsh = async (): Promise<void> => {
     const cmd = sshInput.trim()
@@ -67,6 +69,18 @@ export default function ConnectionPicker({
     return () => window.removeEventListener('mousedown', onDown)
   }, [])
 
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      trigger.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
+
   const active = connections.find((c) => c.id === activeId)
   const isLocal = !activeId
   const label = isLocal ? t('common.local') : active?.name || active?.host || t('conn.remote')
@@ -87,6 +101,10 @@ export default function ConnectionPicker({
   return (
     <div ref={ref} className="relative no-drag">
       <button
+        ref={trigger}
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-haspopup="dialog"
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] text-ink-muted hover:bg-black/5 hover:text-ink"
         title={t('conn.switch')}
@@ -104,7 +122,7 @@ export default function ConnectionPicker({
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 max-h-[460px] min-w-[300px] overflow-auto rounded-xl bg-canvas py-1 shadow-card ring-1 ring-black/10">
+        <div id={panelId} role="dialog" aria-label={t('conn.switch')} data-native-overlay="true" className="absolute right-0 top-full z-30 mt-1 max-h-[min(460px,calc(100dvh-56px))] min-w-[300px] overflow-auto rounded-xl bg-canvas py-1 shadow-card ring-1 ring-black/10">
           {/* 灵动岛:输入 ssh 指令添加连接 */}
           <div className="px-2 pb-1.5 pt-1">
             <div

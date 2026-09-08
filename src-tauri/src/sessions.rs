@@ -12,7 +12,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -191,9 +191,9 @@ const CODEX_RESUME_PAGE_SIZE: usize = 25;
 
 /// Ask Codex's own app-server for the same first page shown by `/resume`.
 fn list_codex_via_app_server(cwd: &str) -> Result<Vec<SessionInfo>, String> {
-    let executable = if cfg!(windows) { "codex.cmd" } else { "codex" };
-    let mut child = Command::new(executable)
-        .args(["app-server", "--stdio"])
+    // Listing history is background work, including when Projects opens or
+    // switches back to a local workspace. Resolve npm shims without flashing cmd.
+    let mut child = crate::proc_ext::cli_command("codex", &["app-server", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

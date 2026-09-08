@@ -83,7 +83,7 @@ export default function NotionView({ active, cwd, host, canUseAgent, onSubmitToA
     let last = ''
     const sync = () => {
       const rect = node?.getBoundingClientRect()
-      const visible = active && surface === 'notion' && ready && !panel && !document.querySelector('dialog[open], [aria-modal="true"]') &&
+      const visible = active && surface === 'notion' && ready && !panel && !document.querySelector('dialog[open], [aria-modal="true"], [data-native-overlay="true"]') &&
         !!rect && rect.width > 1 && rect.height > 1
       const layout = { visible, ...(visible && rect ? { bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } } : {}) }
       const serialized = JSON.stringify(layout)
@@ -95,10 +95,10 @@ export default function NotionView({ active, cwd, host, canUseAgent, onSubmitToA
     const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(sync) }
     const observer = new ResizeObserver(schedule)
     if (node) observer.observe(node)
-    // Native views paint above HTML. Observe modal mounts AND the open attribute
-    // so the browser never covers settings, project selection or agent setup.
+    // Native views paint above HTML, regardless of CSS z-index. Hide them for
+    // both modal dialogs and overlapping header popovers such as SSH settings.
     const modals = new MutationObserver(schedule)
-    modals.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open', 'aria-modal'] })
+    modals.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open', 'aria-modal', 'data-native-overlay'] })
     window.addEventListener('resize', schedule)
     sync()
     return () => {

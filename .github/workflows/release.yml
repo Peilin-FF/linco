@@ -55,6 +55,12 @@ jobs:
       - name: Test frontend logic
         run: npm test
 
+      - name: Test background process helpers on the runner OS
+        shell: bash
+        run: |
+          rustc --edition=2021 --test src-tauri/src/proc_ext.rs -o "$RUNNER_TEMP/linco-process-tests.exe"
+          "$RUNNER_TEMP/linco-process-tests.exe"
+
       - name: Build, sign, and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -69,13 +75,15 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.7:
-            - Browse 32 built-in themes with previews, search, light/dark filters, and favorites. Theme changes apply to the workspace, editor, and terminal; local JSON imports remain supported.
-            - Read code with language-aware syntax highlighting, clearer file icons, and automatic line wrapping. Open a terminal alongside your files.
-            - Make terminal and task logs easier to scan with semantic color highlights and improved monospace typography.
-            - Work with compact Vibe Working and Code navigation, visible open sessions, a larger multiline composer, and refined translucent window chrome.
-            - Organize research spaces, milestones, explorations, and agent checkpoints. Edit Notion in an isolated native browser with templates and saved-page sharing; Notion tools require a local Codex connection and authorization.
-            - Preserve editor drafts and running terminals when switching themes or workspace views.
+            Linco 1.0.8:
+            - Keep existing conversations visible while terminal resize output is buffered, instead of briefly blanking the conversation pane.
+            - Reopen conversation history from a project-scoped memory cache while refreshing in the background; show a loading indicator on the first visit.
+            - Use 12px editor, terminal, and log defaults. Add a Reset to 12px control and normalize invalid saved interface sizes without overwriting valid preferences.
+            - Preserve selected themes when delayed project actions finish, serialize settings saves, and show a retry action if saving fails.
+            - Keep the SSH connection menu clickable above Files, Settings, and native Notion pages.
+            - Suppress separate Windows console windows when background history and proxy helpers launch. Embedded terminals and running agents stay unchanged.
+
+            Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

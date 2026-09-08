@@ -438,6 +438,8 @@ export const zh: Record<string, string> = {
   'plugins.synced': '已同步到 {name}',
   'plugins.hint': '插件经各自 CLI 全局注册(--scope user),任意项目目录生效。连接远程后会自动同步安装到远端。',
   'settings.nav.connections': '连接',
+  'settings.saveFailed': '设置保存失败。重启 Linco 后，这些更改可能会丢失。',
+  'settings.retrySave': '重试保存',
   // 常规设置
   'settings.general.title': '常规',
   'settings.general.language': '界面语言',
@@ -473,6 +475,7 @@ export const zh: Record<string, string> = {
   'settings.general.font': '字体',
   'settings.general.fontFamily': '字体样式',
   'settings.general.fontSize': '字号',
+  'settings.general.fontSizeReset': '重置为 12px',
   'settings.general.preview': '预览',
   'settings.general.fontPreview.text': '快速的棕色狐狸跳过懒狗。The quick brown fox.',
   // 对话输入框
@@ -623,6 +626,7 @@ export const zh: Record<string, string> = {
   'rail.sessions': '已打开的会话',
   'history.title': '最近对话',
   'history.refresh': '刷新历史对话',
+  'history.loading': '正在加载历史对话…',
   'history.empty': '暂时没有历史对话，点击刷新',
   'history.loadFailed': '对话加载失败，点击重试',
   'history.resume': '点击恢复此会话',

@@ -7,6 +7,14 @@
 
 use std::process::Command;
 
+/// Background helpers must not allocate a visible Windows console. Keep this
+/// separate from the interactive PTY launcher used by Linco's terminal panes.
+pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    no_window(&mut command);
+    command
+}
+
 /// 对本地 Command 应用「无控制台窗口」设置(仅 Windows 生效)。
 /// 用法:`no_window(&mut cmd);` 然后照常 `.output()/.spawn()`。
 #[allow(unused_variables)]
@@ -89,18 +97,16 @@ pub fn cli_command(name: &str, args: &[&str]) -> Command {
         if lower.ends_with(".cmd") || lower.ends_with(".bat") {
             // cmd.exe /c <shim> <args...>:让命令解释器去跑批处理 shim。
             let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string());
-            let mut c = Command::new(comspec);
+            let mut c = background_command(comspec);
             c.arg("/c").arg(&exe);
             c.args(args);
-            no_window(&mut c);
             return c;
         }
     }
-    let mut c = Command::new(&exe);
+    let mut c = background_command(&exe);
     c.args(args);
     #[cfg(not(windows))]
     c.env("PATH", augmented_path(exe_dir.as_deref()));
-    no_window(&mut c);
     c
 }
 
@@ -195,6 +201,49 @@ fn resolve_exe_in(name: &str, path: &str, pathext: &str, exists: impl Fn(&str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_command_preserves_program_and_arguments() {
+        let mut command = background_command("helper.exe");
+        command.args(["--read-only", "project with spaces"]);
+        assert_eq!(command.get_program(), std::ffi::OsStr::new("helper.exe"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![
+                std::ffi::OsStr::new("--read-only"),
+                std::ffi::OsStr::new("project with spaces"),
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn background_child_has_no_console() {
+        const CHILD: &str = "LINCO_TEST_BACKGROUND_CONSOLE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            #[link(name = "kernel32")]
+            extern "system" {
+                fn GetConsoleWindow() -> *mut std::ffi::c_void;
+            }
+            assert!(
+                unsafe { GetConsoleWindow() }.is_null(),
+                "background helper allocated a console"
+            );
+            return;
+        }
+        let output = background_command(std::env::current_exe().unwrap())
+            .args(["background_child_has_no_console", "--nocapture"])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("launch hidden test helper");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     // Windows 路径解析的纯逻辑(在任意平台可跑)。
     const PATHEXT: &str = ".COM;.EXE;.BAT;.CMD";

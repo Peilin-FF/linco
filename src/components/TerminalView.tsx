@@ -169,7 +169,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const term = new Terminal({
         fontFamily:
           '"SF Mono", "JetBrains Mono", Menlo, Monaco, "Cascadia Code", monospace',
-        fontSize: 13.5,
+        fontSize: 12,
         lineHeight: 1.35,
         letterSpacing: 0.2,
         cursorBlink: true,
@@ -225,14 +225,14 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
             window.cancelAnimationFrame(replayRevealFrame)
             replayRevealFrame = null
           }
-          host.style.visibility = 'hidden'
+          // Keep the current transcript visible while a remote resize redraw
+          // is buffered. Hiding it here blanks every returning conversation.
         },
         onComplete: () => {
           term.scrollToBottom()
           replayRevealFrame = window.requestAnimationFrame(() => {
             replayRevealFrame = null
             if (disposed) return
-            host.style.visibility = 'visible'
             term.refresh(0, Math.max(0, term.rows - 1))
           })
         },
@@ -454,7 +454,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         if (!codexActive) return true
 
         const lineHeight =
-          Number(term.options.fontSize ?? 13.5) * Number(term.options.lineHeight ?? 1)
+          Number(term.options.fontSize ?? 12) * Number(term.options.lineHeight ?? 1)
         let deltaPixels = event.deltaY
         if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
           deltaPixels *= lineHeight
@@ -488,8 +488,8 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
             proposed !== undefined &&
             (proposed.cols !== sentCols || proposed.rows !== sentRows)
           if (!force && ptyWillResize && codexActive && codexBannerSeen) {
-            // Hide before fit() reflows the local buffer, then batch the Codex
-            // redraw produced by the matching PTY resize below.
+            // Keep the local buffer visible and batch the redraw produced by
+            // the matching PTY resize below.
             codexProbe = ''
             replayBatcher.begin()
           }

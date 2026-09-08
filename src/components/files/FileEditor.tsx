@@ -240,7 +240,7 @@ export default function FileEditor({ path, host, diff = '' }: FileEditorProps): 
               searchKeymap: false,
               historyKeymap: false
             }}
-            style={{ fontSize: 13, height: '100%' }}
+            style={{ fontSize: 12, height: '100%' }}
           />
           <ChangeOverviewRuler
             markers={changeMarkers}
