@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 
 test.setTimeout(180000)
 test.use({ deviceScaleFactor: 1 })
-const themeFile = resolve('community-themes/monokai-pro-ce/monokai-pro-ce.json')
+const themeFile = resolve('tests/fixtures/themes/monokai-pro-ce.json')
 
 test('imports CE locally, themes editor and terminal, survives reload and can be removed', async ({ page }) => {
   const errors: string[] = []
@@ -35,7 +35,7 @@ test('imports CE locally, themes editor and terminal, survives reload and can be
   await expect(editor.locator('.cm-line span').filter({ hasText: /^from$/ }).first()).toHaveCSS('color', 'rgb(255, 97, 136)')
   expect(await page.evaluate(() => (window as any).__workbench.calls.filter((c: any) => c.cmd === 'term_start').length)).toBe(starts)
   expect(await page.evaluate(() => (window as any).__workbench.calls.filter((c: any) => c.cmd === 'term_kill').length)).toBe(0)
-  await page.screenshot({ path: 'community-themes/monokai-pro-ce/screenshot.png' })
+  await page.screenshot({ path: 'artifacts/imported-theme.png' })
 
   // Separate window load: native config fixture and local palette both survive.
   await page.reload()

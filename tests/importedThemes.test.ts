@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { importTheme, importedThemes, IMPORTED_THEMES_KEY, parseImportedTheme, removeImportedTheme, THEME_IMPORT_LIMIT } from '../src/lib/importedThemes'
 import { themeById, THEMES } from '../src/lib/theme'
 
-const fixture = readFileSync(new URL('../community-themes/monokai-pro-ce/monokai-pro-ce.json', import.meta.url), 'utf8')
+const fixture = readFileSync(new URL('./fixtures/themes/monokai-pro-ce.json', import.meta.url), 'utf8')
 function memoryStore() {
   const data = new Map<string, string>()
   return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) } }
@@ -11,7 +11,7 @@ function memoryStore() {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('data-only imported themes', () => {
-  it('validates the separate CE package without registering it as a built-in theme', () => {
+  it('validates the import fixture without registering it as a built-in theme', () => {
     const theme = parseImportedTheme(fixture)
     expect(theme.id).toBe('imported:monokai-pro-ce')
     expect(theme.vars.canvas).toBe('#2d2a2e')

@@ -1,45 +1,125 @@
+<div align="center">
+
 # Linco
 
-Linco 是一个面向 iPhone 的原生远程开发客户端。iPhone 直接连接部署在 Linux 服务器上的 `linco-server`，无需 SSH 会话，也不需要常驻桌面中转程序。
+### Keep the vibe. Keep the whole picture.
 
-正式发布路径只有三部分：
+An open-source desktop workspace for **vibe coding**.<br />Your AI agent, code, live preview and project decisions—in one place.
 
-- `ios/`：iOS 17+ 原生 SwiftUI App，包含安全扫码配对、会话管理、低延迟终端、文件编辑和隔离预览。
-- `apps/linco-server/`：Linux 无界面守护进程，负责鉴权、PTY 会话、文件能力授权与预览。
-- `crates/`：跨端二进制协议和可测试的终端/工作区核心。
+[Download for Windows & Mac](https://github.com/Peilin-FF/linco/releases/latest) · [Play with the demo](demo/README.md) · [Get started](docs/GETTING_STARTED.md) · [中文](README.zh-CN.md)
 
-## 为什么响应快
+[![Release](https://img.shields.io/github/v/release/Peilin-FF/linco?style=flat-square&color=416650)](https://github.com/Peilin-FF/linco/releases/latest)
+[![License](https://img.shields.io/github/license/Peilin-FF/linco?style=flat-square&color=647568)](LICENSE)
 
-- 终端使用独立的交互 WebSocket，控制消息不会阻塞输入和输出。
-- 原始终端字节使用 16-byte 固定头二进制帧传输，不经过 Base64。
-- 文件和预览走带 Range/ETag 的 HTTPS，不占用实时通道。
-- 服务端始终排空 PTY 并保留有界重放环；iPhone 断线重连后按绝对偏移补齐，避免重复和缺口。
-- WebSocket 禁用大块聚合等待，TCP 开启 `TCP_NODELAY`。
+[![Linco's playable demo: a CLI agent beside a tiny garden app, with Vibe Working, Code and Visual workspaces](docs/images/workbench.png)](demo/README.md)
 
-## 安全边界
+*Real Linco components. A synthetic project you can play with. No signup or AI credits.*
 
-- 二维码固定服务器 Ed25519 身份；每次握手都必须验证服务端签名。
-- iPhone 使用 Secure Enclave P-256 私钥，私钥不可导出。
-- 配对密钥和 HTTP capability 均为短时、最小权限凭证；上传与预览引导凭证只能消费一次，下载凭证仅在有效期内复用，且凭证不会出现在 URL 或日志中。
-- 文件写入使用强 SHA-256 ETag、`If-Match` 和同目录原子替换；服务端会串行化同一路径的 Linco 提交，并在最终版本不匹配时拒绝覆盖。工作区内其他进程不参与这把跨请求锁，具体边界见部署文档。
-- 服务端只允许访问显式配置的工作区，并拒绝绝对路径、`..` 与符号链接逃逸。
+</div>
 
-## 本地验证
+You have an idea. Your agent starts building. Soon the conversation is in one window, the preview in another, the logs somewhere else—and yesterday's decisions are hard to find.
 
-Rust 工作区固定用 Rust 1.85.0 验证：
+**Linco brings the work back together.** Describe a change, see the result, inspect the code, and keep the context you will need for the next iteration.
+
+## Try a little project before installing
+
+Open the [interactive playground](demo/README.md) and grow a **Pocket Garden**:
+
+1. Water a plant until it blooms.
+2. Ask the scripted demo agent to **“Add a sunflower”** or **“Make it midnight.”**
+3. Open **Code → Files → src/garden.json**, edit the title, and save. Return to the preview to see your change.
+4. Explore sample logs, research projects, milestones and the theme gallery.
+
+The demo uses the desktop's actual interface with a simulated backend. It does **not** call an AI model, execute shell commands, connect over SSH, or access Notion. Demo edits stay in memory until reload. The downloadable app connects to your real tools after setup.
+
+## The loop, not just the chat
+
+| Workspace | What you do | Why it matters |
+| --- | --- | --- |
+| **Vibe Working** | Keep your coding agent beside the live preview, notes or conversation. | Iterate on the result without losing the conversation. |
+| **Code** | Browse files, edit syntax-highlighted code, review Git changes, and open terminals. | Stay in control of the actual implementation. |
+| **Visual** | Sketch ideas and work with LaTeX documents. | Think beyond a stream of messages. |
+| **Project memory** | Organize explorations, milestones, literature, runs and conclusions in Notion-backed research spaces. | Return with useful context, not just a long chat transcript. |
+
+### What makes Linco worth trying
+
+- **Your agent, your workflow.** Drive configured CLI agents such as Codex and Claude Code. Linco is the workspace around them, not a new model subscription.
+- **See the product while you build it.** Live preview stays beside the agent; switch to the source when you want a precise change.
+- **Real tools stay within reach.** Use files, Git and embedded terminals on local projects or SSH workspaces.
+- **Sessions are first-class.** Open sessions stay visible in Vibe Working and Code; historical conversations remain available in Projects.
+- **Make noisy output readable.** ANSI colors, semantic log highlights, filters, raw output and compact monospace text help you find important lines.
+- **Keep evidence with the idea.** Research spaces separate projects, explorations and conclusions. Prepare an agent briefing from selected records instead of forwarding everything blindly.
+- **A workspace that feels like yours.** Choose from 32 built-in themes, favorite a few, or import a data-only palette. Editor, terminal and chrome follow the theme together.
+
+## Four ways to put it to work
+
+<details>
+<summary>See project memory and the theme gallery</summary>
+
+![Notion-backed project milestones in the Linco demo](docs/images/project-memory.png)
+
+![Linco's searchable theme gallery with Nord selected](docs/images/themes.png)
+
+</details>
+
+### “I want to launch a small website.”
+
+Ask your agent to build a plant-shop landing page. Refine the layout beside the preview. Open the source for a precise change, run checks in the terminal, and review the Git diff before committing.
+
+### “This bug only happens when I switch tabs.”
+
+Keep the conversation next to the files while the agent investigates. Ask for a regression test, run it, inspect the output, and review the patch. You can verify the result without handing over all judgment to the model.
+
+### “My experiment runs on another machine.”
+
+Open the SSH workspace, inspect the script, and follow the task log. Filter warnings and metrics, then record the result and its limits in the project's research space.
+
+### “What did we learn last week?”
+
+Open the project's milestones and explorations. Select relevant records, review the generated briefing, and continue with an agent. Useful memory comes from saved evidence and reviewed conclusions—not a promise that AI remembers everything automatically.
+
+*These are illustrative workflows, not customer testimonials or guaranteed model outcomes.*
+
+## Start building
+
+1. **[Download the latest release](https://github.com/Peilin-FF/linco/releases/latest)** for Windows x64, Apple Silicon, or Intel Mac.
+2. **Install and authorize a supported coding CLI.** Use your own provider credentials or subscription; model usage is separate from Linco.
+3. **Open a local project or configure SSH**, choose your agent, and start in Vibe Working.
+4. **Connect Notion if you want structured project memory.** Native page editing and agent-facing Notion tools require the desktop and the relevant authorization.
+
+Mac builds are ad-hoc signed, not Apple-notarized, so macOS may show a first-launch security warning. Build checks do not replace testing your particular Mac setup.
+
+See [Getting started](docs/GETTING_STARTED.md) for prerequisites, boundaries and the development setup.
+
+## What's in this repository?
+
+| Path | Purpose |
+| --- | --- |
+| `src/` + `src-tauri/` | React + Rust desktop app for Windows and macOS |
+| `demo/` | Public playground, sample data and a separate website build; never bundled into the desktop |
+| `tests/` | Unit and browser regressions, including shared simulated-workspace checks |
+| `ios/` | Separate native iPhone client |
+| `apps/linco-server/` + `crates/` | Linux server, protocol and runtime for the iPhone client |
+| `third-party/` | Required notices and licenses for bundled resources |
+
+The iPhone client uses its own HTTPS/WSS server setup—not the desktop's SSH connection. See [iPhone build instructions](ios/README.md), [server deployment](docs/DEPLOYMENT.md), and the [native architecture notes](docs/native-architecture.md).
+
+## Build or contribute
 
 ```sh
-cargo +1.85.0 fmt --all -- --check
-cargo +1.85.0 clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo +1.85.0 test --workspace --all-targets --all-features --locked
+npm ci
+npm run tauri:dev  # Needs Rust and the platform's Tauri prerequisites
 ```
 
-iPhone 工程由 XcodeGen 2.45.4 从 `ios/project.yml` 生成。具体构建方式见 [`ios/README.md`](ios/README.md)，Linux 正式部署见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)，正式发布门禁见 [`docs/release.md`](docs/release.md)。
+Browser playground only:
 
-## 支持的正式拓扑
-
-```text
-iPhone ── HTTPS/WSS ── Caddy ── loopback HTTP/WS ── linco-server ── PTY / workspace
+```sh
+npm run demo:dev   # http://127.0.0.1:1432
+npm run demo:build
 ```
 
-公网部署必须由 Caddy（或等价的可信 TLS 终止层）提供 HTTPS/WSS。`linco-server` 默认只监听 `127.0.0.1:7337`，不应把明文端口暴露到公网。
+Checks: `npm test`, `npm run build`, and `npm run test:browser` (the browser suite uses Microsoft Edge).
+
+[Report a bug](https://github.com/Peilin-FF/linco/issues) · [Suggest a workflow](https://github.com/Peilin-FF/linco/issues/new) · [Release notes](https://github.com/Peilin-FF/linco/releases)
+
+Linco is open source under the [repository license](LICENSE). Third-party themes and resources retain their own licenses. No affiliation with agent or theme vendors is implied.

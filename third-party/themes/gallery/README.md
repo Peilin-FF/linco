@@ -32,4 +32,5 @@ Existing saved theme IDs and legacy migrations remain unchanged; new IDs use
 the `gallery-` prefix. No affiliation or endorsement is implied.
 
 The seven earlier built-ins remain available. Monokai Pro is not part of this
-catalog; the separate, locally importable Community Edition package is unchanged.
+catalog. Its retired sample package survives only as an import-test fixture
+and license in `tests/fixtures/themes/`; existing user imports are unchanged.
