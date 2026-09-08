@@ -1,23 +1,23 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Eye,
-  MessagesSquare,
-  TerminalSquare,
-  FolderTree,
-  GitBranch,
-  PencilRuler,
-  BookOpenText,
   Settings as SettingsIcon,
   Plus,
   Activity,
   PanelLeft,
   PanelLeftClose,
+  TerminalSquare,
   X,
   Download,
   Loader2,
   Minus,
   Square,
   Copy,
+  Search,
+  FolderOpen,
+  ChevronsUpDown,
+  MessagesSquare,
+  Moon,
+  Sun,
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
@@ -29,6 +29,10 @@ import AgentTaskOutput from './components/AgentTaskOutput'
 import SessionRail, { type RailSession, type SessionStatus } from './components/SessionRail'
 import SessionHistory from './components/SessionHistory'
 import Settings from './components/Settings'
+import WorkspaceSidebar, { WORKSPACE_VIEWS as VIEWS, WORKSPACE_MODES, modeForView, type WorkspaceMode, type ViewId } from './components/WorkspaceSidebar'
+import CommandPalette, { type WorkspaceCommand } from './components/CommandPalette'
+import WelcomeView from './components/WelcomeView'
+import NotionView from './components/NotionView'
 import ConnectionPicker, { type ConnState } from './components/ConnectionPicker'
 import RemoteDirPicker from './components/RemoteDirPicker'
 import LanguagePicker from './components/LanguagePicker'
@@ -46,8 +50,7 @@ import {
   saveConfig,
   setLanguage,
   installRemotePlugins,
-  type AppConfig,
-  type AgentConfig
+  type AppConfig
 } from '@/lib/config'
 import {
   sshConfigHosts,
@@ -63,14 +66,13 @@ import { shadowBeginTurn } from '@/lib/shadow'
 import { proxyStart, proxyBeginTurn } from '@/lib/agentProxy'
 import AgentCommandLog from './components/AgentCommandLog'
 import { agentTasks, type AgentTask } from '@/lib/procs'
-import { applyTheme, applyFont } from '@/lib/theme'
+import { applyTheme, applyFont, themeById } from '@/lib/theme'
+import { baseName } from '@/lib/fs'
 import { useI18n } from '@/lib/i18n'
 import { usageRecordTurn, type UsageAgentContext } from '@/lib/usage'
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-
-type ViewId = 'chat' | 'terminal' | 'preview' | 'drawing' | 'latex' | 'files' | 'git'
 
 const ENABLE_BACKGROUND_PREWARM = false
 const IS_MACOS = navigator.platform.toLowerCase().includes('mac')
@@ -95,16 +97,6 @@ function taskLabel(args: string): string {
   }
   return (toks[0]?.split('/').pop() || 'task').slice(0, 18)
 }
-
-const VIEWS: { id: ViewId; labelKey: string; icon: typeof Eye }[] = [
-  { id: 'chat', labelKey: 'view.chat', icon: MessagesSquare },
-  { id: 'terminal', labelKey: 'view.terminal', icon: TerminalSquare },
-  { id: 'preview', labelKey: 'view.preview', icon: Eye },
-  { id: 'drawing', labelKey: 'view.drawing', icon: PencilRuler },
-  { id: 'latex', labelKey: 'view.latex', icon: BookOpenText },
-  { id: 'files', labelKey: 'view.files', icon: FolderTree },
-  { id: 'git', labelKey: 'view.git', icon: GitBranch }
-]
 
 function WindowControls(): JSX.Element {
   const { t } = useI18n()
@@ -175,6 +167,7 @@ function WindowControls(): JSX.Element {
 interface Shell {
   id: string
   label: string
+  projectKey: string
   cwd?: string
   host?: string
   identity?: string
@@ -197,8 +190,20 @@ let shellSeq = 0
 
 export default function App(): JSX.Element {
   const { t, lang: uiLang, setLang } = useI18n()
-  const [view, setView] = useState<ViewId>('chat')
+  const [view, setView] = useState<ViewId>('preview')
   const [showSettings, setShowSettings] = useState(false)
+  const [showCommands, setShowCommands] = useState(false)
+  const [projectsOpen, setProjectsOpen] = useState(false)
+  const lastModeView = useRef<Record<WorkspaceMode, ViewId>>({ vibe: 'preview', code: 'files', visual: 'drawing' })
+  const mode = modeForView(view)
+  const workspaceRef = useRef<HTMLElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const composerRef = useRef<HTMLDivElement>(null)
+  const [composerHeight, setComposerHeight] = useState(80)
+  const [workspaceWidth, setWorkspaceWidth] = useState(window.innerWidth - 16)
+  const [canvasHeight, setCanvasHeight] = useState(window.innerHeight - 90)
+  const [filesTerminalProject, setFilesTerminalProject] = useState<string | null>(null)
+  const [filesTerminalHeight, setFilesTerminalHeight] = useState(230)
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null)
   const [installingUpdate, setInstallingUpdate] = useState(false)
@@ -207,13 +212,53 @@ export default function App(): JSX.Element {
   // 点更新横幅 → 弹出「新版更新内容」公告(展示 release notes,再让用户决定是否更新)
   const [showUpdatePanel, setShowUpdatePanel] = useState(false)
   // 已访问过的视图:首次进入后常驻挂载,之后切回瞬时显示(不重新拉数据)
-  const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat']))
+  const [visited, setVisited] = useState<Set<ViewId>>(new Set(['chat', 'preview']))
   // 后台预热:app 就绪后空闲时悄悄把 文件/Git/预览 三视图挂载好(含各自首次
   // 数据拉取),这样用户真正点开时已经热好 = 瞬现,不再卡那一下(借鉴 VS Code
   // "显示与加载解耦";配合 CodeMirrorWarmup 一起把首次开销提前)。
   const [prewarmed, setPrewarmed] = useState(false)
   // 预览目标文件(右键预览时指定;空=默认目标)
   const [previewPath, setPreviewPath] = useState<string | undefined>(undefined)
+
+  useEffect(() => { lastModeView.current[mode.id] = view }, [view, mode.id])
+  useEffect(() => {
+    const element = workspaceRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setWorkspaceWidth(entry.contentRect.width))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [!!config])
+  useEffect(() => {
+    const element = composerRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setComposerHeight(entry.contentRect.height))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [!!config])
+  useEffect(() => {
+    const element = canvasRef.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setCanvasHeight(entry.contentRect.height))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [!!config])
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.isComposing) return
+      if (event.key.toLowerCase() === 'p') {
+        event.preventDefault()
+        event.stopPropagation()
+        if (!showSettings) { setProjectsOpen(false); setShowCommands((open) => !open) }
+      }
+      if (event.key.toLowerCase() === 'b' && !showCommands && !showSettings) {
+        event.preventDefault()
+        event.stopPropagation()
+        setProjectsOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [showSettings, showCommands])
 
   // 在预览视图打开某文件:记目标 + 切到预览 + 标记已访问(常驻挂载)
   const openInPreview = (absPath: string): void => {
@@ -238,12 +283,14 @@ export default function App(): JSX.Element {
   const [dockKeys, setDockKeys] = useState<
     { key: string; cwd?: string; host?: string; identity?: string }[]
   >([])
-  const [chatBoxHeight, setChatBoxHeight] = useState(0) // 对话框输入区额外高度(0=默认)
+  const [chatBoxHeight, setChatBoxHeight] = useState(104)
+  const [composerEpochs, setComposerEpochs] = useState<Record<string, number>>({})
 
   // 终端/预览/绘图的左侧对话分栏默认打开；LaTeX 独立记忆开关且默认收起。
   // 复用同一个对话会话(移动定位,不重挂),边看输出边对话。
   const [chatSplitOpen, setChatSplitOpen] = useState(true)
   const [latexChatSplitOpen, setLatexChatSplitOpen] = useState(false)
+  const [codeChatSplitOpen, setCodeChatSplitOpen] = useState(false)
   const [chatWidth, setChatWidth] = useState(380)
 
   // 连接状态
@@ -445,11 +492,6 @@ export default function App(): JSX.Element {
     () => (defaultAgent ? agentExecutable(defaultAgent) : undefined),
     [defaultAgent]
   )
-  const agentLabel = defaultAgent
-    ? defaultAgent.model
-      ? `${defaultAgent.name} · ${defaultAgent.model}`
-      : defaultAgent.name
-    : 'Agent'
 
   // 默认 agent 家族(claude / codex):决定装哪套本地插件。
   const pluginFamily = agentCommandBase === 'codex' ? 'codex' : 'claude'
@@ -607,15 +649,35 @@ export default function App(): JSX.Element {
   const activeChatId = `chat:${connId}:${agentId}:${cwd ?? ''}`
   // dock 终端 key:每个 连接+项目 一个独立 PTY(切远程→新 key→新终端起在远端 cwd)。
   const dockKey = `dock:${connId}:${cwd ?? ''}`
+  const shellProjectKey = JSON.stringify([connId, host || '', cwd || ''])
+  const filesTerminalVisible = view === 'files' && !!cwd && remoteDataReady && filesTerminalProject === shellProjectKey
+  const terminalVisible = view === 'terminal' || filesTerminalVisible
+  const projectShells = shells.filter((s) => s.projectKey === shellProjectKey)
+  const panelShells = filesTerminalVisible ? projectShells : shells
+  const panelActiveShell = filesTerminalVisible
+    ? projectShells.find((s) => s.id === activeShell)?.id || projectShells.at(-1)?.id || ''
+    : activeShell
+  const maxFilesTerminalHeight = Math.max(80, canvasHeight - 140)
+  const effectiveFilesTerminalHeight = Math.min(filesTerminalHeight, maxFilesTerminalHeight)
 
   // 左侧对话分栏是否当前生效:开关开 + 存在活动会话 + 在终端/预览视图。
   // 无活动会话时不留左栏空位。
   const hasActiveChat = chatSessions.some((s) => s.id === activeChatId)
-  const chatPaneOpen = view === 'latex' ? latexChatSplitOpen : chatSplitOpen
+  const chatPaneOpen = mode.id === 'code' ? codeChatSplitOpen : view === 'latex' ? latexChatSplitOpen : chatSplitOpen
   const chatSplitActive =
     chatPaneOpen &&
+    workspaceWidth >= 660 &&
     hasActiveChat &&
-    (view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex')
+    view !== 'chat'
+  const effectiveChatWidth = Math.min(chatWidth, Math.max(240, (workspaceWidth - 8) * 0.46))
+  const showComposer = !!cwd && (view === 'chat' || chatSplitActive)
+  const maxComposerInputHeight = Math.max(72, Math.min(420, Math.floor(canvasHeight * 0.5) - 42))
+  const sessionsVisible = mode.id !== 'visual' && !showSettings
+  const toggleChatPane = (): void => {
+    if (mode.id === 'code') setCodeChatSplitOpen((open) => !open)
+    else if (view === 'latex') setLatexChatSplitOpen((open) => !open)
+    else setChatSplitOpen((open) => !open)
+  }
 
   // 懒挂载活动会话:不存在则加入(从此**常驻、固化**)。
   // 每个 连接+agent+工作目录 各一个会话:切到新项目/切 Codex=新会话(agent 在后台
@@ -704,8 +766,8 @@ export default function App(): JSX.Element {
         const last = sessionActivityRef.current.get(s.id) ?? 0
         status = now - last < 6000 ? 'busy' : 'idle'
       }
-      const proj = s.cwd ? s.cwd.replace(/\/+$/, '').split('/').pop() || s.cwd : '—'
-      return { id: s.id, connId: s.connId, connName: connName(s.connId), project: proj, status }
+      const proj = s.cwd ? baseName(s.cwd.replace(/[\\/]+$/, '')) || s.cwd : '—'
+      return { id: s.id, connId: s.connId, connName: connName(s.connId), project: proj, agentName: s.usage.agentName, status }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatSessions, exitedSessions, activityTick, config])
@@ -713,18 +775,6 @@ export default function App(): JSX.Element {
   const handleConfigChange = (next: AppConfig): void => {
     setConfig(next)
     saveConfig(next).catch((e) => console.error('保存配置失败', e))
-  }
-
-  // 聊天框改默认 agent 的字段(模型/权限/effort)→ 写配置文件。
-  // 这些是启动参数,只写配置;**下次该会话启动**才生效(不重启正在跑的会话)。
-  const patchDefaultAgent = (patch: Partial<AgentConfig>): void => {
-    if (!config || !defaultAgent) return
-    handleConfigChange({
-      ...config,
-      agents: config.agents.map((a) =>
-        a.id === defaultAgent.id ? { ...a, ...patch } : a
-      )
-    })
   }
 
   // 激活某连接后:尝试静默 connect(key/已有 master)。
@@ -807,23 +857,35 @@ export default function App(): JSX.Element {
   // 从侧栏点某会话卡片 → 直接切回该会话(连接 + 项目 cwd 都还原),并切到对话视图。
   // activeChatId = chat:connId:agentId:cwd,所以要同时把 activeConnection 和该连接的
   // cwd 设回会话当时的值,组合才会命中这个常驻会话。
+  const revealSession = (): void => {
+    // Selecting a session from Code keeps the editor/tool in place.
+    if (workspaceWidth >= 660 && view !== 'chat') {
+      if (mode.id === 'code') setCodeChatSplitOpen(true)
+      else if (view === 'latex') setLatexChatSplitOpen(true)
+      else setChatSplitOpen(true)
+    } else setView('chat')
+  }
+
   const jumpToSession = (sid: string): void => {
     if (!config) return
     const sess = chatSessions.find((s) => s.id === sid)
     if (!sess) return
-    setView('chat')
+    revealSession()
+    const sessionAgent = config.agents.find((agent) => agent.id === sess.usage.agentId)
     if (sess.connId === 'local') {
       setConnState('idle')
       handleConfigChange({
         ...config,
         activeConnection: '',
+        defaultAgent: sessionAgent?.id || config.defaultAgent,
         cwd: sess.cwd ?? config.cwd
       })
     } else {
-      setConnState('connecting')
+      if (config.activeConnection !== sess.connId) setConnState('connecting')
       handleConfigChange({
         ...config,
         activeConnection: sess.connId,
+        defaultAgent: sessionAgent?.id || config.defaultAgent,
         connections: config.connections.map((c) =>
           c.id === sess.connId ? { ...c, cwd: sess.cwd ?? c.cwd } : c
         )
@@ -836,7 +898,7 @@ export default function App(): JSX.Element {
   // 历史属于「当前项目 + 当前 agent」,所以恢复进的就是当前活动会话(activeChatId)。
   const resumeSession = (id: string): void => {
     if (!defaultAgent) return
-    setView('chat')
+    revealSession()
     const cmd = agentLaunchCommand(defaultAgent, id, targetShell)
     // 活动会话的 TerminalView 可能要等懒挂载;轮询拿到句柄再重启(最多 ~2s)。
     let tries = 0
@@ -844,6 +906,7 @@ export default function App(): JSX.Element {
       const handle = chatRefs.current.get(activeChatId)
       if (handle) {
         handle.restartWith(cmd)
+        setComposerEpochs((epochs) => ({ ...epochs, [activeChatId]: (epochs[activeChatId] || 0) + 1 }))
         handle.focus()
         return
       }
@@ -948,16 +1011,33 @@ export default function App(): JSX.Element {
   }
 
   // 新建独立终端(可指定目录,默认用全局工作目录)。继承当前连接(本地/远程)。
-  const newShell = (dir?: string): void => {
+  const newShell = (dir?: string, destination: 'terminal' | 'files' = 'terminal'): void => {
     const id = `shell-${++shellSeq}`
     const useDir = dir ?? cwd
-    const label = useDir ? useDir.split('/').pop() || t('app.terminalN', { n: shellSeq }) : t('app.terminalN', { n: shellSeq })
+    const label = useDir ? baseName(useDir.replace(/[\\/]+$/, '')) || t('app.terminalN', { n: shellSeq }) : t('app.terminalN', { n: shellSeq })
     setShells((prev) => [
       ...prev,
-      { id, label, cwd: useDir, host, identity: activeConn?.identity || undefined }
+      { id, label, projectKey: shellProjectKey, cwd: useDir, host, identity: activeConn?.identity || undefined }
     ])
     setActiveShell(id)
-    setView('terminal')
+    // A single mounted terminal can be docked below Files or shown full-size.
+    // Register it as visited even if the full Terminal view has never been opened.
+    setVisited((prev) => prev.has('terminal') ? prev : new Set(prev).add('terminal'))
+    if (destination === 'files') setFilesTerminalProject(shellProjectKey)
+    setView(destination)
+  }
+
+  const hideFilesTerminal = (): void => {
+    setFilesTerminalProject(null)
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('[data-files-terminal-toggle]')?.focus())
+  }
+
+  const toggleFilesTerminal = (): void => {
+    if (filesTerminalVisible) { hideFilesTerminal(); return }
+    const existing = projectShells.find((s) => s.id === activeShell) || projectShells.at(-1)
+    if (!existing) { newShell(cwd, 'files'); return }
+    setActiveShell(existing.id)
+    setFilesTerminalProject(shellProjectKey)
   }
 
   // 关闭终端
@@ -1008,11 +1088,6 @@ export default function App(): JSX.Element {
     }
     // 实际写入由 onForward 的兜底重发完成(Ctrl-U + 文本 + 回车)
   }
-  const handleForward = (data: string): void => {
-    // 转发到当前活动连接的对话会话
-    chatRefs.current.get(activeChatId)?.write(data)
-  }
-
   // 从预览页「提交给 Agent」:把一段指令发给当前对话会话(等价于在对话框输入并回车)。
   // 走 handleSend 记基线/用量,再把整段文本 + 单独回车写进 PTY 放行 agent。
   // 此路径没有逐字转发(文本来自按钮),所以要整段送入;但不 Ctrl-U(claude/codex 不认),
@@ -1054,80 +1129,57 @@ export default function App(): JSX.Element {
   // 配置未加载完成前不渲染
   if (!config) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-canvas text-ink-faint">
-        {t('app.loading')}
+      <div className="app-loading" role="status">
+        <img src={APP_ICON} alt="" className="h-7 w-7" />
+        <span>Linco</span><span className="text-[13px] text-ink-muted">{t('app.loading')}</span>
       </div>
     )
   }
 
+  const dark = themeById(config.theme).dark
+  const toggleTheme = (): void => {
+    const theme = dark ? 'linco-light' : 'linco-dark'
+    applyTheme(theme)
+    handleConfigChange({ ...config, theme })
+  }
+  const commands: WorkspaceCommand[] = [
+    ...WORKSPACE_MODES.map(({ id, icon }) => ({ id: `mode-${id}`, label: t(`workflow.${id}`), icon, run: () => setView(lastModeView.current[id]) })),
+    ...VIEWS.map(({ id, labelKey, icon }) => ({ id, label: t(labelKey), detail: t(`workspace.description.${id}`), icon, run: () => { setShowSettings(false); setView(id) } })),
+    { id: 'project', label: t('workspace.openProject'), icon: FolderOpen, run: () => void pickRoot() },
+    { id: 'settings', label: t('common.settings'), icon: SettingsIcon, run: () => setShowSettings(true) },
+    { id: 'theme', label: t(dark ? 'workspace.lightMode' : 'workspace.darkMode'), icon: dark ? Sun : Moon, run: toggleTheme },
+    { id: 'projects', label: t('workflow.projects'), icon: FolderOpen, run: () => setProjectsOpen(true) },
+    { id: 'terminal-dock', label: t('chat.terminal.open'), icon: TerminalSquare, run: () => { setDockOpened(true); setDockTerminalOpen(true) } },
+    { id: 'compose', label: t('workspace.focusComposer'), icon: MessagesSquare, run: () => { setView('chat'); requestAnimationFrame(() => document.getElementById('agent-composer')?.focus()) } },
+  ]
+
   return (
-    <div className="relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">
+    <div className="linco-app relative flex h-full w-full flex-col bg-sidebar font-sans text-ink">
       <CodeMirrorWarmup />
       {/* 顶部:视图切换(为 macOS 红绿灯留出左侧空间)。
           data-tauri-drag-region + .drag 双保险:Overlay 标题栏下拖动更可靠。 */}
       <div
         data-tauri-drag-region
-        className={`drag flex h-11 shrink-0 items-center gap-1 border-b border-black/8 pr-3 ${
+        className={`workbench-titlebar drag flex h-11 shrink-0 items-center gap-1 pr-3 ${
           IS_WINDOWS ? 'pl-2' : IS_MACOS ? 'pl-20' : 'pl-1.5'
         }`}
       >
-        {IS_WINDOWS && (
+        {(
           <div
             data-tauri-drag-region
-            className="pointer-events-none mr-1 flex shrink-0 items-center gap-2 pr-2"
+            className="workbench-brand pointer-events-none mr-1 flex shrink-0 items-center gap-2 pr-2"
           >
             <img src={APP_ICON} alt="" className="h-5 w-5" draggable={false} />
-            <span className="text-[13px] font-medium text-ink">Linco</span>
-            <span className="ml-1 h-5 w-px bg-black/10" />
+            <span className="workbench-wordmark">Linco</span>
           </div>
         )}
-        {VIEWS.map(({ id, labelKey, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => setView(id)}
-            title={t(labelKey)}
-            className={`no-drag flex items-center gap-1.5 rounded-lg px-3 py-1 text-[13px] transition-colors ${
-              id === view
-                ? 'bg-canvas text-ink shadow-sm'
-                : 'text-ink-muted hover:bg-black/5'
-            }`}
-          >
-            <Icon size={15} />
-            <span className="hidden min-[1080px]:inline">{t(labelKey)}</span>
-            {/* 终端 tab:有 agent 后台任务在跑时显示绿点计数 */}
-            {id === 'terminal' && tasks.length > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-white">
-                {tasks.length}
-              </span>
-            )}
-          </button>
-        ))}
-        {/* 左分栏开关:终端/预览视图显示,放顶部视图栏(在视图按钮右边),不挡视图内工具栏。 */}
-        {(view === 'terminal' || view === 'preview' || view === 'drawing' || view === 'latex') && (
-          <button
-            onClick={() => {
-              if (view === 'latex') {
-                setLatexChatSplitOpen((open) => !open)
-              } else {
-                setChatSplitOpen((open) => !open)
-              }
-            }}
-            title={chatPaneOpen ? t('app.chatPane.collapse') : t('app.chatPane.expand')}
-            className={`no-drag ml-1 flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] transition-colors ${
-              chatPaneOpen
-                ? 'bg-canvas text-ink shadow-sm'
-                : 'text-ink-muted hover:bg-black/5'
-            }`}
-          >
-            {chatPaneOpen ? (
-              <PanelLeftClose size={15} />
-            ) : (
-              <PanelLeft size={15} />
-            )}
-            <span>{t('app.chatPane')}</span>
-          </button>
-        )}
+        <button className="project-trigger no-drag" onClick={() => { setShowSettings(false); setProjectsOpen(true) }} title={t('workflow.projects')} aria-label={t('workflow.projects')} aria-expanded={projectsOpen} aria-controls="workspace-sidebar"><span>{cwd ? baseName(cwd.replace(/[\\/]+$/, '')) : t('workspace.openProject')}</span><ChevronsUpDown size={12} /></button>
+        <nav className="workspace-modes no-drag" aria-label={t('workflow.primary')}>
+          {WORKSPACE_MODES.map(({ id, icon: Icon }) => <button key={id} className={`mode-button ${mode.id === id ? 'is-active' : ''}`} aria-current={mode.id === id ? 'page' : undefined} onClick={() => { setShowSettings(false); setView(lastModeView.current[id]) }}><Icon size={14} strokeWidth={1.6} /><span>{t(`workflow.${id}`)}</span></button>)}
+        </nav>
         <div data-tauri-drag-region className="flex-1" />
+        <button className="icon-button no-drag" onClick={() => { setShowSettings(false); setShowCommands(true) }} aria-label={t('workspace.commands')} title={`${t('workspace.commands')} (${IS_MACOS ? '⌘' : 'Ctrl'}+Shift+P)`}><Search size={16} /></button>
+        <button className="icon-button no-drag" onClick={() => setShowSettings((open) => !open)} title={t('common.settings')} aria-label={t('common.settings')}><SettingsIcon size={16} /></button>
         {availableUpdate && (
           <div className="no-drag relative shrink-0">
             <button
@@ -1138,18 +1190,14 @@ export default function App(): JSX.Element {
                   ? t('update.failed', { error: updateError })
                   : t('update.whatsNew')
               }
-              className="flex items-center gap-1.5 rounded-lg bg-sky-100 px-2.5 py-1.5 text-[12px] font-medium text-sky-700 shadow-sm ring-1 ring-sky-200 transition-colors hover:bg-sky-200 disabled:cursor-default disabled:opacity-75"
+              aria-label={t('update.available', { version: availableUpdate.version })}
+              className="icon-button text-link"
             >
               {installingUpdate ? (
                 <Loader2 size={14} className="animate-spin" />
               ) : (
                 <Download size={14} />
               )}
-              <span>
-                {installingUpdate
-                  ? t('update.installing')
-                  : t('update.available', { version: availableUpdate.version })}
-              </span>
             </button>
             {showUpdatePanel && !installingUpdate && (
               <UpdatePanel
@@ -1177,19 +1225,30 @@ export default function App(): JSX.Element {
           onManage={() => setShowSettings(true)}
           onAddSshCommand={handleAddSshCommand}
         />
-        <button
-          onClick={() => setShowSettings(true)}
-          className="no-drag rounded-lg p-1.5 text-ink-muted hover:bg-black/5 hover:text-ink"
-          title={t('common.settings')}
-        >
-          <SettingsIcon size={17} />
-        </button>
         {IS_WINDOWS && <WindowControls />}
       </div>
 
-      {/* 主区 */}
-      <div className="min-h-0 flex-1 px-1.5">
+      <div className="workbench-body">
+        {projectsOpen && <WorkspaceSidebar
+          cwd={cwd} dark={dark} onClose={() => setProjectsOpen(false)}
+          recentDirs={host && activeConn ? activeConn.recentDirs || [] : config.recentDirs} onOpenRecent={handlePickDir}
+          onPickProject={() => void pickRoot()} onSettings={() => setShowSettings(true)} onToggleTheme={toggleTheme}
+          history={cwd && <SessionHistory key={JSON.stringify([host, cwd, defaultAgent?.provider])} cwd={cwd} provider={defaultAgent?.provider || ''} host={host} active={remoteDataReady} onResume={(id) => { setProjectsOpen(false); resumeSession(id) }} />}
+        />}
+        <main ref={workspaceRef} className="workbench-content" aria-label={t(`workflow.${mode.id}`)}>
+          <div className="workspace-contextbar">
+            <nav className="context-tabs" aria-label={t('workflow.tools')}>
+              {mode.views.map((id) => { const Icon = VIEWS.find((item) => item.id === id)!.icon; return <button key={id} aria-current={view === id ? 'page' : undefined} onClick={() => setView(id)} className={view === id ? 'is-active' : ''}><Icon size={13} /><span>{t(`workflow.tab.${id}`)}</span>{id === 'terminal' && tasks.length > 0 && <span className="nav-count">{tasks.length}</span>}</button> })}
+            </nav>
+            {sessionsVisible && <SessionRail sessions={railSessions} activeId={activeChatId} onJump={jumpToSession} />}
+            <div className="context-actions">
+              {cwd && view === 'files' && <button data-files-terminal-toggle className={`context-agent-toggle ${filesTerminalVisible ? 'is-active' : ''}`} onClick={toggleFilesTerminal} disabled={!remoteDataReady} aria-pressed={filesTerminalVisible} aria-controls="workspace-terminal" title={t(filesTerminalVisible ? 'files.terminalHide' : 'files.terminalShow')} aria-label={t(filesTerminalVisible ? 'files.terminalHide' : 'files.terminalShow')}><TerminalSquare size={13} /><span>{t('view.terminal')}</span></button>}
+              {cwd && workspaceWidth >= 660 && view !== 'chat' && <button className={`context-agent-toggle ${chatSplitActive ? 'is-active' : ''}`} onClick={toggleChatPane} aria-pressed={chatSplitActive} title={t(chatSplitActive ? 'app.chatPane.collapse' : 'app.chatPane.expand')}>{chatSplitActive ? <PanelLeftClose size={13} /> : <PanelLeft size={13} />}<span>{t('view.chat')}</span></button>}
+            </div>
+          </div>
+      <div ref={canvasRef} className="workspace-canvas min-h-0 flex-1">
         <div className="relative h-full w-full">
+          {!cwd && view !== 'notion' && <WelcomeView recentDirs={host && activeConn ? activeConn.recentDirs || [] : config.recentDirs} onPickProject={() => void pickRoot()} onOpenRecent={handlePickDir} onSettings={() => setShowSettings(true)} />}
           {/* 对话会话(claude agent):每连接一个,常驻挂载、自动启动。
               定位随视图变(只改 CSS,绝不重挂,PTY 不丢):
               - 「对话」视图的活动会话 → 铺满中间(inset-0)。
@@ -1203,7 +1262,7 @@ export default function App(): JSX.Element {
             return (
               <div
                 key={s.id}
-                style={leftPane ? { width: chatWidth } : undefined}
+                style={{ width: leftPane ? effectiveChatWidth : undefined, bottom: visible ? composerHeight + 8 : 0, height: 'auto' }}
                 className={`h-full min-h-0 overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
                   leftPane
                     ? 'absolute left-0 top-0 bottom-0 z-10 opacity-100'
@@ -1237,20 +1296,20 @@ export default function App(): JSX.Element {
           {chatSplitActive && (
             <div
               className="absolute top-0 bottom-0 z-20"
-              style={{ left: chatWidth - 4 }}
+              style={{ left: effectiveChatWidth - 4 }}
             >
               <ResizeHandle
                 orientation="vertical"
                 onResize={(dx) =>
                   setChatWidth((w) =>
-                    Math.max(260, Math.min(window.innerWidth - 360, w + dx))
+                    Math.max(240, Math.min((workspaceWidth - 8) * 0.46, w + dx))
                   )
                 }
               />
             </div>
           )}
 
-          {!remoteDataReady && host && view !== 'chat' && view !== 'terminal' && (
+          {!remoteDataReady && host && view !== 'chat' && view !== 'terminal' && view !== 'notion' && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-canvas text-[13px] text-ink-faint shadow-card ring-1 ring-black/5">
               {t('app.connectingRemote')}
             </div>
@@ -1262,9 +1321,13 @@ export default function App(): JSX.Element {
               用 opacity 切换可见性,而非 unmount。 */}
           {(prewarmed || visited.has('terminal')) && (
             <div
-              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              id="workspace-terminal"
+              data-workspace-view="terminal"
+              data-terminal-docked={filesTerminalVisible}
+              aria-hidden={!terminalVisible}
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0, top: filesTerminalVisible ? 'auto' : 0, height: filesTerminalVisible ? effectiveFilesTerminalHeight : undefined }}
               className={`absolute right-0 top-0 bottom-0 flex flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 ${
-                view === 'terminal'
+                terminalVisible
                   ? 'z-10 opacity-100'
                   : 'pointer-events-none opacity-0'
               }`}
@@ -1273,18 +1336,19 @@ export default function App(): JSX.Element {
                   agent 自动起的后台任务 tab 放在它们之后,避免把用户的入口挤跑。
                   左侧留出空间给浮动的「对话栏开关」按钮,不被它压住。 */}
               <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-black/8 px-2 py-1.5">
-                {shells.map((s) => (
+                {panelShells.map((s) => (
                   <div
                     key={s.id}
                     className={`group flex shrink-0 items-center gap-1 rounded-lg pl-2.5 pr-1 py-1 text-[12px] ${
-                      s.id === activeShell
+                      s.id === panelActiveShell
                         ? 'bg-sidebar text-ink'
                         : 'text-ink-muted hover:bg-black/5'
                     }`}
                   >
-                    <button onClick={() => setActiveShell(s.id)}>{s.label}</button>
+                    <button onClick={() => setActiveShell(s.id)} title={`${s.host || 'Local'} · ${s.cwd || ''}`}>{s.label}</button>
                     <button
                       onClick={() => closeShell(s.id)}
+                      aria-label={`${t('app.terminal.close')}: ${s.label}`}
                       className="rounded p-0.5 text-ink-faint hover:bg-black/10 hover:text-ink"
                     >
                       <X size={12} />
@@ -1292,7 +1356,7 @@ export default function App(): JSX.Element {
                   </div>
                 ))}
                 <button
-                  onClick={() => newShell()}
+                  onClick={() => newShell(undefined, filesTerminalVisible ? 'files' : 'terminal')}
                   className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[12px] text-ink-muted hover:bg-black/5"
                   title={t('app.terminal.new')}
                 >
@@ -1300,7 +1364,7 @@ export default function App(): JSX.Element {
                   {t('app.terminal.new')}
                 </button>
                 {/* 「Agent 命令」tab:命令可见代理已启用时出现,展示本会话 agent 跑的 bash+结果。 */}
-                {proxyState.kind === 'ready' && (
+                {!filesTerminalVisible && proxyState.kind === 'ready' && (
                   <button
                     onClick={() => setActiveShell('cmdlog')}
                     className={`flex shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-[12px] ${
@@ -1316,10 +1380,10 @@ export default function App(): JSX.Element {
                 )}
                 {/* agent 后台任务 tab(自动出现/消失,不可手动关——进程结束即移除)。
                     放在用户终端之后,加一条竖分隔线区分。 */}
-                {tasks.length > 0 && (
+                {!filesTerminalVisible && tasks.length > 0 && (
                   <div className="mx-1 h-4 w-px shrink-0 bg-black/10" />
                 )}
-                {tasks.map((task) => {
+                {!filesTerminalVisible && tasks.map((task) => {
                   const label = taskLabel(task.args)
                   // 同名脚本多次运行时用 pid 区分,否则几个 main.py 分不清谁是谁
                   const dupName = tasks.filter((x) => taskLabel(x.args) === label).length > 1
@@ -1343,32 +1407,33 @@ export default function App(): JSX.Element {
                     </button>
                   )
                 })}
+                {filesTerminalVisible && <button className="icon-button ml-auto" onClick={hideFilesTerminal} title={t('files.terminalHide')} aria-label={t('files.terminalHidePanel')}><X size={14} /></button>}
               </div>
               {/* 终端内容 */}
               <div className="relative min-h-0 flex-1">
-                {tasks.length === 0 && shells.length === 0 && proxyState.kind !== 'ready' ? (
+                {(filesTerminalVisible ? panelShells.length === 0 : tasks.length === 0 && shells.length === 0 && proxyState.kind !== 'ready') && (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-ink-faint">
-                    <span>{t('app.taskEmpty')}</span>
-                    <span className="text-[11px]">
+                    <span>{t(filesTerminalVisible ? 'files.terminalEmpty' : 'app.taskEmpty')}</span>
+                    {!filesTerminalVisible && <span className="text-[11px]">
                       {t('app.taskEmptyHint')}
-                    </span>
+                    </span>}
                     <button
-                      onClick={() => newShell()}
+                      onClick={() => newShell(undefined, filesTerminalVisible ? 'files' : 'terminal')}
                       className="mt-1 flex items-center gap-1.5 rounded-lg bg-sidebar px-3 py-2 text-[13px] text-ink hover:bg-black/5"
                     >
                       <Plus size={15} />
                       {t('app.terminal.new')}
                     </button>
                   </div>
-                ) : (
+                )}
                   <>
-                    {/* agent 任务输出面板(每个 task 一个,常驻挂载) */}
+                    {/* Keep every session mounted, even when the current project's panel is empty. */}
                     {tasks.map((t) => {
                       const id = `task:${t.pid}`
                       const selected =
-                        activeShell === id ||
+                        panelActiveShell === id ||
                         // 没选任何 tab 时默认显示第一个任务
-                        (activeShell === '' && tasks[0]?.pid === t.pid)
+                        (!filesTerminalVisible && panelActiveShell === '' && tasks[0]?.pid === t.pid)
                       return (
                         <div
                           key={id}
@@ -1390,7 +1455,7 @@ export default function App(): JSX.Element {
                     {proxyState.kind === 'ready' && (
                       <div
                         className={`absolute inset-0 ${
-                          activeShell === 'cmdlog'
+                          panelActiveShell === 'cmdlog'
                             ? 'z-10 opacity-100'
                             : 'pointer-events-none opacity-0'
                         }`}
@@ -1406,14 +1471,14 @@ export default function App(): JSX.Element {
                       <div
                         key={s.id}
                         className={`absolute inset-0 ${
-                          s.id === activeShell
+                          s.id === panelActiveShell
                             ? 'z-10 opacity-100'
                             : 'pointer-events-none opacity-0'
                         }`}
                       >
                         <TerminalView
                           id={s.id}
-                          visible={view === 'terminal' && s.id === activeShell}
+                          visible={terminalVisible && s.id === panelActiveShell}
                           cwd={s.cwd}
                           host={s.host}
                           identity={s.identity}
@@ -1421,15 +1486,27 @@ export default function App(): JSX.Element {
                       </div>
                     ))}
                   </>
-                )}
               </div>
             </div>
           )}
 
+          {filesTerminalVisible && <div
+            className="files-terminal-resize absolute right-0 z-20"
+            style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0, bottom: effectiveFilesTerminalHeight }}
+            role="separator" aria-label={t('files.terminalResize')} aria-orientation="horizontal"
+            aria-valuemin={80} aria-valuemax={Math.round(maxFilesTerminalHeight)} aria-valuenow={Math.round(effectiveFilesTerminalHeight)} tabIndex={0}
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+              event.preventDefault()
+              setFilesTerminalHeight(Math.max(80, Math.min(maxFilesTerminalHeight, effectiveFilesTerminalHeight + (event.key === 'ArrowUp' ? 20 : -20))))
+            }}
+          ><ResizeHandle onResize={(dy) => setFilesTerminalHeight((h) => Math.max(80, Math.min(maxFilesTerminalHeight, Math.min(h, maxFilesTerminalHeight) - dy)))} /></div>}
+
           {/* 预览:预热后或访问过即常驻挂载(iframe 状态保留),切回瞬时显示 */}
           {remoteDataReady && (prewarmed || visited.has('preview')) && (
             <div
-              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              data-workspace-view="preview"
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0 }}
               className={`absolute right-0 top-0 bottom-0 ${
                 view === 'preview'
                   ? 'z-10 opacity-100'
@@ -1444,10 +1521,20 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
+          {visited.has('notion') && (
+            <div data-workspace-view="notion"
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0 }}
+              className={`absolute right-0 top-0 bottom-0 ${view === 'notion' ? 'z-10 opacity-100' : 'pointer-events-none opacity-0'}`}>
+              <NotionView active={view === 'notion' && !showSettings && !projectsOpen && !showCommands && !showUpdatePanel && !remoteBrowse}
+                cwd={cwd} host={host} canUseAgent={!!cwd && hasActiveChat}
+                onSubmitToAgent={submitToAgent} onOpenTerminal={() => newShell()} />
+            </div>
+          )}
           {/* PowerPoint preview polling is active only while the drawing view is visible. */}
           {remoteDataReady && view === 'drawing' && (
             <div
-              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              data-workspace-view="drawing"
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0 }}
               className="absolute right-0 top-0 bottom-0 z-10"
             >
               <DrawingView
@@ -1459,7 +1546,7 @@ export default function App(): JSX.Element {
           )}
           {remoteDataReady && visited.has('latex') && (
             <div
-              style={{ left: chatSplitActive ? chatWidth + 8 : 0 }}
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0 }}
               className={`absolute right-0 top-0 bottom-0 ${
                 view === 'latex'
                   ? 'z-10 opacity-100'
@@ -1487,6 +1574,8 @@ export default function App(): JSX.Element {
           {/* 文件 / Git:预热后或访问过即常驻挂载,切回瞬时显示(不重挂载、不重拉) */}
           {remoteDataReady && (prewarmed || visited.has('files')) && (
             <div
+              data-workspace-view="files"
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0, bottom: filesTerminalVisible ? effectiveFilesTerminalHeight + 8 : 0 }}
               className={`absolute inset-0 ${
                 view === 'files'
                   ? 'z-10 opacity-100'
@@ -1496,7 +1585,7 @@ export default function App(): JSX.Element {
               <FilesView
                 root={cwd}
                 onPickRoot={pickRoot}
-                onOpenInTerminal={(dir) => newShell(dir)}
+                onOpenInTerminal={(dir) => newShell(dir, 'files')}
                 onPreview={openInPreview}
                 host={host}
                 onDownload={transfers.trackDownload}
@@ -1505,6 +1594,8 @@ export default function App(): JSX.Element {
           )}
           {remoteDataReady && (prewarmed || visited.has('git')) && (
             <div
+              data-workspace-view="git"
+              style={{ left: chatSplitActive ? effectiveChatWidth + 8 : 0 }}
               className={`absolute inset-0 ${
                 view === 'git'
                   ? 'z-10 opacity-100'
@@ -1521,70 +1612,40 @@ export default function App(): JSX.Element {
               />
             </div>
           )}
-        </div>
-      </div>
 
-      {/* screen ⟷ 对话框 的拖拽分隔条:向上拖加高对话框输入区(screen 变矮) */}
-      <div className="shrink-0 px-1.5">
+      {/* The composer belongs to the agent pane; previews and editors keep their full height. */}
+      <div ref={composerRef} className="pane-composer" style={{ width: chatSplitActive ? effectiveChatWidth : '100%', display: showComposer ? undefined : 'none' }}>
+      <div className="composer-resize">
         <ResizeHandle
+          label={t('workspace.resizeComposer')}
           onResize={(dy) =>
-            setChatBoxHeight((h) => Math.max(0, Math.min(360, h - dy)))
+            setChatBoxHeight((h) => Math.max(72, Math.min(maxComposerInputHeight, h - dy)))
           }
         />
       </div>
 
       {/* 底部对话区:宽屏按比例填充历史/输入/会话三栏,窄屏自动保留输入栏。 */}
       <div
-        className={`app-bottom-grid shrink-0 px-1.5 pb-1.5 ${
+        className={`app-bottom-grid shrink-0 ${
           dockTerminalOpen ? 'app-bottom-grid-compact' : ''
         }`}
       >
         <div className="app-bottom-composer min-w-0">
+          {chatSessions.map((session) => <div key={`${session.id}:${composerEpochs[session.id] || 0}`} style={{ display: session.id === activeChatId ? undefined : 'none' }}>
           <ChatInput
             onSend={handleSend}
-            onForward={handleForward}
-            cwd={cwd}
-            recentDirs={host && activeConn ? activeConn.recentDirs ?? [] : config.recentDirs}
-            onPickDir={handlePickDir}
-            remote={!!host}
-            onBrowseRemote={pickRoot}
-            compact={dockTerminalOpen}
-            terminalOpen={dockTerminalOpen}
+            onForward={(data) => chatRefs.current.get(session.id)?.write(data)}
+            cwd={session.cwd}
+            remote={!!session.host}
+            active={session.id === activeChatId && showComposer}
             extraHeight={chatBoxHeight}
-            agentLabel={agentLabel}
-            agent={defaultAgent}
-            onPatchAgent={patchDefaultAgent}
-            onToggleTerminal={() => {
-              setDockOpened(true)
-              setDockTerminalOpen((o) => !o)
-            }}
+            maxHeight={maxComposerInputHeight}
           />
+          </div>)}
         </div>
-        {/* 会话总览:宽屏占右侧比例栏,窄屏自动收起。 */}
-        {railSessions.length > 0 && (
-          <div className="app-bottom-rail app-bottom-rail-right pointer-events-none min-w-0 items-stretch justify-center">
-            <div className="pointer-events-auto w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
-              <SessionRail
-                sessions={railSessions}
-                activeId={activeChatId}
-                onJump={jumpToSession}
-              />
-            </div>
-          </div>
-        )}
-        {/* 当前项目会话历史:与右侧总览使用相同的比例栏。 */}
-        {cwd && (
-          <div className="app-bottom-rail app-bottom-rail-left pointer-events-none min-w-0 items-stretch justify-center">
-            <div className="pointer-events-auto w-full overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5 empty:hidden">
-              <SessionHistory
-                cwd={cwd}
-                provider={defaultAgent?.provider || ''}
-                host={host}
-                onResume={resumeSession}
-              />
-            </div>
-          </div>
-        )}
+      </div>
+      </div>
+        </div>
       </div>
 
       {/* 底部停靠终端(VS Code 式):放在对话框下方。干净的普通终端——
@@ -1650,6 +1711,10 @@ export default function App(): JSX.Element {
           />
         </div>
       )}
+        </main>
+      </div>
+
+      {showCommands && <CommandPalette commands={commands} onClose={() => setShowCommands(false)} />}
 
       {/* 远端目录浏览器(远程选工作目录时) */}
       {remoteBrowse !== null && host && (
@@ -1687,7 +1752,7 @@ export default function App(): JSX.Element {
       {/* 设置:覆盖层(不替换主树)。主树仍挂载在底下,
           对话/终端等会话不被卸载,claude 不会因开设置而重启。 */}
       {showSettings && (
-        <div className="absolute inset-0 z-50 bg-sidebar">
+        <div className="absolute inset-x-0 bottom-0 top-[40px] z-50 bg-sidebar">
           <Settings
             config={config}
             onChange={handleConfigChange}

@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowDownToLine, Minus, Plus, Search, WrapText } from 'lucide-react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { tailFile } from '@/lib/procs'
 import { useI18n } from '@/lib/i18n'
 import { observeTheme, terminalTheme } from '@/lib/theme'
+import { isLogHighlight, logBufferLines, logLevel, type LogLevel } from '@/lib/logHighlights'
+import { outputSpans } from '@/lib/terminalHighlights'
 
 interface Props {
   // 输出文件路径(agent 后台任务的 stdout 落盘文件)
@@ -37,6 +40,18 @@ export default function AgentTaskOutput({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const offsetRef = useRef(0)
+  const generationRef = useRef(0)
+  const captureRef = useRef<() => void>(() => {})
+  const readerRef = useRef<HTMLDivElement>(null)
+  const [lines, setLines] = useState<string[]>([])
+  const [raw, setRaw] = useState(false)
+  const [query, setQuery] = useState('')
+  const [filter, setFilter] = useState<'all' | 'highlights' | 'error' | 'warning'>('all')
+  const [wrap, setWrap] = useState(true)
+  const [follow, setFollow] = useState(true)
+  const [fontSize, setFontSize] = useState(() => {
+    try { const saved = Number(localStorage.getItem('linco:log-font-size')); return saved >= 11 && saved <= 18 ? saved : 13 } catch { return 13 }
+  })
   // 最近一次 tail 的错误(文件被删/暂不可读);成功后清空。以前静默吞掉 → 面板空白无解释。
   const [tailError, setTailError] = useState('')
 
@@ -44,9 +59,10 @@ export default function AgentTaskOutput({
   useEffect(() => {
     if (!wrapRef.current) return
     const term = new Terminal({
-      fontSize: 12,
+      fontSize,
       fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Monaco, "Courier New", monospace',
+        '"JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace',
+      lineHeight: 1.55,
       convertEol: true, // 把 \n 当作 \r\n,日志按行正常换行
       disableStdin: true, // 只读,不收键盘
       cursorStyle: 'underline',
@@ -65,6 +81,11 @@ export default function AgentTaskOutput({
     }
     termRef.current = term
     fitRef.current = fit
+    captureRef.current = () => setLines(logBufferLines(term.buffer.active))
+    let disposed = false
+    void document.fonts.load('13px "JetBrains Mono"').then(() => {
+      if (!disposed) { fit.fit(); captureRef.current() }
+    }).catch(() => {})
     const stopObservingTheme = observeTheme(() => {
       term.options.theme = terminalTheme()
     })
@@ -72,6 +93,7 @@ export default function AgentTaskOutput({
     const ro = new ResizeObserver(() => {
       try {
         fit.fit()
+        captureRef.current()
       } catch {
         /* 忽略 */
       }
@@ -79,18 +101,23 @@ export default function AgentTaskOutput({
     ro.observe(wrapRef.current)
 
     return () => {
+      disposed = true
       ro.disconnect()
       stopObservingTheme()
       term.dispose()
       termRef.current = null
       fitRef.current = null
+      captureRef.current = () => {}
     }
   }, [])
 
   // 切换文件:清屏 + 重置 offset(切到另一个任务的输出)
   useEffect(() => {
+    generationRef.current++
     offsetRef.current = 0
     setTailError('')
+    setLines([])
+    setFollow(true)
     termRef.current?.clear()
     termRef.current?.reset()
   }, [file, host])
@@ -99,6 +126,8 @@ export default function AgentTaskOutput({
   useEffect(() => {
     if (!active || !file) return
     let stop = false
+    let timer: number | undefined
+    const generation = generationRef.current
     const pull = async (): Promise<void> => {
       try {
         const chunk = await tailFile(file, offsetRef.current, host)
@@ -109,7 +138,9 @@ export default function AgentTaskOutput({
           termRef.current?.reset()
         }
         if (chunk.data && termRef.current) {
-          termRef.current.write(chunk.data)
+          termRef.current.write(chunk.data, () => {
+            if (generation === generationRef.current) captureRef.current()
+          })
         }
         // 用本次实际读到的末尾作下次 offset(后端单次最多返回 256KB;直接用 size 会跳过中间内容)
         const read = chunk.start + new TextEncoder().encode(chunk.data).length
@@ -117,13 +148,14 @@ export default function AgentTaskOutput({
         setTailError('')
       } catch (e) {
         if (!stop) setTailError(String(e))
+      } finally {
+        if (!stop) timer = window.setTimeout(() => void pull(), TAIL_MS)
       }
     }
     void pull()
-    const t = window.setInterval(() => void pull(), TAIL_MS)
     return () => {
       stop = true
-      window.clearInterval(t)
+      window.clearTimeout(timer)
     }
   }, [file, host, active])
 
@@ -136,10 +168,30 @@ export default function AgentTaskOutput({
         /* 忽略 */
       }
     }
-  }, [active])
+  }, [active, raw])
+
+  useEffect(() => {
+    if (termRef.current) termRef.current.options.fontSize = fontSize
+    try { fitRef.current?.fit(); captureRef.current() } catch { /* Hidden tab. */ }
+    try { localStorage.setItem('linco:log-font-size', String(fontSize)) } catch { /* Optional preference. */ }
+  }, [fontSize])
+
+  const annotated = useMemo(() => lines.map((text, index) => ({ text, index, level: logLevel(text) })), [lines])
+  const counts = useMemo(() => ({
+    error: annotated.filter((line) => line.level === 'error').length,
+    warning: annotated.filter((line) => line.level === 'warning').length,
+  }), [annotated])
+  const visibleLines = useMemo(() => annotated.filter((line) => {
+    const matches = filter === 'all' || (filter === 'highlights' ? isLogHighlight(line.level) : line.level === filter)
+    return matches && line.text.toLowerCase().includes(query.toLowerCase())
+  }), [annotated, filter, query])
+
+  useEffect(() => {
+    if (active && follow && !raw && readerRef.current) readerRef.current.scrollTop = readerRef.current.scrollHeight
+  }, [active, follow, raw, visibleLines])
 
   return (
-    <div className="flex h-full flex-col bg-canvas text-ink">
+    <div className="task-log-view flex h-full flex-col bg-canvas text-ink">
       <div className="flex shrink-0 items-center gap-2 border-b border-black/8 px-3 py-1 text-[11px] text-ink-faint">
         <span className="truncate font-mono" title={file || args}>
           {file || args}
@@ -151,13 +203,69 @@ export default function AgentTaskOutput({
         )}
         {exited && <span className="ml-auto shrink-0 text-warning">{t('task.exited')}</span>}
       </div>
+      {file && <div className="log-toolbar" aria-label={t('task.logTools')}>
+        <div className="log-filters" aria-label={t('task.filter')}>
+          {(['all', 'highlights', 'error', 'warning'] as const).map((value) => <button key={value} disabled={raw} aria-pressed={filter === value} onClick={() => setFilter(value)}>
+            {t(`task.filter.${value}`)}{(value === 'error' || value === 'warning') && <span className={`log-count log-${value}`}>{counts[value]}</span>}
+          </button>)}
+        </div>
+        <label className="log-search"><Search size={13} /><input aria-label={t('task.search')} placeholder={t('task.search')} value={query} disabled={raw} onChange={(e) => setQuery(e.target.value)} /></label>
+        <button className="icon-button" aria-label={t('task.fontSmaller')} title={t('task.fontSmaller')} disabled={fontSize <= 11} onClick={() => setFontSize((size) => size - 1)}><Minus size={13} /></button>
+        <span className="log-font-size">{fontSize}</span>
+        <button className="icon-button" aria-label={t('task.fontLarger')} title={t('task.fontLarger')} disabled={fontSize >= 18} onClick={() => setFontSize((size) => size + 1)}><Plus size={13} /></button>
+        <button className="icon-button" aria-label={t('task.wrap')} title={t('task.wrap')} aria-pressed={wrap} disabled={raw} onClick={() => setWrap((value) => !value)}><WrapText size={14} /></button>
+        <button aria-pressed={raw} onClick={() => setRaw((value) => !value)}>{t('task.raw')}</button>
+        <button className="log-follow" disabled={raw} aria-pressed={follow} onClick={() => setFollow((value) => !value)}><ArrowDownToLine size={13} />{t('task.follow')}</button>
+      </div>}
       {!file && (
         <div className="shrink-0 border-b border-black/8 px-3 py-2 text-[12px] text-ink-muted">
           <div className="font-mono text-ink">{args}</div>
           <div className="mt-1 text-ink-faint">{t('task.noFileHint')}</div>
         </div>
       )}
-      <div ref={wrapRef} className="agent-task-output min-h-0 flex-1 overflow-hidden px-1 py-1" />
+      <div className="relative min-h-0 flex-1">
+        {/* Keep the terminal mounted and sized in both views: it interprets ANSI
+            and progress rewrites, and preserves the unfiltered raw output. */}
+        <div ref={wrapRef} className="agent-task-output absolute inset-0 overflow-hidden" aria-hidden={!raw} style={{ visibility: raw ? 'visible' : 'hidden' }} />
+        {!raw && <div ref={readerRef} className={`log-reader ${wrap ? 'is-wrapped' : ''}`} style={{ fontSize }} aria-label={t('task.readingView')} tabIndex={0} onScroll={(event) => {
+          const node = event.currentTarget
+          setFollow(node.scrollHeight - node.scrollTop - node.clientHeight < 32)
+        }}>
+          {visibleLines.length ? visibleLines.map((line) => <LogRow key={line.index} text={line.text} index={line.index} level={line.level} query={query} />)
+            : <p className="log-empty">{t(lines.length ? 'task.noMatches' : 'task.waiting')}</p>}
+        </div>}
+      </div>
+      {file && <div className="log-footer"><span>{t('task.loadedLines', { n: lines.length })}</span><span>{t('task.highlightHint')}</span></div>}
     </div>
   )
 }
+
+const LogRow = memo(function LogRow({ text, index, level, query }: { text: string; index: number; level: LogLevel; query: string }): JSX.Element {
+  const spans = outputSpans(text)
+  const colored = (start: number, end: number): (string | JSX.Element)[] => {
+    const boundaries = [...new Set([start, end, ...spans.flatMap(span => [span.start, span.end]).filter(at => at > start && at < end)])].sort((a, b) => a - b)
+    return boundaries.slice(0, -1).map((at, i) => {
+      const tone = spans.filter(span => span.start <= at && span.end > at).at(-1)?.tone
+      const value = text.slice(at, boundaries[i + 1])
+      return tone ? <span key={at} className={`output-token output-${tone}`}>{value}</span> : value
+    })
+  }
+  const parts: (string | JSX.Element)[] = []
+  let from = 0
+  if (query) {
+    const source = text.toLowerCase()
+    const match = query.toLowerCase()
+    let at = source.indexOf(match)
+    while (at !== -1) {
+      parts.push(...colored(from, at), <mark key={`match-${at}`}>{text.slice(at, at + query.length)}</mark>)
+      from = at + query.length
+      at = source.indexOf(match, from)
+    }
+  }
+  parts.push(...colored(from, text.length))
+  if (!text) parts.push('\u00a0')
+  return <div className={`log-line log-${level}`} data-log-level={level}>
+    <span className="log-line-number" aria-hidden="true">{index + 1}</span>
+    <span className="log-line-text">{parts}</span>
+  </div>
+})

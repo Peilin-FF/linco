@@ -4,6 +4,7 @@ import {
   AGENT_PRESETS,
   agentLaunchCommand,
   agentExecutable,
+  providerCaps,
   testModelConnection,
   type AgentConfig,
   type AppConfig,
@@ -269,6 +270,17 @@ export default function ModelSettings({
             <div className="rounded-lg bg-canvas px-3 py-2 font-mono text-[12px] text-ink-muted">
               {agentLaunchCommand(selected)}
             </div>
+
+            <Field label={t('model.permission')} hint={t('model.nextSessionHint')}>
+              <select aria-label={t('model.permission')} value={selected.permission} onChange={(e) => updateAgent(selected.id, { permission: e.target.value })} className={inputClass}>
+                {providerCaps(selected).permissions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </Field>
+            <Field label={t('model.effort')} hint={t('model.nextSessionHint')}>
+              <select aria-label={t('model.effort')} value={selected.effort} onChange={(e) => updateAgent(selected.id, { effort: e.target.value })} className={inputClass}>
+                {providerCaps(selected).efforts.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </Field>
 
             <Field label={t('model.loginMethod')} hint={t('model.loginMethodHint')}>
               <div className="flex gap-2">

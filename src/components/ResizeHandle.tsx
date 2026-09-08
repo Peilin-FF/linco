@@ -5,6 +5,7 @@ interface ResizeHandleProps {
   onResize: (delta: number) => void
   /** 'horizontal'(默认,上下拖改高度)| 'vertical'(左右拖改宽度) */
   orientation?: 'horizontal' | 'vertical'
+  label?: string
 }
 
 /**
@@ -14,7 +15,8 @@ interface ResizeHandleProps {
  */
 export default function ResizeHandle({
   onResize,
-  orientation = 'horizontal'
+  orientation = 'horizontal',
+  label
 }: ResizeHandleProps): JSX.Element {
   const vertical = orientation === 'vertical'
   const onPointerDown = useCallback(
@@ -54,6 +56,16 @@ export default function ResizeHandle({
   return (
     <div
       onPointerDown={onPointerDown}
+      role={label ? 'separator' : undefined}
+      aria-label={label}
+      aria-orientation="horizontal"
+      title={label}
+      tabIndex={label ? 0 : undefined}
+      onKeyDown={(event) => {
+        if (!label || !['ArrowUp', 'ArrowDown'].includes(event.key)) return
+        event.preventDefault()
+        onResize(event.key === 'ArrowUp' ? -16 : 16)
+      }}
       className="group relative flex h-4 shrink-0 cursor-ns-resize items-center justify-center"
     >
       <div className="h-[3px] w-10 rounded-full bg-black/15 transition-colors group-hover:bg-accent/70" />

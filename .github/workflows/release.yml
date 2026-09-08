@@ -52,6 +52,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Test frontend logic
+        run: npm test
+
       - name: Build, sign, and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -66,12 +69,13 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.6:
-            - Show agent background tasks on local Windows sessions as live Terminal tabs, tailing the real stdout redirect file resolved from the process's standard handles (with a command-line fallback for PowerShell redirects).
-            - Detect background tasks started from project subdirectories on Windows.
-            - Collapse duplicate task tabs: worker and launcher processes sharing one output file (multiprocessing, DataLoader, DDP, venv launchers) now appear once.
-            - Explain empty task panels instead of leaving them blank when no output file was detected or the log is unreadable.
-            - Reset the task list when switching projects or connections so stale paths are never tailed on the new host.
+            Linco 1.0.7:
+            - Browse 32 built-in themes with previews, search, light/dark filters, and favorites. Theme changes apply to the workspace, editor, and terminal; local JSON imports remain supported.
+            - Read code with language-aware syntax highlighting, clearer file icons, and automatic line wrapping. Open a terminal alongside your files.
+            - Make terminal and task logs easier to scan with semantic color highlights and improved monospace typography.
+            - Work with compact Vibe Working and Code navigation, visible open sessions, a larger multiline composer, and refined translucent window chrome.
+            - Organize research spaces, milestones, explorations, and agent checkpoints. Edit Notion in an isolated native browser with templates and saved-page sharing; Notion tools require a local Codex connection and authorization.
+            - Preserve editor drafts and running terminals when switching themes or workspace views.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}

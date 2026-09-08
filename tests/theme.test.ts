@@ -1,12 +1,47 @@
 import { describe, expect, it } from 'vitest'
-import { THEMES, terminalTheme, themeById } from '@/lib/theme'
+import { DEFAULT_FONT_SIZE, THEMES, terminalTheme, themeById } from '@/lib/theme'
 
-describe('VS Code themes', () => {
-  it('exposes only the bundled VS Code Modern themes', () => {
-    expect(THEMES.map((theme) => theme.id)).toEqual([
+describe('workbench themes', () => {
+  it('offers Linco themes and retains the VS Code alternatives', () => {
+    expect(THEMES.slice(0, 7).map((theme) => theme.id)).toEqual([
+      'linco-light',
+      'linco-dark',
       'vscode-light',
-      'vscode-dark'
+      'vscode-dark',
+      'github-dark-default',
+      'tokyo-night',
+      'catppuccin-mocha'
     ])
+    expect(THEMES).toHaveLength(32)
+    expect(new Set(THEMES.map(theme => theme.id)).size).toBe(THEMES.length)
+  })
+
+  it('defaults to Linco Light without changing a saved theme', () => {
+    expect(themeById(undefined).id).toBe('linco-light')
+    expect(themeById('unknown').id).toBe('linco-light')
+    expect(themeById('vscode-dark').id).toBe('vscode-dark')
+  })
+
+  it('uses compact interface typography by default', () => {
+    expect(DEFAULT_FONT_SIZE).toBe(12)
+  })
+
+  it.each(['github-dark-default', 'tokyo-night', 'catppuccin-mocha'])('has a complete, distinct dark palette for %s', (id) => {
+    const theme = themeById(id)
+    expect(theme.id).toBe(id)
+    expect(theme.dark).toBe(true)
+    expect(Object.keys(theme.ansi!)).toHaveLength(16)
+    expect(terminalTheme(theme).blue).toBe(theme.ansi!.blue)
+    expect(theme.syntax.keyword).not.toBe(themeById('vscode-dark').syntax.keyword)
+    expect(terminalTheme(theme).extendedAnsi).toHaveLength(240)
+  })
+
+  it.each(THEMES)('keeps terminal surfaces consistent with $name', (theme) => {
+    expect(terminalTheme(theme)).toMatchObject({
+      background: theme.vars.canvas,
+      foreground: theme.vars.ink,
+      selectionBackground: theme.vars.editorSelection,
+    })
   })
 
   it.each([

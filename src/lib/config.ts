@@ -36,11 +36,11 @@ export interface AppConfig {
   language?: string
   /** 已安装的插件 agent:''=未选 / 'claude' / 'codex'。决定装哪套插件。 */
   pluginAgent?: string
-  /** UI theme id (see lib/theme.ts); empty uses VS Code Light Modern. */
+  /** UI theme id (see lib/theme.ts); empty uses Linco Light. */
   theme?: string
   /** 界面字体 CSS font-family;空=系统默认 */
   uiFont?: string
-  /** 界面字号 px;0/缺省=14 */
+  /** Interface font size in px; 0/missing uses the compact 12px default. */
   uiFontSize?: number
   /** GitHub 用户名(git 凭据) */
   githubUser?: string

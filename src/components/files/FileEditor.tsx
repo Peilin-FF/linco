@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Save, FileText } from 'lucide-react'
+import { Save, FileText, WrapText } from 'lucide-react'
 import CodeMirror from '@uiw/react-codemirror'
 import { EditorSelection, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
@@ -9,14 +9,7 @@ import {
   indentWithTab
 } from '@codemirror/commands'
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
-import { python } from '@codemirror/lang-python'
-import { json } from '@codemirror/lang-json'
-import { javascript } from '@codemirror/lang-javascript'
-import { rust } from '@codemirror/lang-rust'
-import { markdown } from '@codemirror/lang-markdown'
-import { html } from '@codemirror/lang-html'
-import { css } from '@codemirror/lang-css'
-import { yaml } from '@codemirror/lang-yaml'
+import { languageForFile } from '@/lib/editorLanguages'
 import { invalidateFile, readFileCached, writeFile } from '@/lib/fs'
 import { onRemoteFsChange } from '@/lib/watch'
 import { useIsDark } from '@/lib/theme'
@@ -48,7 +41,7 @@ interface FileEditorProps {
 }
 
 function baseName(p: string): string {
-  return p.split('/').pop() || p
+  return p.split(/[\\/]/).pop() || p
 }
 
 function changeMarkersFromDiff(diff: string): ChangeOverviewMarker[] {
@@ -99,43 +92,6 @@ function changeMarkersFromDiff(diff: string): ChangeOverviewMarker[] {
   return markers
 }
 
-// 按扩展名选择 CodeMirror 语言扩展(语法高亮)
-function langFor(name: string): Extension[] {
-  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
-  switch (ext) {
-    case 'py':
-      return [python()]
-    case 'json':
-      return [json()]
-    case 'js':
-    case 'jsx':
-    case 'ts':
-    case 'tsx':
-    case 'mjs':
-    case 'cjs':
-      return [javascript({ jsx: true, typescript: ext.startsWith('ts') })]
-    case 'rs':
-      return [rust()]
-    case 'md':
-    case 'markdown':
-      return [markdown()]
-    case 'html':
-    case 'htm':
-    case 'vue':
-    case 'svelte':
-      return [html()]
-    case 'css':
-    case 'scss':
-    case 'less':
-      return [css()]
-    case 'yaml':
-    case 'yml':
-      return [yaml()]
-    default:
-      return []
-  }
-}
-
 export default function FileEditor({ path, host, diff = '' }: FileEditorProps): JSX.Element {
   const { t } = useI18n()
   const dark = useIsDark()
@@ -144,13 +100,15 @@ export default function FileEditor({ path, host, diff = '' }: FileEditorProps): 
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [wrap, setWrap] = useState(true)
   const savedRef = useRef('')
   const dirtyRef = useRef(false) // 与 dirty 同步,供事件回调里读最新值(避免闭包旧值)
   const editorViewRef = useRef<EditorView | null>(null)
 
+  const language = useMemo(() => languageForFile(path), [path])
   const extensions = useMemo(
-    () => [...EDIT_EXTENSIONS, ...langFor(baseName(path))],
-    [path]
+    () => [...EDIT_EXTENSIONS, ...language.extensions, ...(wrap ? [EditorView.lineWrapping] : [])],
+    [language, wrap]
   )
   const changeMarkers = useMemo(() => changeMarkersFromDiff(diff), [diff])
   const totalLines = useMemo(() => Math.max(1, content.split('\n').length), [content])
@@ -229,6 +187,8 @@ export default function FileEditor({ path, host, diff = '' }: FileEditorProps): 
         <span className="truncate text-ink">{baseName(path)}</span>
         {dirty && <span className="h-1.5 w-1.5 rounded-full bg-ink-muted" />}
         <div className="flex-1" />
+        <span data-editor-language={language.label} className="text-[11px] text-ink-faint" title={t('editor.language')}>{language.label}</span>
+        <button className="icon-button" aria-label={t('editor.wrap')} title={t('editor.wrap')} aria-pressed={wrap} onClick={() => setWrap((value) => !value)}><WrapText size={14} /></button>
         <button
           onClick={save}
           disabled={!dirty || saving}

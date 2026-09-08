@@ -312,7 +312,7 @@ export default function GitView({
             : 'hover:bg-black/[0.05]'
         }`}
       >
-        <Icon size={13} className="shrink-0 text-ink-muted" />
+        <Icon size={16} />
         <span className="truncate text-ink">{baseName(f.path)}</span>
         <span className="truncate text-[11px] text-ink-faint">
           {f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : ''}

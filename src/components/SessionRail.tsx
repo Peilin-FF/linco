@@ -1,4 +1,5 @@
-import { Activity, Check } from 'lucide-react'
+import { MessagesSquare } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { useI18n } from '@/lib/i18n'
 
 // 会话状态:忙(有输出)/ 空闲(静默)/ 已结束(PTY 退出)
@@ -10,6 +11,7 @@ export interface RailSession {
   connId: string
   connName: string // 连接显示名(本地/集群名)
   project: string // 项目名(cwd basename)
+  agentName: string
   status: SessionStatus
 }
 
@@ -45,48 +47,33 @@ export default function SessionRail({
   onJump
 }: Props): JSX.Element | null {
   const { t } = useI18n()
+  const tabsRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    tabsRef.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeId])
   if (sessions.length === 0) return null
-  // 忙的排前面,方便一眼看到"谁在跑/谁停了"
-  const order = { busy: 0, idle: 1, exited: 2 }
-  const sorted = [...sessions].sort((a, b) => order[a.status] - order[b.status])
-
   return (
-    <div className="flex h-full flex-col px-1.5 py-1.5">
-      <div className="flex shrink-0 items-center gap-1 px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-ink-faint">
-        <Activity size={11} />
-        {t('rail.sessions')}
-      </div>
-      {/* 列表区:一屏约 3 张卡片(每张含 max-height),超出上下滚动 */}
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
-        {sorted.map((s) => {
+    <nav className="session-rail" aria-label={t('rail.sessions')}>
+      <MessagesSquare size={13} className="shrink-0 text-ink-faint" aria-hidden="true" />
+      <div ref={tabsRef} className="session-tabs">
+        {sessions.map((s) => {
           const active = s.id === activeId
           return (
             <button
               key={s.id}
               onClick={() => onJump(s.id)}
-              title={`${s.connName} · ${s.project}`}
-              className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors ${
-                active
-                  ? 'bg-sidebar text-ink ring-1 ring-black/10'
-                  : 'text-ink-muted hover:bg-black/5'
-              }`}
+              title={`${s.connName} · ${s.project} · ${s.agentName} · ${t(`workspace.session.${s.status}`)}`}
+              aria-label={`${s.project}, ${s.agentName}, ${s.connName}, ${t(`workspace.session.${s.status}`)}`}
+              aria-current={active ? 'true' : undefined}
+              className={`session-tab ${active ? 'is-active' : ''}`}
             >
               {dot(s.status)}
-              <span className="min-w-0 flex-1 leading-tight">
-                <span className="block truncate font-medium text-ink">
-                  {s.project}
-                </span>
-                <span className="block truncate text-[10px] text-ink-faint">
-                  {s.connName}
-                </span>
-              </span>
-              {s.status === 'exited' && (
-                <Check size={11} className="shrink-0 text-ink-faint/60" />
-              )}
+              <span className="truncate">{s.project}</span>
+              <span className="session-tab-agent">{s.agentName}</span>
             </button>
           )
         })}
       </div>
-    </div>
+    </nav>
   )
 }

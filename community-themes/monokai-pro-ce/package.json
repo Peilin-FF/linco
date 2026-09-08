@@ -1,0 +1,9 @@
+{
+  "name": "linco-monokai-pro-ce",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unpublished Monokai Pro (CE) default-filter theme candidate for Linco",
+  "type": "module",
+  "license": "MIT",
+  "scripts": { "test": "node verify.mjs" }
+}

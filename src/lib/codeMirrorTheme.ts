@@ -36,26 +36,31 @@ interface EditorPalette {
 function palette(theme: Theme): EditorPalette {
   const v = theme.vars
   return {
-    background: v.canvas,
-    foreground: v.ink,
-    cursor: v.editorCursor,
-    selection: v.editorSelection,
-    selectionMatch: theme.dark ? '#264f7880' : '#add6ff80',
-    lineBorder: theme.dark ? '#282828' : '#eeeeee',
-    lineNumber: v.editorLineNumber,
-    lineNumberActive: v.editorLineNumberActive,
-    widget: v.widget,
-    border: v.border,
-    input: v.inputBackground,
-    inputBorder: v.inputBorder,
-    accent: v.accent,
-    buttonHover: v.buttonHover,
+    // CSS variables also update an open editor when switching between two light
+    // (or two dark) themes, without recreating its document or undo history.
+    background: `var(--canvas, ${v.canvas})`,
+    foreground: `var(--ink, ${v.ink})`,
+    cursor: `var(--editor-cursor, ${v.editorCursor})`,
+    selection: `var(--editor-selection, ${v.editorSelection})`,
+    selectionMatch: 'color-mix(in srgb, var(--editor-selection) 50%, transparent)',
+    lineBorder: `var(--border, ${v.border})`,
+    lineNumber: `var(--editor-line-number, ${v.editorLineNumber})`,
+    lineNumberActive: `var(--editor-line-number-active, ${v.editorLineNumberActive})`,
+    widget: `var(--widget, ${v.widget})`,
+    border: `var(--border, ${v.border})`,
+    input: `var(--input-background, ${v.inputBackground})`,
+    inputBorder: `var(--input-border, ${v.inputBorder})`,
+    accent: `var(--accent, ${v.accent})`,
+    buttonHover: `var(--button-hover, ${v.buttonHover})`,
     findMatch: theme.dark ? '#9e6a03' : '#a8ac94',
     findHighlight: '#ea5c0055',
-    link: v.link,
-    diffAdded: v.diffAdded,
-    diffDeleted: v.diffDeleted,
-    syntax: theme.dark ? VSCODE_DARK_SYNTAX : VSCODE_LIGHT_SYNTAX
+    link: `var(--link, ${v.link})`,
+    diffAdded: `var(--diff-added, ${v.diffAdded})`,
+    diffDeleted: `var(--diff-deleted, ${v.diffDeleted})`,
+    // CSS variables also update syntax when switching between two dark themes,
+    // without replacing the document, history, selection or editor instance.
+    syntax: Object.fromEntries(Object.entries(theme.dark ? VSCODE_DARK_SYNTAX : VSCODE_LIGHT_SYNTAX)
+      .map(([name, color]) => [name, `var(--syntax-${name}, ${color})`])) as unknown as SyntaxColors
   }
 }
 
@@ -68,6 +73,12 @@ function createVscodeEditorTheme(theme: Theme): Extension {
           backgroundColor: p.background,
           color: p.foreground
         },
+        '.cm-scroller': {
+          fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace',
+          lineHeight: '1.65',
+          fontVariantLigatures: 'none'
+        },
+        '.cm-line': { padding: '0 12px' },
         '&.cm-focused': { outline: 'none' },
         '.cm-content': { caretColor: p.cursor },
         '.cm-cursor, .cm-dropCursor': { borderLeftColor: p.cursor },

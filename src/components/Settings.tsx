@@ -4,7 +4,6 @@ import {
   SlidersHorizontal,
   Server,
   BarChart3,
-  Rocket,
   Cloud,
   Puzzle,
   GitBranch
@@ -50,10 +49,10 @@ export default function Settings({
   const [section, setSection] = useState<SectionId>('general')
 
   return (
-    <div className="flex h-full w-full bg-sidebar font-sans text-ink">
+    <div className="settings-shell flex h-full w-full bg-sidebar font-sans text-ink">
       {/* 左侧导航 */}
-      <aside className="drag flex w-[280px] shrink-0 flex-col px-3">
-        <div className="h-12 shrink-0" />
+      <aside className="settings-sidebar flex shrink-0 flex-col px-3">
+        <div className="settings-title">{t('common.settings')}</div>
         <button
           onClick={onClose}
           className="no-drag mb-3 flex items-center gap-2 px-2.5 py-1.5 text-[14px] text-ink-muted hover:text-ink"
@@ -67,9 +66,10 @@ export default function Settings({
             <button
               key={id}
               onClick={() => setSection(id)}
-              className={`no-drag flex items-center gap-3 rounded-xl px-3 py-2 text-[14px] transition-colors ${
+              aria-current={id === section ? 'page' : undefined}
+              className={`no-drag flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13px] transition-colors ${
                 id === section
-                  ? 'bg-canvas text-ink shadow-sm'
+                  ? 'bg-accent/10 text-link font-medium'
                   : 'text-ink-muted hover:bg-black/5'
               }`}
             >
@@ -79,14 +79,10 @@ export default function Settings({
           ))}
         </nav>
 
-        <button className="no-drag mb-3 mt-2 flex items-center gap-3 rounded-xl border border-dashed border-black/15 px-3 py-2.5 text-[14px] text-ink-muted hover:bg-black/5">
-          <Rocket size={18} className="shrink-0" />
-          <span>{t('settings.onboarding')}</span>
-        </button>
       </aside>
 
       {/* 右侧内容 */}
-      <main className="flex-1 p-1.5 pl-0">
+      <main className="settings-content flex-1">
         <div className="h-full w-full overflow-y-auto rounded-2xl bg-canvas p-8 shadow-card">
           {section === 'model' ? (
             <ModelSettings config={config} onChange={onChange} />

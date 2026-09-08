@@ -1,0 +1,32 @@
+{
+  "format": "linco-theme",
+  "version": 1,
+  "theme": {
+    "id": "monokai-pro-ce",
+    "name": "Monokai Pro (CE)",
+    "dark": true,
+    "vars": {
+      "canvas": "#2d2a2e", "sidebar": "#221f22", "widget": "#19181a",
+      "ink": "#fcfcfa", "inkMuted": "#c1c0c0", "inkFaint": "#939293",
+      "accent": "#5b595c", "border": "#5b595c", "hover": "#403e41", "selection": "#403e41",
+      "inputBackground": "#2d2a2e", "inputBorder": "#5b595c", "inputPlaceholder": "#939293",
+      "buttonHover": "#727072", "buttonSecondary": "#403e41", "buttonSecondaryHover": "#5b595c",
+      "link": "#78dce8", "error": "#ff6188", "warning": "#ffd866",
+      "editorSelection": "#403e41", "editorCursor": "#fcfcfa",
+      "editorLineNumber": "#939293", "editorLineNumberActive": "#fcfcfa",
+      "diffAdded": "#a9dc7618", "diffDeleted": "#ff618818", "diffHunk": "#78dce812",
+      "diffAddedForeground": "#a9dc76", "diffDeletedForeground": "#ff6188"
+    },
+    "syntax": {
+      "comment": "#939293", "keyword": "#ff6188", "controlKeyword": "#ff6188", "variable": "#fcfcfa",
+      "function": "#a9dc76", "type": "#78dce8", "property": "#fc9867", "string": "#ffd866",
+      "number": "#ab9df2", "regexp": "#fc9867", "tag": "#ff6188", "attribute": "#a9dc76", "invalid": "#ff6188"
+    },
+    "ansi": {
+      "black": "#403e41", "red": "#ff6188", "green": "#a9dc76", "yellow": "#ffd866",
+      "blue": "#78dce8", "magenta": "#ab9df2", "cyan": "#78dce8", "white": "#fcfcfa",
+      "brightBlack": "#939293", "brightRed": "#ff6188", "brightGreen": "#a9dc76", "brightYellow": "#ffd866",
+      "brightBlue": "#78dce8", "brightMagenta": "#ab9df2", "brightCyan": "#78dce8", "brightWhite": "#fcfcfa"
+    }
+  }
+}

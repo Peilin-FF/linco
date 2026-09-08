@@ -31,6 +31,9 @@ icon-source.png
 # 本地临时文件 / 测试脚本(不入库)
 tmp/
 
+# Local research-space binding and agent checkpoint drafts (may be private).
+.linco/research/
+
 # Platform TeX archives are fetched and checksum-verified before bundling.
 src-tauri/resources/tex/*.exe
 src-tauri/resources/tex/*.tar.xz

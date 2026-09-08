@@ -1,4 +1,4 @@
-// Theme system: VS Code Light/Dark Modern plus configurable fonts.
+// Neutral workbench surfaces; color is reserved for actions and status.
 //
 // 架构:全 app 颜色经 tailwind 的 canvas/sidebar/ink/accent 引用 CSS 变量(见 tailwind.config.js),
 // 换主题 = 改 document.documentElement 上的 --canvas/--sidebar/... 变量值,无需改任何组件。
@@ -6,6 +6,9 @@
 
 import { useEffect, useState } from 'react'
 import type { ITheme } from '@xterm/xterm'
+import { CURATED_THEMES } from './curatedThemes'
+import { importedThemes } from './importedThemes'
+import { CATALOG_THEMES } from './themeCatalog'
 
 export interface ThemeVars {
   canvas: string
@@ -61,6 +64,8 @@ export interface Theme {
   dark: boolean
   vars: ThemeVars
   syntax: SyntaxColors
+  ansi?: ITheme
+  family?: string
 }
 
 // Workbench values are copied from VS Code's bundled Modern themes.
@@ -97,6 +102,45 @@ export const VSCODE_DARK_SYNTAX: SyntaxColors = {
 }
 
 export const THEMES: Theme[] = [
+  // Existing defaults and saved IDs remain unchanged.
+  {
+    id: 'linco-light',
+    name: 'Linco · Light',
+    dark: false,
+    vars: {
+      canvas: '#ffffff', sidebar: '#f6f6f5', ink: '#242628',
+      inkMuted: '#64686c', inkFaint: '#767b80', accent: '#455d52',
+      border: '#e4e5e5', hover: '#eeefef', selection: '#e4e7e5',
+      inputBackground: '#ffffff', inputBorder: '#cdd0d1', inputPlaceholder: '#767b80',
+      widget: '#fafafa', buttonHover: '#34493f', buttonSecondary: '#eeefef',
+      buttonSecondaryHover: '#e4e7e5', link: '#3e6652', error: '#bd4141', warning: '#976515',
+      editorSelection: '#dbe7df', editorCursor: '#455d52',
+      editorLineNumber: '#878b90', editorLineNumberActive: '#455d52',
+      diffAdded: '#48885b1a', diffDeleted: '#c343431a',
+      diffAddedForeground: '#357349', diffDeletedForeground: '#c34343', diffHunk: '#3d695210',
+      shadow: '0 2px 8px #0000000a'
+    },
+    syntax: VSCODE_LIGHT_SYNTAX
+  },
+  {
+    id: 'linco-dark',
+    name: 'Linco · Dark',
+    dark: true,
+    vars: {
+      canvas: '#1c1d1f', sidebar: '#17181a', ink: '#e4e5e7',
+      inkMuted: '#a0a3a8', inkFaint: '#858a90', accent: '#52705d',
+      border: '#2d2f32', hover: '#27292c', selection: '#33383a',
+      inputBackground: '#202224', inputBorder: '#42464a', inputPlaceholder: '#858a90',
+      widget: '#222427', buttonHover: '#607e6b', buttonSecondary: '#27292c',
+      buttonSecondaryHover: '#33383a', link: '#aac8b5', error: '#e58b8b', warning: '#d0ae70',
+      editorSelection: '#34483c', editorCursor: '#c3d5c9',
+      editorLineNumber: '#757b82', editorLineNumberActive: '#c3d5c9',
+      diffAdded: '#72bb871c', diffDeleted: '#ef93931c',
+      diffAddedForeground: '#91cfa1', diffDeletedForeground: '#ef9393', diffHunk: '#a7cfb410',
+      shadow: '0 2px 8px #00000024'
+    },
+    syntax: VSCODE_DARK_SYNTAX
+  },
   {
     id: 'vscode-light',
     name: 'VS Code Light Modern',
@@ -170,10 +214,12 @@ export const THEMES: Theme[] = [
       shadow: '0 2px 8px rgba(0, 0, 0, 0.36)'
     },
     syntax: VSCODE_DARK_SYNTAX
-  }
+  },
+  ...CURATED_THEMES,
+  ...CATALOG_THEMES
 ]
 
-export const DEFAULT_THEME_ID = 'vscode-light'
+export const DEFAULT_THEME_ID = 'linco-light'
 
 const LEGACY_THEME_IDS: Record<string, string> = {
   'github-light': 'vscode-light',
@@ -188,7 +234,7 @@ const LEGACY_THEME_IDS: Record<string, string> = {
 
 export function themeById(id: string | undefined): Theme {
   const resolved = id ? LEGACY_THEME_IDS[id] || id : DEFAULT_THEME_ID
-  return THEMES.find((t) => t.id === resolved) || THEMES[0]
+  return THEMES.find((t) => t.id === resolved) || importedThemes().find((t) => t.id === resolved) || THEMES[0]
 }
 
 /** 应用主题:把变量写到 <html>,并设 color-scheme(影响原生滚动条/控件)。 */
@@ -225,6 +271,13 @@ export function applyTheme(id: string | undefined): void {
   root.style.setProperty('--diff-deleted-foreground', v.diffDeletedForeground)
   root.style.setProperty('--diff-hunk', v.diffHunk)
   root.style.setProperty('--shadow-card', v.shadow)
+  for (const [name, color] of Object.entries(t.syntax)) root.style.setProperty(`--syntax-${name}`, color)
+  // Old palettes retain their established log colors; curated themes use their
+  // own syntax accents, shared by the reading view and live terminal hints.
+  for (const [name, color] of Object.entries({ number: t.syntax.number, label: v.link, time: v.inkMuted })) {
+    if (t.ansi) root.style.setProperty(`--output-${name}`, color)
+    else root.style.removeProperty(`--output-${name}`)
+  }
   root.style.colorScheme = t.dark ? 'dark' : 'light'
   root.setAttribute('data-theme', t.id)
   root.setAttribute('data-theme-dark', t.dark ? '1' : '0')
@@ -312,9 +365,9 @@ function defaultExtendedAnsi(): string[] {
 
 const DEFAULT_EXTENDED_ANSI = defaultExtendedAnsi()
 
-/** Build an xterm palette from the active workbench theme. ANSI colors match VS Code. */
+/** Theme-specific ANSI accents; existing themes retain the VS Code palette. */
 export function terminalTheme(theme: Theme = currentTheme()): ITheme {
-  const ansi = theme.dark ? ANSI_DARK : ANSI_LIGHT
+  const ansi = theme.ansi || (theme.dark ? ANSI_DARK : ANSI_LIGHT)
   const extendedAnsi = [...DEFAULT_EXTENDED_ANSI]
   if (!theme.dark) {
     // Codex renders its input surface with xterm color 235 (#262626).
@@ -366,7 +419,7 @@ export const UI_FONTS: FontOption[] = [
 
 export const FONT_SIZE_MIN = 11
 export const FONT_SIZE_MAX = 20
-export const DEFAULT_FONT_SIZE = 14
+export const DEFAULT_FONT_SIZE = 12
 
 /** 应用字体与字号。font='' 时清除 --app-font(回退系统字体链)。 */
 export function applyFont(font: string | undefined, size: number | undefined): void {

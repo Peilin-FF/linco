@@ -325,7 +325,7 @@ export default function ScreenView({
   return (
     <div className="flex h-full w-full flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
       {/* 工具条 */}
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-black/8 px-2.5 py-1.5">
+      <div className="screen-toolbar flex shrink-0 items-center gap-1.5 border-b border-black/8 px-2.5 py-1.5">
         <button
           onClick={back}
           disabled={!canBack}
@@ -359,7 +359,7 @@ export default function ScreenView({
               if (e.key === 'Escape') setEditing(false)
             }}
             onBlur={() => setEditing(false)}
-            className="flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 font-mono text-[12px] text-ink outline-none focus:border-black/25"
+            className="preview-address flex-1 rounded-md border border-black/10 bg-canvas px-2 py-1 text-[12px] text-ink outline-none focus:border-black/25"
           />
         ) : (
           <button
@@ -367,7 +367,7 @@ export default function ScreenView({
               setDraft(url)
               setEditing(true)
             }}
-            className="flex flex-1 items-center gap-1.5 truncate rounded-md px-2 py-1 text-left font-mono text-[12px] text-ink-muted hover:bg-black/5"
+            className="preview-address flex flex-1 items-center gap-1.5 truncate rounded-md px-2 py-1 text-left text-[12px] text-ink-muted hover:bg-black/5"
             title={t('screen.editUrl')}
           >
             <Link2 size={13} className="shrink-0 text-ink-faint" />
@@ -388,7 +388,7 @@ export default function ScreenView({
           <button
             onClick={submitToAgent}
             disabled={!canSubmit}
-            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 text-[12px] font-medium text-accent hover:bg-accent/10 disabled:text-ink-faint/40 disabled:hover:bg-transparent"
+            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1.5 text-[12px] text-ink-muted hover:bg-black/5 hover:text-ink disabled:text-ink-faint/40 disabled:hover:bg-transparent"
             title={canSubmit ? t('screen.submitToAgent.hint') : t('screen.submitToAgent.none')}
           >
             <Bot size={15} />

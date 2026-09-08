@@ -19,6 +19,7 @@ interface Props {
   provider: string
   /** 远程连接 host(空 = 本地) */
   host?: string
+  active?: boolean
   /** 点击某条历史 → 在对话窗口恢复该会话继续聊 */
   onResume?: (id: string) => void
 }
@@ -38,11 +39,12 @@ function relTime(
 
 /// 会话历史面板:列出「当前项目」里该 agent 存的历史会话,可逐个或批量删除防堆积。
 /// 放在对话框左侧空白区(与右侧 SessionRail 镜像)。一屏约 3 条,超出滚动。
-export default function SessionHistory({ cwd, provider, host, onResume }: Props): JSX.Element | null {
+export default function SessionHistory({ cwd, provider, host, active = true, onResume }: Props): JSX.Element | null {
   const { t } = useI18n()
   const [items, setItems] = useState<SessionInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [resumeTarget, setResumeTarget] = useState<SessionInfo | null>(null)
   const refreshGenerationRef = useRef(0)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -57,7 +59,7 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
 
   const refresh = useCallback(async () => {
     const generation = ++refreshGenerationRef.current
-    if (!cwd) {
+    if (!cwd || !active) {
       setItems([])
       setLoading(false)
       return
@@ -75,7 +77,7 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
     } finally {
       if (generation === refreshGenerationRef.current) setLoading(false)
     }
-  }, [cwd, provider, host])
+  }, [cwd, provider, host, active])
 
   // 项目 / agent / 连接变化时重载;并退出选择模式(列表已换)
   useEffect(() => {
@@ -83,15 +85,24 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
     setSelectMode(false)
     setSelected(new Set())
     setBatchConfirm(false)
+    setResumeTarget(null)
+    return () => { refreshGenerationRef.current++ }
   }, [refresh])
 
   // A remote Codex rollout appears shortly after its terminal starts. Retry
   // once so that startup race cannot leave a new project's history empty.
   useEffect(() => {
-    if (!host || !cwd) return
+    if (!active || !host || !cwd) return
     const timer = window.setTimeout(() => void refresh(), 2500)
     return () => window.clearTimeout(timer)
-  }, [cwd, host, refresh])
+  }, [active, cwd, host, refresh])
+
+  useEffect(() => {
+    if (!active) return
+    const onRefresh = (): void => { void refresh() }
+    window.addEventListener('linco:turn-refresh', onRefresh)
+    return () => window.removeEventListener('linco:turn-refresh', onRefresh)
+  }, [active, refresh])
 
   // 点别处取消「确认删除」态
   useEffect(() => {
@@ -160,8 +171,6 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
   }
 
   if (!cwd) return null
-  // Remote failures must not remove the whole left rail.
-  if (!host && !loading && items.length === 0) return null
 
   return (
     <div className="flex h-full flex-col px-1.5 py-1.5">
@@ -173,12 +182,13 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
             <span className="text-ink-faint/70">· {items.length}</span>
           )}
           <span className="flex-1" />
-          {host && (
+          {(
             <button
               type="button"
               onClick={() => void refresh()}
               disabled={loading}
               title={t('history.refresh')}
+              aria-label={t('history.refresh')}
               className="shrink-0 rounded p-0.5 text-ink-faint transition-colors hover:bg-black/10 hover:text-ink disabled:cursor-default"
             >
               <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
@@ -250,6 +260,15 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
           </div>
         )}
       </div>
+      {resumeTarget && <section className="session-resume-confirm" aria-label={t('history.resumeConfirmTitle')}>
+        <strong>{t('history.resumeConfirmTitle')}</strong>
+        <span className="block truncate" title={resumeTarget.title}>{resumeTarget.title}</span>
+        <p>{t('history.resumeWarning')}</p>
+        <div>
+          <button className="secondary-button" onClick={() => setResumeTarget(null)}>{t('history.cancel')}</button>
+          <button className="primary-button" onClick={() => { onResume?.(resumeTarget.id); setResumeTarget(null) }}>{t('history.resumeConfirm')}</button>
+        </div>
+      </section>}
       {/* 列表区:一屏约 3 条,超出上下滚动 */}
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto pr-0.5">
         {!loading && items.length === 0 && (
@@ -291,7 +310,7 @@ export default function SessionHistory({ cwd, provider, host, onResume }: Props)
               {/* 卡片主体:选择模式→勾选;否则→恢复会话 */}
               <button
                 type="button"
-                onClick={() => (selectMode ? toggleSel(s.id) : onResume?.(s.id))}
+                onClick={() => (selectMode ? toggleSel(s.id) : setResumeTarget(s))}
                 disabled={busy || confirming}
                 title={selectMode || confirming ? undefined : t('history.resume')}
                 className="flex min-w-0 flex-1 items-center py-1.5 text-left disabled:cursor-default"

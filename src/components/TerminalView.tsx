@@ -29,6 +29,7 @@ import { useI18n } from '@/lib/i18n'
 import { observeTheme, terminalTheme } from '@/lib/theme'
 import { TerminalReplayBatcher } from '@/lib/terminalReplay'
 import { enableTerminalWebgl } from '@/lib/terminalWebgl'
+import { decorateTerminalOutput } from '@/lib/terminalHighlights'
 import { TmuxWheelThrottle } from '@/lib/terminalWheel'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
@@ -181,6 +182,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
+      const highlights = decorateTerminalOutput(term)
       // xterm 6 不再替应用设置根节点高度。没有这两行时内部 rows 虽然
       // 已经渲染,但 .xterm 本身是 0px 高,Windows WebView2 最终只显示背景。
       if (term.element) {
@@ -641,6 +643,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         if (replayRevealFrame !== null) {
           window.cancelAnimationFrame(replayRevealFrame)
         }
+        highlights.dispose()
         webgl.dispose()
         stopObservingTheme()
         host.removeEventListener('keydown', onKeyDownCapture, true)

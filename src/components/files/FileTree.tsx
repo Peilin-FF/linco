@@ -2,8 +2,6 @@ import { memo, useEffect, useRef, useState } from 'react'
 import {
   ChevronRight,
   ChevronDown,
-  Folder,
-  FolderOpen,
   Search,
   CaseSensitive,
   WholeWord,
@@ -26,7 +24,7 @@ import {
   type FileMatches,
   type SearchOptions
 } from '@/lib/search'
-import { iconForFile } from './icons'
+import { iconForFile, FolderTypeIcon } from './icons'
 import { isMediaFile } from './FileViewer'
 import { useI18n } from '@/lib/i18n'
 
@@ -36,13 +34,13 @@ export interface TreeContextTarget {
   y: number
 }
 
-// Git 状态字符 → 颜色 class(A 绿/M 橙/D 红/? 灰)
+// Git state colors use foreground tokens, not the darker button accent.
 function gitColor(ch: string): string {
   switch (ch) {
     case 'A':
       return 'text-diff-added-foreground'
     case 'M':
-      return 'text-accent'
+      return 'text-link'
     case 'D':
       return 'text-diff-deleted-foreground'
     default:
@@ -281,6 +279,7 @@ const Node = memo(function Node({
     <div>
       <div
         ref={rowRef}
+        data-file-entry={entry.name}
         draggable
         {...(entry.isDir
           ? { 'data-drop-dir': entry.path, 'data-drop-host': host || '' }
@@ -316,23 +315,19 @@ const Node = memo(function Node({
             ) : (
               <ChevronRight size={14} className="shrink-0 text-ink-faint" />
             )}
-            {open ? (
-              <FolderOpen size={15} className="shrink-0 text-accent" />
-            ) : (
-              <Folder size={15} className="shrink-0 text-accent" />
-            )}
+            <FolderTypeIcon name={entry.name} open={open} size={16} />
           </>
         ) : (
           <>
             <span className="w-[14px] shrink-0" />
             {FileIcon && (
-              <FileIcon size={15} className="shrink-0 text-ink-muted" />
+              <FileIcon size={16} />
             )}
           </>
         )}
         <span
           className={`truncate ${
-            gitSt && gitSt !== '•' ? gitColor(gitSt) : ''
+            isSelected || isMulti ? 'text-ink' : gitSt && gitSt !== '•' ? gitColor(gitSt) : ''
           }`}
         >
           {entry.name}
@@ -762,7 +757,7 @@ export default function FileTree({
                       ) : (
                         <ChevronDown size={13} className="shrink-0 text-ink-faint" />
                       )}
-                      <FileIcon size={13} className="shrink-0 text-ink-muted" />
+                      <FileIcon size={16} />
                       <span className="truncate text-[12.5px] text-ink">
                         {baseName(f.path)}
                       </span>

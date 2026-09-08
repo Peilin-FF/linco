@@ -1,0 +1,22 @@
+/* File identity is separate from Git status. Shapes also work without color. */
+.file-type-icon { display: block; flex-shrink: 0; color: var(--file-icon-color, var(--ink-muted)); }
+.file-type-icon.file-icon-blue { --file-icon-color: #3678ad; }
+.file-type-icon.file-icon-teal { --file-icon-color: #287f7c; }
+.file-type-icon.file-icon-green { --file-icon-color: #478147; }
+.file-type-icon.file-icon-amber { --file-icon-color: #9d741e; }
+.file-type-icon.file-icon-orange { --file-icon-color: #bc653d; }
+.file-type-icon.file-icon-purple { --file-icon-color: #8660ae; }
+.file-type-icon.file-icon-red { --file-icon-color: #bb5260; }
+.file-type-icon.file-icon-muted { --file-icon-color: var(--ink-muted); }
+.file-folder-icon { display: block; flex-shrink: 0; color: #758391; }
+[data-theme-dark='1'] .file-type-icon.file-icon-blue { --file-icon-color: #7da8df; }
+[data-theme-dark='1'] .file-type-icon.file-icon-teal { --file-icon-color: #79b8ae; }
+[data-theme-dark='1'] .file-type-icon.file-icon-green { --file-icon-color: #8bbd80; }
+[data-theme-dark='1'] .file-type-icon.file-icon-amber { --file-icon-color: #d5b76c; }
+[data-theme-dark='1'] .file-type-icon.file-icon-orange { --file-icon-color: #d58b68; }
+[data-theme-dark='1'] .file-type-icon.file-icon-purple { --file-icon-color: #b59adb; }
+[data-theme-dark='1'] .file-type-icon.file-icon-red { --file-icon-color: #dc8290; }
+[data-theme-dark='1'] .file-folder-icon { color: #8b99ab; }
+@media (forced-colors: active) {
+  .file-type-icon, .file-folder-icon { color: CanvasText; }
+}

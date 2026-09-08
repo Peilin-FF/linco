@@ -2,39 +2,55 @@
 @tailwind components;
 @tailwind utilities;
 
-/* First-paint values match VS Code Light Modern. src/lib/theme.ts updates them. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/jetbrains-mono/JetBrainsMono-Variable.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/jetbrains-mono/JetBrainsMono-VariableItalic.woff2') format('woff2');
+  font-style: italic;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+/* First-paint values match Linco Light. src/lib/theme.ts updates them. */
 :root {
   --canvas: #ffffff;
-  --sidebar: #f8f8f8;
-  --ink: #3b3b3b;
-  --ink-muted: #616161;
-  --ink-faint: #868686;
-  --accent: #005fb8;
-  --border: #e5e5e5;
-  --hover: #f2f2f2;
-  --selection: #e8e8e8;
+  --sidebar: #f6f6f5;
+  --ink: #242628;
+  --ink-muted: #64686c;
+  --ink-faint: #767b80;
+  --accent: #455d52;
+  --border: #e4e5e5;
+  --hover: #eeefef;
+  --selection: #e4e7e5;
   --input-background: #ffffff;
-  --input-border: #cecece;
-  --input-placeholder: #767676;
-  --widget: #f8f8f8;
-  --button-hover: #0258a8;
-  --button-secondary: #e5e5e5;
-  --button-secondary-hover: #cccccc;
-  --link: #005fb8;
-  --error: #f85149;
-  --warning: #bf8803;
-  --editor-selection: #add6ff;
-  --editor-cursor: #000000;
-  --editor-line-number: #6e7681;
-  --editor-line-number-active: #171184;
-  --diff-added: #9bb95533;
-  --diff-deleted: #ff000033;
-  --diff-added-foreground: #2ea043;
-  --diff-deleted-foreground: #f85149;
-  --diff-hunk: #005fb81a;
+  --input-border: #cdd0d1;
+  --input-placeholder: #767b80;
+  --widget: #fafafa;
+  --button-hover: #34493f;
+  --button-secondary: #eeefef;
+  --button-secondary-hover: #e4e7e5;
+  --link: #3e6652;
+  --error: #bd4141;
+  --warning: #976515;
+  --editor-selection: #dbe7df;
+  --editor-cursor: #455d52;
+  --editor-line-number: #878b90;
+  --editor-line-number-active: #455d52;
+  --diff-added: #48885b1a;
+  --diff-deleted: #c343431a;
+  --diff-added-foreground: #357349;
+  --diff-deleted-foreground: #c34343;
+  --diff-hunk: #3d695210;
   --find-highlight: #ea5c0055;
-  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.16);
-  --app-font-size: 14px;
+  --shadow-card: 0 2px 8px #0000000a;
+  --app-font-size: 12px;
   /* --app-font 默认不设,让 tailwind sans 链回退到系统字体 */
 }
 
@@ -51,7 +67,7 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   user-select: none;
-  font-size: var(--app-font-size, 14px);
+  font-size: var(--app-font-size, 12px);
 }
 
 ::selection {
@@ -109,17 +125,11 @@ iframe {
   width: 100%;
 }
 
-/* Scale the bottom workbench as a unit instead of floating fixed-width rails. */
+/* History and sessions live in the sidebar; the composer uses the canvas width. */
 .app-bottom-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 6px;
-  min-height: clamp(150px, 17vh, 210px);
   width: 100%;
-}
-
-.app-bottom-grid-compact {
-  min-height: 64px;
 }
 
 .app-bottom-composer {
@@ -129,45 +139,6 @@ iframe {
 
 .app-bottom-composer > div {
   height: 100%;
-}
-
-.app-bottom-rail {
-  display: none;
-  grid-row: 1;
-  min-height: 0;
-  overflow: hidden;
-  position: relative;
-}
-
-.app-bottom-rail > div {
-  inset: 0;
-  position: absolute;
-}
-
-@media (min-width: 1180px) {
-  .app-bottom-grid {
-    grid-template-columns:
-      minmax(180px, 1fr)
-      minmax(540px, 3.4fr)
-      minmax(180px, 1fr);
-    align-items: stretch;
-  }
-
-  .app-bottom-composer {
-    grid-column: 2;
-  }
-
-  .app-bottom-rail {
-    display: flex;
-  }
-
-  .app-bottom-rail-left {
-    grid-column: 1;
-  }
-
-  .app-bottom-rail-right {
-    grid-column: 3;
-  }
 }
 
 /* 细滚动条 */

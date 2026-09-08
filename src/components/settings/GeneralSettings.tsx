@@ -1,5 +1,8 @@
+import { useRef, useState } from 'react'
 import { useI18n } from '@/lib/i18n'
+import { importedThemes, importTheme, removeImportedTheme, ThemeImportError, THEME_IMPORT_LIMIT } from '@/lib/importedThemes'
 import type { AppConfig } from '@/lib/config'
+import ThemeGallery from './ThemeGallery'
 import {
   THEMES,
   applyTheme,
@@ -9,8 +12,7 @@ import {
   FONT_SIZE_MAX,
   DEFAULT_FONT_SIZE,
   DEFAULT_THEME_ID,
-  themeById,
-  type Theme
+  themeById
 } from '@/lib/theme'
 
 interface Props {
@@ -21,6 +23,9 @@ interface Props {
 // 设置 → 常规:界面语言 + 主题(预览卡)+ 字体/字号(预览)。改动即时生效 + 持久化。
 export default function GeneralSettings({ config, onChange }: Props): JSX.Element {
   const { t, lang, setLang } = useI18n()
+  const themeFile = useRef<HTMLInputElement>(null)
+  const [importError, setImportError] = useState('')
+  const [personalThemes, setPersonalThemes] = useState(importedThemes)
   const activeTheme = themeById(config.theme || DEFAULT_THEME_ID)
   const curTheme = activeTheme.id
   const curFont = config.uiFont || ''
@@ -34,6 +39,26 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
     applyTheme(id)
     onChange({ ...config, theme: id })
   }
+  const readTheme = async (file?: File): Promise<void> => {
+    if (!file) return
+    setImportError('')
+    try {
+      if (file.size > THEME_IMPORT_LIMIT) throw new ThemeImportError('tooLarge')
+      const theme = importTheme(await file.text())
+      setPersonalThemes(importedThemes())
+      pickTheme(theme.id)
+    } catch (error) {
+      setImportError(t(`settings.general.theme.import.${error instanceof ThemeImportError ? error.code : 'invalid'}`))
+    }
+  }
+  const removeTheme = (id: string): void => {
+    try {
+      removeImportedTheme(id)
+      setPersonalThemes(importedThemes())
+      setImportError('')
+      if (curTheme === id) pickTheme(DEFAULT_THEME_ID)
+    } catch { setImportError(t('settings.general.theme.import.storage')) }
+  }
   const pickFont = (f: string): void => {
     applyFont(f, curSize)
     onChange({ ...config, uiFont: f })
@@ -43,8 +68,6 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
     onChange({ ...config, uiFontSize: s })
   }
 
-  const light = THEMES.filter((x) => !x.dark)
-  const dark = THEMES.filter((x) => x.dark)
 
   return (
     <div className="max-w-[760px]">
@@ -61,6 +84,7 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
           {(['zh', 'en'] as const).map((l) => (
             <button
               key={l}
+              aria-pressed={lang === l}
               onClick={() => pickLang(l)}
               className={`rounded-md px-4 py-1.5 text-[13px] transition-colors ${
                 lang === l ? 'bg-accent text-white' : 'text-ink-muted hover:text-ink'
@@ -74,37 +98,18 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
 
       {/* 主题 */}
       <section className="mb-8">
-        <h3 className="mb-3 text-[14px] font-medium text-ink">
-          {t('settings.general.theme')}
-        </h3>
-        <div className="mb-2 text-[12px] uppercase tracking-wide text-ink-faint">
-          {t('settings.general.theme.light')}
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-[14px] font-medium text-ink">{t('settings.general.theme')}</h3>
+          <button className="rounded-md border border-[var(--border)] px-3 py-1.5 text-[12px] text-link" onClick={() => themeFile.current?.click()}>{t('settings.general.theme.import')}</button>
+          <input ref={themeFile} type="file" accept=".json,application/json" className="hidden" aria-label={t('settings.general.theme.import')} onChange={event => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            void readTheme(file)
+          }} />
         </div>
-        <div className="mb-4 grid grid-cols-2 gap-3">
-          {light.map((th) => (
-            <ThemeCard
-              key={th.id}
-              theme={th}
-              active={curTheme === th.id}
-              activeLabel={t('settings.general.theme.active')}
-              onClick={() => pickTheme(th.id)}
-            />
-          ))}
-        </div>
-        <div className="mb-2 text-[12px] uppercase tracking-wide text-ink-faint">
-          {t('settings.general.theme.dark')}
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          {dark.map((th) => (
-            <ThemeCard
-              key={th.id}
-              theme={th}
-              active={curTheme === th.id}
-              activeLabel={t('settings.general.theme.active')}
-              onClick={() => pickTheme(th.id)}
-            />
-          ))}
-        </div>
+        <p className="mb-3 text-[12px] text-ink-muted">{t('settings.general.theme.galleryHint')}</p>
+        {importError && <p role="alert" className="mb-3 text-[12px] text-[var(--error)]">{importError}</p>}
+        <ThemeGallery themes={[...personalThemes, ...THEMES]} activeId={curTheme} onPick={pickTheme} onRemove={removeTheme} />
       </section>
 
       {/* 字体 + 字号 */}
@@ -152,7 +157,7 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
             className="text-ink"
             style={{
               fontFamily: curFont || undefined,
-              fontSize: curSize + 2
+              fontSize: curSize
             }}
           >
             {t('settings.general.fontPreview.text')}
@@ -174,56 +179,5 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
         </div>
       </section>
     </div>
-  )
-}
-
-// 主题预览卡:小代码高亮样张 + 当前生效标记。配色取自主题 vars。
-function ThemeCard({
-  theme,
-  active,
-  activeLabel,
-  onClick
-}: {
-  theme: Theme
-  active: boolean
-  activeLabel: string
-  onClick: () => void
-}): JSX.Element {
-  const v = theme.vars
-  const syntax = theme.syntax
-  return (
-    <button
-      onClick={onClick}
-      className={`overflow-hidden rounded-xl border text-left transition-shadow ${
-        active ? 'border-accent ring-2 ring-accent/40' : 'border-black/10 hover:border-black/25'
-      }`}
-    >
-      {/* 标题条 */}
-      <div className="flex items-center justify-between px-3 py-2">
-        <span className="text-[13px] font-medium text-ink">{theme.name}</span>
-        {active && (
-          <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-            {activeLabel}
-          </span>
-        )}
-      </div>
-      {/* 代码样张(用主题真实配色) */}
-      <div
-        className="px-3 py-3 font-mono text-[11px] leading-relaxed"
-        style={{ background: v.canvas, color: v.ink }}
-      >
-        <div>
-          <span style={{ color: syntax.keyword }}>const</span>{' '}
-          <span style={{ color: syntax.variable }}>themePreview</span> = {'{'}
-        </div>
-        <div style={{ paddingLeft: 12 }}>
-          surface: <span style={{ color: syntax.string }}>"{theme.id}"</span>,
-        </div>
-        <div style={{ paddingLeft: 12, color: v.inkMuted }}>
-          accent: <span style={{ color: syntax.string }}>"{v.accent}"</span>,
-        </div>
-        <div>{'}'};</div>
-      </div>
-    </button>
   )
 }

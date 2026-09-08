@@ -3,6 +3,7 @@ import { FolderOpen, RefreshCw, X } from 'lucide-react'
 import { writeText as clipWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import FileTree, { type TreeContextTarget } from './files/FileTree'
+import { FileTypeIcon, FolderTypeIcon } from './files/icons'
 import FileViewer from './files/FileViewer'
 import ContextMenu, { type ContextAction } from './files/ContextMenu'
 import { usePrompt } from './usePrompt'
@@ -476,7 +477,7 @@ export default function FilesView({
         }}
       >
         <div className="flex shrink-0 items-center justify-between px-3 py-2 text-[12px] font-medium uppercase tracking-wide text-ink-faint">
-          <span className="truncate">{baseName(root) || root}</span>
+          <span className="flex min-w-0 items-center gap-1.5"><FolderTypeIcon name={baseName(root)} open /><span className="truncate">{baseName(root) || root}</span></span>
           <button
             type="button"
             onClick={(event) => {
@@ -553,6 +554,7 @@ export default function FilesView({
                   }`}
                   title={p}
                 >
+                  <FileTypeIcon name={p} size={16} />
                   <span className="max-w-[160px] truncate">
                     {baseName(p)}
                   </span>
