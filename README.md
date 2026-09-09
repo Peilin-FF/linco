@@ -6,12 +6,12 @@
 
 An open-source desktop workspace for **vibe coding**.<br />Your AI agent, code, live preview and project decisions—in one place.
 
-[Download for Windows & Mac](https://github.com/Peilin-FF/linco/releases/latest) · [Play with the demo](demo/README.md) · [Get started](docs/GETTING_STARTED.md) · [中文](README.zh-CN.md)
+[Download for Windows & Mac](https://github.com/Peilin-FF/linco/releases/latest) · [Play with the demo](https://peilin-ff.github.io/linco/) · [Get started](docs/GETTING_STARTED.md) · [中文](README.zh-CN.md)
 
 [![Release](https://img.shields.io/github/v/release/Peilin-FF/linco?style=flat-square&color=416650)](https://github.com/Peilin-FF/linco/releases/latest)
 [![License](https://img.shields.io/github/license/Peilin-FF/linco?style=flat-square&color=647568)](LICENSE)
 
-[![Linco's playable demo: a CLI agent beside a tiny garden app, with Vibe Working, Code and Visual workspaces](docs/images/workbench.png)](demo/README.md)
+[![Linco's playable demo: a CLI agent beside a tiny garden app, with Vibe Working, Code and Visual workspaces](docs/images/workbench.png)](https://peilin-ff.github.io/linco/)
 
 *Real Linco components. A synthetic project you can play with. No signup or AI credits.*
 
@@ -23,7 +23,7 @@ You have an idea. Your agent starts building. Soon the conversation is in one wi
 
 ## Try a little project before installing
 
-Open the [interactive playground](demo/README.md) and grow a **Pocket Garden**:
+Open the [interactive playground](https://peilin-ff.github.io/linco/) and grow a **Pocket Garden**:
 
 1. Water a plant until it blooms.
 2. Ask the scripted demo agent to **“Add a sunflower”** or **“Make it midnight.”**

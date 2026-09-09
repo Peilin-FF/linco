@@ -1,9 +1,9 @@
 # Play with Linco
 
-The public playground is ready to build; GitHub Pages still needs to be enabled
-by a repository administrator before a public link can go live.
+[Open the public playground](https://peilin-ff.github.io/linco/) — no installation
+or signup required.
 
-## Run it now
+## Run it locally
 
 ```sh
 git clone https://github.com/Peilin-FF/linco.git
@@ -19,13 +19,15 @@ Grow the Pocket Garden, try **Add a sunflower** and **Make it midnight**, edit
 Agent replies are scripted; no AI model or command is executed. Don't enter
 credentials. Demo file changes are in memory only and reset on reload.
 
-## Publish the public playground
+## Maintain the public playground
 
 1. In [repository Pages settings](https://github.com/Peilin-FF/linco/settings/pages),
    choose **GitHub Actions** as the source.
 2. Run the **Product demo** workflow from GitHub Actions.
-3. Verify `https://peilin-ff.github.io/linco/` and replace the README's links to
-   this instruction page with that live URL.
+3. Verify [the live demo](https://peilin-ff.github.io/linco/) after deployment.
+
+Pages is configured. Future demo source changes pushed to `main` automatically
+run the workflow; manual runs are also available.
 
 Build locally with `npm run demo:build`; output goes to
 `node_modules/.cache/linco-site`, outside the desktop bundle.

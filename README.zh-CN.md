@@ -4,9 +4,9 @@
 
 面向 **Vibe Coding / AI 辅助开发** 的开源桌面工作台：把编程 Agent、代码、实时预览、终端和项目记录放在一起。
 
-[下载 Windows / Mac 版](https://github.com/Peilin-FF/linco/releases/latest) · [试玩交互 Demo](demo/README.md) · [English](README.md)
+[下载 Windows / Mac 版](https://github.com/Peilin-FF/linco/releases/latest) · [试玩交互 Demo](https://peilin-ff.github.io/linco/) · [English](README.md)
 
-[![Linco 真实界面的浏览器演示](docs/images/workbench.png)](demo/README.md)
+[![Linco 真实界面的浏览器演示](docs/images/workbench.png)](https://peilin-ff.github.io/linco/)
 
 ## 不只是聊天，而是完整的迭代过程
 

@@ -18,12 +18,12 @@ not invent customer testimonials, usage numbers or performance claims.
 - Accurate `SoftwareApplication` JSON-LD, without fabricated reviews or ratings.
 - A sitemap containing the canonical landing page.
 - A separate demo build with synthetic data; no analytics added.
+- A public playground at [peilin-ff.github.io/linco](https://peilin-ff.github.io/linco/), linked directly from both READMEs.
 
 ## Publication and search checklist
 
-1. Enable **Settings → Pages → Source: GitHub Actions** in the repository, then
-   run the **Product demo** workflow. The intended URL is
-   `https://peilin-ff.github.io/linco/`.
+1. Keep **Settings → Pages → Source: GitHub Actions** enabled. The **Product demo**
+   workflow publishes to `https://peilin-ff.github.io/linco/`.
 2. Confirm the site returns HTTP 200 and that the demo, image and sitemap work.
 3. Update the repository About description and website. Suggested topics:
    `vibe-coding`, `ai-coding`, `developer-tools`, `tauri`, `coding-agent`,
