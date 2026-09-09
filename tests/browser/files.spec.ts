@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
-test.setTimeout(45000)
+// Match the suite budget: a cold Vite module graph can exceed 45 seconds.
+test.setTimeout(120000)
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/__index__', (route) => route.fulfill({ contentType: 'text/html', body: '<p>Project preview</p>' }))

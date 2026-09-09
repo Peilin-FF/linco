@@ -3,6 +3,10 @@
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
 import { editGarden, readGarden, saveGarden } from './garden'
+import { demoFiles, listDemoFiles, readDemoFile } from './files'
+import { DemoChanges } from './changes'
+import { invalidateShadowDiff } from '../src/lib/shadow'
+import { invalidateFile } from '../src/lib/fs'
 
 const isDemo = import.meta.env.MODE === 'demo'
 const params = new URLSearchParams(isDemo ? 'research&files&logs' : location.search)
@@ -92,7 +96,23 @@ const fileFixtures: Record<string, string[]> = {
   src: ['Welcome.tsx', 'app.ts', 'main.py'],
 }
 const normalizedProject = project.replaceAll('\\', '/')
-if (isDemo) fileFixtures.src.unshift('garden.json')
+const relativeFile = (path: string) => path.replaceAll('\\', '/').replace(normalizedProject, '').replace(/^\/+/, '')
+const snapshot = () => {
+  const files = Object.fromEntries(Object.keys(demoFiles).map(path => [path, readDemoFile(path)]))
+  for (const [path, text] of savedFiles) files[relativeFile(path)] = text
+  return files
+}
+const demoChanges = new DemoChanges(snapshot(), snapshot)
+export const getDemoReview = () => Object.keys(demoChanges.changes()).map(path => ({ path, diff: demoChanges.diff(path) }))
+function notifyFiles(paths: string[]) {
+  invalidateShadowDiff(project)
+  for (const path of paths) {
+    invalidateFile(`${project}/${path}`)
+    invalidateFile(`${normalizedProject}/${path}`)
+  }
+  void emit('remote-fs-change', { host: '', paths: paths.map(path => `${normalizedProject}/${path}`) })
+  window.dispatchEvent(new Event('linco:demo-changes'))
+}
 const pythonContent = '# Reproducible experiment\nfrom pathlib import Path\n\nSEED = 42\nOUTPUT = Path("results")\n\ndef run_experiment(seed: int = SEED):\n    """Record a baseline before changing the method."""\n    OUTPUT.mkdir(exist_ok=True)\n    print(f"Running baseline with seed {seed}")\n\nif __name__ == "__main__":\n    run_experiment()\n'
 Object.assign(window, { __workbench: { calls, getConfig: () => config, notionPages, researchRows,
   failConfigSaves: (fail: boolean) => { failConfigSave = fail },
@@ -191,7 +211,7 @@ mockIPC(async (cmd, payload) => {
     case 'fs_list_dir': {
       if (params.has('files')) {
         const relative = String(args.path).replaceAll('\\', '/').replace(normalizedProject, '').replace(/^\/+|\/+$/g, '')
-        return (fileFixtures[relative] || []).map((entry) => {
+        return (isDemo ? listDemoFiles(relative) : fileFixtures[relative] || []).map((entry) => {
           const name = entry.replace(/\/$/, '')
           return { name, path: `${args.path}/${name}`, is_dir: entry.endsWith('/') }
         })
@@ -203,26 +223,31 @@ mockIPC(async (cmd, payload) => {
     }
     case 'fs_write_file':
       savedFiles.set(args.path, args.content)
+      if (isDemo) notifyFiles([relativeFile(String(args.path))])
       if (isDemo && String(args.path).endsWith('/garden.json')) {
         try { saveGarden(args.content) } catch {
           demoNotice('Sample file saved, but its JSON is invalid. The preview keeps the last valid garden; fix the file and save again.')
           return null
         }
       }
-      if (isDemo) demoNotice('Saved to demo memory only. Reload to reset; no files on your computer were changed.')
+      if (isDemo) demoNotice('Saved to demo memory only. Reload to reset; no files on your computer were changed.' + (String(args.path).endsWith('/garden.json') ? '' : ' Only src/garden.json updates the preview; source examples are not compiled or executed.'))
       return null
     case 'fs_read_file':
       if (savedFiles.has(args.path)) return savedFiles.get(args.path)
       if (isDemo && String(args.path).endsWith('/garden.json')) return JSON.stringify(readGarden(), null, 2) + '\n'
       if (params.has('research-config') && String(args.path).endsWith('/.linco/research/workspace.json')) return JSON.stringify({ version: 1, home: `https://www.notion.so/${(100).toString(16).padStart(32, '0')}`, project: `https://www.notion.so/${(201).toString(16).padStart(32, '0')}` })
+      if (isDemo) return readDemoFile(relativeFile(String(args.path)))
       if (params.has('files') && String(args.path).endsWith('.sh')) return '# Baseline experiment\nexport SEED=42\nif [ -d outputs ]; then\n  echo "Checkpoint ready"\nfi\n'
       return params.has('files') && String(args.path).endsWith('.py') ? pythonContent : fileContent
     case 'search_content': return params.has('files') ? ['scripts/train.py', 'index.html', 'README.md'].map((file) => ({ path: `${normalizedProject}/${file}`, matches: [{ line: 1, text: 'baseline checkpoint', ranges: [[0, 8]] }] })) : []
-    case 'git_status': return { is_repo: true, branch: 'main', ahead: 0, behind: 0, files: params.has('files') ? ['scripts/train.py', 'index.html', 'README.md'].map((path) => ({ path, work: 'M', index: ' ', staged: false, unstaged: true, untracked: false })) : [] }
+    case 'git_status': return { is_repo: true, branch: 'main', ahead: 0, behind: 0, files: (isDemo ? Object.keys(demoChanges.changes('git')) : params.has('files') ? ['scripts/train.py', 'index.html', 'README.md'] : []).map(path => ({ path, work: 'M', index: ' ', staged: false, unstaged: true, untracked: false })) }
     case 'git_is_repo': return true
     case 'git_remote_url': return { url: '', slug: '' }
-    case 'git_diff_file': case 'shadow_diff': return ''
-    case 'shadow_changed': return params.has('files') ? { [`${normalizedProject}/scripts/train.py`]: 'M', [`${normalizedProject}/tests/test_causal_event_order.py`]: 'A' } : {}
+    case 'shadow_begin_turn':
+      if (isDemo) { demoChanges.beginTurn(); notifyFiles(Object.keys(demoFiles)) }
+      return null
+    case 'git_diff_file': case 'shadow_diff': return isDemo ? demoChanges.diff(relativeFile(String(args.path)), cmd === 'git_diff_file' ? 'git' : 'turn') : ''
+    case 'shadow_changed': return isDemo ? Object.fromEntries(Object.entries(demoChanges.changes()).map(([path, status]) => [`${normalizedProject}/${path}`, status])) : params.has('files') ? { [`${normalizedProject}/scripts/train.py`]: 'M', [`${normalizedProject}/tests/test_causal_event_order.py`]: 'A' } : {}
     case 'preview_start': return 1431
     case 'preview_default_target': return null
     case 'term_write': {
@@ -234,6 +259,7 @@ mockIPC(async (cmd, payload) => {
       demoInput.set(args.id, '')
       const result = editGarden(prompt)
       if (result.startsWith('Updated')) for (const path of savedFiles.keys()) if (path.endsWith('/garden.json')) savedFiles.delete(path)
+      notifyFiles(['src/garden.json'])
       setTimeout(() => {
         void emit('term-output', { id: args.id, gen: generations.get(args.id), data: btoa(
           '\r\n\x1b[36m[Scripted demo response]\x1b[0m\r\n' +

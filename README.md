@@ -29,6 +29,7 @@ Open the [interactive playground](https://peilin-ff.github.io/linco/) and grow a
 2. Ask the scripted demo agent to **“Add a sunflower”** or **“Make it midnight.”**
 3. Open **Code → Files → src/garden.json**, edit the title, and save. Return to the preview to see your change.
 4. Explore sample logs, research projects, milestones and the theme gallery.
+5. Expand **Review this turn** to see the shadow diff: red/green changes since your latest message. Sending another message resets that comparison, while Git retains all demo edits.
 
 The demo uses the desktop's actual interface with a simulated backend. It does **not** call an AI model, execute shell commands, connect over SSH, or access Notion. Demo edits stay in memory until reload. The downloadable app connects to your real tools after setup.
 
@@ -59,6 +60,8 @@ The demo uses the desktop's actual interface with a simulated backend. It does *
 ![Notion-backed project milestones in the Linco demo](docs/images/project-memory.png)
 
 ![Linco's searchable theme gallery with Nord selected](docs/images/themes.png)
+
+![Linco shadow diff: inspect only the changes made since the latest message](docs/images/turn-review.png)
 
 </details>
 

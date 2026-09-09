@@ -22,6 +22,8 @@
 
 浏览器 Demo 使用真实桌面组件和模拟数据。给植物浇水，向演示 Agent 输入 “Add a sunflower” 或 “Make it midnight”，也可以在 Code 中修改 `src/garden.json`，保存后回到预览查看变化。
 
+发送消息后展开 **Review this turn**，查看本轮修改的红绿差异（shadow diff）。下一条消息会重置比较基线，但不会撤销之前的修改；Git 页面仍保留全部未提交改动。Code → Files 中也能查看相同的本轮差异。
+
 **演示不调用真实模型，不执行命令，不连接 SSH 或 Notion。** Agent 回复是预设脚本，文件修改只保留到刷新页面；部分主题偏好保存在当前浏览器。
 
 ## 你可以怎样用它？

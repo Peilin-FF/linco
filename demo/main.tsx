@@ -7,6 +7,7 @@ import { applyTheme, DEFAULT_THEME_ID } from '../src/lib/theme'
 import '../src/index.css'
 import '../src/workbench.css'
 import './site.css'
+import TurnReview from './TurnReview'
 
 function Demo() {
   const [notice, setNotice] = useState('A real interface with synthetic data. No AI calls, shell execution, or account connections.')
@@ -34,6 +35,7 @@ function Demo() {
     <div className="demo-controls"><span className="demo-label">PLAYGROUND · SIMULATED</span><button onClick={() => fillPrompt('Add a sunflower')}>＋ Add a sunflower</button><button onClick={() => fillPrompt('Make it midnight')}>☾ Make it midnight</button><button className="demo-expand" onClick={() => setExpanded(!expanded)}>{expanded ? 'Exit full screen' : 'Expand ↗'}</button></div>
     <div className="demo-app"><I18nProvider><App /></I18nProvider></div>
     <div className="demo-notice" role="status">{notice}</div>
+    <TurnReview />
   </div>
 }
 

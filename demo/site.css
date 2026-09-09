@@ -34,6 +34,11 @@ body { overflow: auto !important; height: auto !important; margin: 0; background
 .demo-app { height: 710px; background: var(--canvas); overflow: hidden; text-align: left; line-height: normal; }
 .demo-app .linco-app { height: 100% !important; }
 .demo-notice { padding: 9px 15px; background: #eef3ed; color: #526859; font-size: 11px; min-height: 34px; }
+.demo-turn-review { padding: 10px 15px; background: var(--canvas); color: var(--ink); border-top: 1px solid #83917740; font: 12px/1.6 system-ui; max-height: 360px; overflow: auto; flex-shrink: 0; }
+.demo-turn-review summary { cursor: pointer; font-weight: 600; }
+.demo-turn-review p { margin: 10px 0; max-width: 850px; }
+.demo-turn-review h3 { font: 600 12px monospace; margin: 12px 0 6px; }
+.demo-turn-diff { height: 210px; border: 1px solid #83917740; border-radius: 6px; overflow: hidden; }
 .demo-expanded { position: fixed; inset: 8px; z-index: 1000; display: flex; flex-direction: column; }
 .demo-expanded .demo-app { flex: 1; min-height: 0; }
 /* Don't invite credentials or native-only account setup in a public simulation. */
