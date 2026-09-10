@@ -1,0 +1,13 @@
+name truncate
+category Package
+revision 77682
+shortdesc Truncate text to a specified width
+relocated 1
+longdesc The package will by default break at word boundaries, but
+longdesc package options are offered to permit breaks within words.
+runfiles size=2
+ RELOC/tex/latex/truncate/truncate.sty
+catalogue-ctan /macros/latex/contrib/truncate
+catalogue-license pd
+catalogue-topics layout tagged-pdf-incompatible
+catalogue-version 3.6

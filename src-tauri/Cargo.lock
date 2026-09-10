@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "linco"
-version = "1.0.8"
+version = "1.0.9"
 dependencies = [
  "base64 0.22.1",
  "portable-pty",
@@ -2077,6 +2077,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo",
  "tauri",
  "tauri-build",
@@ -2087,6 +2088,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-updater",
  "tiny_http",
+ "tokio",
  "trash",
 ]
 
@@ -4565,7 +4567,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">LINCO · PAPER WORKSPACE · 10 SEPTEMBER 2026</div><h1>Write together. Sync quietly.</h1><p class=\"lede\">Compatible edits merge automatically. Your manuscript stays readable, your history stays recoverable, and routine synchronization needs no conflict window.</p><div class=\"summary-band\"><div><span class=\"k\">Implementation</span>Built · desktop restart pending</div><div><span class=\"k\">Desktop handoff</span>Updated backend requires reopening</div><div><span class=\"k\">Manuscript</span>Not changed or published by these tests</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"grid col-2\"><div class=\"card\"><div class=\"eyebrow\">01 · COLLABORATION</div><h2>Compatibility first</h2><p>Pull saves a local Git checkpoint, then prepares a three-way merge away from your working files. Git combines compatible file and line changes; Linco additionally combines separate edits within individual text-conflict hunks.</p><p>For example, a batch-size edit and a seed edit on the same LaTeX line can both survive. No conflict-review dialog was added.</p></div><div class=\"card\"><div class=\"eyebrow\">02 · READING ASSISTANT</div><h2>The open window is older</h2><p>The running development app is <code>tmp/paper-fast-reading-v2.exe</code>, built at 12:55 Singapore time. Its executable lacks the PDF-only reading backend signature.</p><p>The rebuilt <code>tmp/paper-pdf-only.exe</code> contains the PDF-only reading and safe-sync backends. Neither existing window has been closed or restarted. Reconnecting an AI account cannot replace a running executable.</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Situation",
+      "What Linco now does",
+      "What you see"
+    ],
+    "rows": [
+      [
+        "Separate files or compatible lines",
+        "Combines changes with Git’s three-way merge; preserves both parents when histories diverge.",
+        "Updated manuscript; no conflict warning."
+      ],
+      [
+        "Separate words or sentences in the same conflict hunk",
+        "Combines non-overlapping character spans separated by whitespace, preserving the other automatically merged text.",
+        "Both edits together, without a dialog."
+      ],
+      [
+        "Contradictory replacements of the same text",
+        "Keeps the local checkpoint and incoming Git version. Does not choose a winner, overwrite the manuscript, or publish it.",
+        "Quiet “Sync pending”; details on hover."
+      ],
+      [
+        "Neither version changed since a pending merge",
+        "Continues checking the remote, but does not repeatedly attempt the same merge/publication.",
+        "Stable status. A new edit, new remote revision, or explicit Pull permits another attempt."
+      ],
+      [
+        "Account, connection, unsupported backend, or other Git failure",
+        "Reports the actual failure separately; does not mislabel it a text disagreement.",
+        "Actionable error; authentication remains separate from merge status."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>A small example, with an important boundary</h2><div class=\"file-diff\"><div class=\"fd-head\"><span class=\"fd-path\">Synthetic manuscript example</span><span class=\"badge add\">AUTOMATIC</span></div><pre class=\"diff\"><span class=\"dl ctx\">Base:      Batch 4; seed 1.</span><span class=\"dl ctx\">Your edit: Batch 8; seed 1.</span><span class=\"dl ctx\">Overleaf:  Batch 4; seed 2.</span><span class=\"dl add\">Combined:  Batch 8; seed 2.</span></pre></div><p>Different character positions do not always mean compatible meaning: changing <code>cat</code> to <code>bat</code> and <code>car</code> must not silently produce <code>bar</code>. Edits within the same word, number, or LaTeX command are therefore not guessed. This is deterministic text merging, not an AI rewriting your scientific claims.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Recovery and safety</h2><div class=\"grid col-2\"><div class=\"card\"><h3>Saved versions, not a rewritten history</h3><p>Pull and Publish checkpoint saved local files before integration. Divergent histories are joined by a merge commit, not rebased. Pull never pushes. Publish uses a normal push, never a forced one.</p><p>A prepared merge is rechecked against the local head, branch, fetched remote head, and working-tree state before applying. Concurrent changes cause a retry, not an overwrite.</p></div><div class=\"card\"><h3>A manuscript remains a manuscript</h3><p>Unresolved Git markers are never inserted into working manuscript files. Unsupported binary, deletion/modification, unusual file-mode, or text-encoding cases remain pending.</p><p>The editor is protected while synchronization runs and reloads merged content afterwards, including after automatic publishing. A late response from a previous project cannot replace the newly selected project’s editor.</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Verification",
+      "Result / evidence"
+    ],
+    "rows": [
+      [
+        "Frontend unit tests",
+        "372 passed; artifacts/paper-sync-unit.log."
+      ],
+      [
+        "Native paper tests",
+        "Final run: 29 paper tests plus 1 cancellation test passed. Development executable rebuilt successfully; artifacts/paper-sync-native-final.log and paper-sync-native-final-error.log."
+      ],
+      [
+        "Remote-helper Git input tests",
+        "2 passed locally with disposable repositories: exact UTF-8/CRLF bytes, empty blobs, NUL-delimited trees, invalid requests rejected."
+      ],
+      [
+        "Browser behavior",
+        "PDF tests: 5/5 passed. Latest sync run: 4/5 passed; the remaining case timed out at initial browser navigation, before its assertions, and passed in the preceding run. All 5 sync cases have therefore passed across runs, but the suite is not consistently green on cold startup. The timer test was corrected to install its clock before creating timers."
+      ],
+      [
+        "Production frontend build",
+        "Passed TypeScript and Vite build; existing large-chunk warning remains."
+      ],
+      [
+        "Running-window check",
+        "Read-only probe: old development window has PDF progress support but no safe-sync capability. Binary signature check distinguishes the older and rebuilt reading engines."
+      ],
+      [
+        "Live services",
+        "No test merged/published your actual paper, changed your AI authorization, or ran a new live-model highlight request. Mac runtime has not been tested in this Windows session."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>What this does—and does not—inherit from Overleaf</h2><p>Overleaf’s Git bridge transfers project revisions; it is not the same transport as its shared online editor. Overleaf also documents same-line conflicts in its GitHub synchronization workflow. Linco now handles more compatible text edits automatically, but this change does not implement character-by-character CRDT/OT co-editing or guarantee that contradictory changes can always be reconciled. <a href=\"https://docs.overleaf.com/integrations-and-add-ons/git-integration-and-github-synchronization/git\">Overleaf Git integration</a> · <a href=\"https://docs.overleaf.com/integrations-and-add-ons/git-integration-and-github-synchronization/github-synchronization\">Overleaf synchronization documentation</a>.</p><p>The implementation prepares immutable merge trees using Git’s documented <code>merge-tree --write-tree</code> behavior, which does not modify the index or working tree during preparation. Git 2.38 or later is required; the checked versions were Windows Git 2.47 and remote Git 2.43. <a href=\"https://git-scm.com/docs/git-merge-tree\">Git merge-tree documentation</a>.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout\"><div class=\"callout-h\">Remaining handoff: reopen the rebuilt desktop app</div><p>The installed app and the older development process are still open. An earlier attempt to launch the newer executable was blocked, so it has not been retried or bypassed. A new explicit go-ahead is needed before attempting that restart.</p><p>After reopening, verify AI highlighting on a PDF using the local AI connection; the article-writing assistant still uses the remote project context. Browser tests use synthetic AI responses and do not establish the speed or quality of a real model response.</p></div><p class=\"note\">The HTML notebook skill was used to keep this implementation record editable inside Linco. No conflict-review interface was added. No GitHub release was published.</p>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

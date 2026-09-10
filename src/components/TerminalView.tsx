@@ -7,7 +7,7 @@ import {
 } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { RotateCw } from 'lucide-react'
+import { Check, Copy, RotateCw } from 'lucide-react'
 import {
   readText as clipReadText,
   writeText as clipWriteText
@@ -31,6 +31,9 @@ import { TerminalReplayBatcher } from '@/lib/terminalReplay'
 import { enableTerminalWebgl } from '@/lib/terminalWebgl'
 import { decorateTerminalOutput } from '@/lib/terminalHighlights'
 import { TmuxWheelThrottle } from '@/lib/terminalWheel'
+import { installTerminalLinks, type TerminalLinkNotice } from '@/lib/terminalLinks'
+import TerminalLinkFeedback from './TerminalLinkFeedback'
+import { installConversationSelection } from '@/lib/terminalSelection'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 function commandName(command?: string): string | undefined {
@@ -102,6 +105,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     tRef.current = t
     // 断线后显示「重连」覆盖层
     const [exited, setExited] = useState(false)
+    const [linkNotice, setLinkNotice] = useState<TerminalLinkNotice | null>(null)
+    const [hasSelection, setHasSelection] = useState(false)
+    const [copyStatus, setCopyStatus] = useState<'copied' | 'error' | null>(null)
+    const copySelectionRef = useRef<(() => void) | null>(null)
     // 重连用:持有重启 PTY 会话的函数(由 effect 内赋值)
     const restartRef = useRef<((silent?: boolean) => void) | null>(null)
     // cwd / env / initialCommand 只在启动时读取一次,用 ref 持有,
@@ -182,6 +189,14 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const fit = new FitAddon()
       term.loadAddon(fit)
       term.open(host)
+      const links = installTerminalLinks(term, {
+        onNotice: (notice) => setLinkNotice(current => {
+          // A hover/mouseleave must not erase an opening result or error.
+          if (!notice) return current?.status === 'hover' ? null : current
+          if (notice.status === 'hover' && current && current.status !== 'hover') return current
+          return notice
+        })
+      })
       const highlights = decorateTerminalOutput(term)
       // xterm 6 不再替应用设置根节点高度。没有这两行时内部 rows 虽然
       // 已经渲染,但 .xterm 本身是 0px 高,Windows WebView2 最终只显示背景。
@@ -341,10 +356,16 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 失败再退回浏览器 API。
       const isMac = navigator.platform.toLowerCase().includes('mac')
       const copyText = (text: string): void => {
-        clipWriteText(text).catch(() => {
-          void navigator.clipboard?.writeText(text).catch(() => {})
-        })
+        if (!text) return
+        void clipWriteText(text).catch(async () => {
+          if (!navigator.clipboard?.writeText) throw new Error('Clipboard unavailable')
+          await navigator.clipboard.writeText(text)
+        }).then(() => { if (!disposed) setCopyStatus('copied') })
+          .catch(() => { if (!disposed) setCopyStatus('error') })
       }
+      copySelectionRef.current = () => copyText(term.getSelection())
+      const selectionSub = term.onSelectionChange(() => { setHasSelection(term.hasSelection()); setCopyStatus(null) })
+      const conversationSelection = installConversationSelection(term, () => id.startsWith('chat:') || codexActive || Boolean(usageRef.current))
       const pasteText = (): void => {
         clipReadText()
           .catch(() => navigator.clipboard?.readText?.() ?? '')
@@ -366,7 +387,6 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           e.preventDefault()
           e.stopImmediatePropagation()
           copyText(term.getSelection())
-          term.clearSelection()
         }
       }
       host.addEventListener('keydown', onKeyDownCapture, true)
@@ -385,7 +405,6 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           const sel = term.getSelection()
           if (sel && sel.length > 0) {
             copyText(sel)
-            term.clearSelection()
             return false // 已复制,不再发 \x03
           }
           return true // 无选中:放行(Ctrl+C=中断)
@@ -644,6 +663,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           window.cancelAnimationFrame(replayRevealFrame)
         }
         highlights.dispose()
+        links.dispose()
+        conversationSelection.dispose()
+        selectionSub.dispose()
+        copySelectionRef.current = null
         webgl.dispose()
         stopObservingTheme()
         host.removeEventListener('keydown', onKeyDownCapture, true)
@@ -683,6 +706,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           }
           className="h-full w-full px-3 pt-2"
         />
+        {linkNotice && <TerminalLinkFeedback key={`${linkNotice.url}:${linkNotice.status}`} notice={linkNotice} onClose={() => setLinkNotice(null)} />}
+        {(hasSelection || copyStatus) && <div className="absolute bottom-2 right-3 flex items-center gap-2 rounded-md border border-black/10 bg-canvas/95 px-2 py-1 text-[11px] text-ink shadow-sm">
+          {copyStatus === 'error' && <span role="alert" className="text-red-600">{t('term.copyFailed')}</span>}
+          <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => copySelectionRef.current?.()}
+            title={t('term.copyHint')} className="flex items-center gap-1">
+            {copyStatus === 'copied' ? <Check size={12} /> : <Copy size={12} />}
+            {t(copyStatus === 'copied' ? 'term.copied' : 'term.copySelection')}
+          </button>
+        </div>}
         {exited && (
           <div className="pointer-events-none absolute right-2.5 top-2 flex justify-end">
             <button

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Linco / product direction / 7 September 2026</div>\n<h1>A research memory you can continue.</h1>\n<p class=\"lede\">A shared workspace where you and your agents can recover what you tried, understand what the evidence supports, and decide where to go next.</p>\n<p>I misunderstood the four-year requirement earlier. It is a requirement for durability, not a degree-planning theme. I would organise this product around <strong>research questions and the evolution of understanding</strong>, with years and folders as optional views.</p>\n<div class=\"callout rec\"><div class=\"callout-h\">The product promise</div><p>“I can return to a project months later, with a different agent, and continue without reconstructing its history.”</p></div>\n<p class=\"note\">Design proposal, not a shipped feature. This notebook is the reviewable design brief; your research notes should remain directly editable in Notion. No Notion pages or application code were changed for this proposal.</p>\n<nav class=\"toc\" aria-label=\"Design sections\"><a href=\"#experience\">The experience</a><a href=\"#memory\">Shared memory</a><a href=\"#trust\">AI collaboration</a><a href=\"#delivery\">First release</a><a href=\"#inspiration\">Research foundations</a></nav>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"experience\">1. Open to the work, not the filing system.</h2>\n<p>The home screen should answer three questions: <strong>Where did we stop? What changed? What needs my judgement?</strong> A project switcher sets the context. Three destinations keep navigation quiet: Workbench, Library, and Knowledge.</p>\n<figure aria-label=\"Concept of the Linco research workbench\">\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1000 526\" width=\"100%\" role=\"img\" aria-labelledby=\"studio-title studio-desc\">\n<title id=\"studio-title\">Linco research workbench concept</title>\n<desc id=\"studio-desc\">A compact top navigation connects Workbench, Library and Knowledge. A small left rail lists Resume, Experiments and Files. The main pane shows the current question, clarified understanding and next decision. A collapsible right pane shows the sources and limits of the agent's context. This is a non-interactive concept based on the conversation, not a live application.</desc>\n<rect x=\"1\" y=\"1\" width=\"998\" height=\"524\" rx=\"10\" fill=\"#ffffff\" stroke=\"#d9dcd8\"/>\n<path d=\"M1 52H999 M181 52V490 M746 52V490 M1 490H999\" fill=\"none\" stroke=\"#e5e6e3\"/>\n<g font-family=\"Segoe UI, Arial, sans-serif\" fill=\"#272b28\">\n<text x=\"22\" y=\"32\" font-size=\"17\" font-weight=\"600\">Linco</text>\n<text x=\"83\" y=\"32\" font-size=\"13\" fill=\"#667068\">Research Studio</text>\n<text x=\"273\" y=\"32\" font-size=\"13\" font-weight=\"600\">Workbench</text>\n<text x=\"377\" y=\"32\" font-size=\"13\" fill=\"#667068\">Library</text>\n<text x=\"454\" y=\"32\" font-size=\"13\" fill=\"#667068\">Knowledge</text>\n<path d=\"M270 51H345\" stroke=\"#667a55\" stroke-width=\"2\"/>\n<text x=\"778\" y=\"32\" font-size=\"11\" fill=\"#687265\">CONCEPT · NOT IMPLEMENTED</text>\n<text x=\"20\" y=\"91\" font-size=\"10\" letter-spacing=\"1.4\" fill=\"#7d837e\">LINCO REVISION</text>\n<rect x=\"12\" y=\"109\" width=\"156\" height=\"33\" rx=\"5\" fill=\"#eef1e9\"/>\n<text x=\"28\" y=\"130\" font-size=\"13\" font-weight=\"600\">Resume</text>\n<text x=\"28\" y=\"174\" font-size=\"13\" fill=\"#616a63\">Experiments</text>\n<text x=\"28\" y=\"217\" font-size=\"13\" fill=\"#616a63\">Files</text>\n<text x=\"28\" y=\"451\" font-size=\"12\" fill=\"#7d837e\">Project settings</text>\n<text x=\"208\" y=\"84\" font-size=\"12\" fill=\"#616a63\">Vibe Coding</text>\n<text x=\"309\" y=\"84\" font-size=\"12\" fill=\"#616a63\">Code</text>\n<text x=\"363\" y=\"84\" font-size=\"12\" fill=\"#616a63\">Visual agent</text>\n<text x=\"208\" y=\"130\" font-size=\"11\" letter-spacing=\"1\" fill=\"#7d837e\">CONTINUE THE WORKSPACE REVISION</text>\n<text x=\"208\" y=\"165\" font-size=\"22\" font-weight=\"600\">What should we remember together?</text>\n<text x=\"208\" y=\"204\" font-size=\"13\" fill=\"#616a63\">Current understanding · from your messages</text>\n<text x=\"208\" y=\"232\" font-size=\"15\">Long-lived research memory, not a degree planner.</text>\n<text x=\"208\" y=\"256\" font-size=\"14\" fill=\"#616a63\">Direct editing. Traceable experiments. Shared context.</text>\n<path d=\"M208 280H719\" stroke=\"#e5e6e3\"/>\n<text x=\"208\" y=\"308\" font-size=\"11\" letter-spacing=\"1\" fill=\"#7d837e\">NEXT DESIGN DECISION</text>\n<text x=\"208\" y=\"339\" font-size=\"16\" font-weight=\"600\">What can an agent remember automatically?</text>\n<text x=\"208\" y=\"368\" font-size=\"13\" fill=\"#616a63\">Proposed: capture run facts; review durable conclusions.</text>\n<rect x=\"208\" y=\"391\" width=\"158\" height=\"33\" rx=\"5\" fill=\"#eef1e9\" stroke=\"#c6cfbe\"/>\n<text x=\"226\" y=\"413\" font-size=\"12\" font-weight=\"600\">Review the proposal</text>\n<text x=\"209\" y=\"459\" font-size=\"12\" fill=\"#7d837e\">Recent change: AI collaboration is now a core requirement.</text>\n<text x=\"768\" y=\"86\" font-size=\"13\" font-weight=\"600\">Context for the agent</text>\n<text x=\"768\" y=\"124\" font-size=\"11\" fill=\"#7d837e\">SCOPE</text>\n<text x=\"768\" y=\"148\" font-size=\"13\">This project · selected sources</text>\n<text x=\"768\" y=\"190\" font-size=\"11\" fill=\"#7d837e\">KNOWN</text>\n<text x=\"768\" y=\"214\" font-size=\"13\">Your workspace requirements</text>\n<text x=\"768\" y=\"256\" font-size=\"11\" fill=\"#7d837e\">NOT ESTABLISHED</text>\n<text x=\"768\" y=\"280\" font-size=\"13\">Whether this workflow helps</text>\n<text x=\"768\" y=\"301\" font-size=\"13\">you resume real experiments</text>\n<path d=\"M767 326H976\" stroke=\"#e5e6e3\"/>\n<text x=\"768\" y=\"356\" font-size=\"12\" fill=\"#667a55\">Inspect sources and omissions</text>\n<text x=\"768\" y=\"386\" font-size=\"12\" fill=\"#616a63\">Edit scope before continuing</text>\n<text x=\"768\" y=\"456\" font-size=\"11\" fill=\"#7d837e\">Collapsible · never owns the page</text>\n<text x=\"20\" y=\"512\" font-size=\"12\" fill=\"#616a63\">Files / Terminal</text>\n<text x=\"765\" y=\"512\" font-size=\"11\" fill=\"#7d837e\">Illustrative interface · no live data</text>\n</g>\n</svg>\n<figcaption class=\"note\">Proposed desktop layout. The text reflects this conversation; the controls are illustrative.</figcaption>\n</figure>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Destination",
+      "What belongs here",
+      "Primary action"
+    ],
+    "rows": [
+      [
+        "Workbench",
+        "The current question, experiment history, runs and next decision. Files and terminal stay available alongside the work.",
+        "Continue"
+      ],
+      [
+        "Library",
+        "Papers, annotations and reading notes. Organise by questions and concepts; folders and tags are optional.",
+        "Read and connect"
+      ],
+      [
+        "Knowledge",
+        "Current findings, reusable ideas, unresolved questions and the evidence behind them. Review changes here.",
+        "Understand and revise"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>2. Design the handoff, not just the conversation.</h2>\n<p>The signature interaction is <strong>“Continue this investigation.”</strong> Chat is one way to work; a project should remain understandable without opening its transcripts.</p>\n<div class=\"timeline\">\n<div class=\"tl-entry\"><div class=\"tl-time\">BEFORE WORK</div><div class=\"tl-body\"><strong>A short, inspectable briefing.</strong> The question, current findings, unsuccessful approaches, relevant sources, uncertainties and the next useful test. Show source dates, project scope and missing context. You can correct it directly.</div></div>\n<div class=\"tl-entry\"><div class=\"tl-time\">DURING WORK</div><div class=\"tl-body\"><strong>Capture evidence at its source.</strong> Within an enabled project, associate commands, code revision, configuration, input versions, timestamps, logs and artifacts with a run. Record agent identity and model/version when available. Missing metadata stays “unknown”; terminal chatter does not become hundreds of notes.</div></div>\n<div class=\"tl-entry\"><div class=\"tl-time\">AT A CHECKPOINT</div><div class=\"tl-body\"><strong>Show a change in understanding.</strong> The agent drafts: “We tried… / We observed… / This suggests… / This does not establish… / Next…”, with evidence links. You edit or accept the useful parts in place. Interrupted sessions keep their checkpoint and incomplete status.</div></div>\n<div class=\"tl-entry\"><div class=\"tl-time\">NEXT SESSION</div><div class=\"tl-body\"><strong>Resume with another agent.</strong> Rebuild its briefing from the current records, not from a remembered summary of an older summary. Surface relevant failed attempts before proposing another run; distinguish an accidental duplicate from a deliberate replication.</div></div>\n</div>\n<p class=\"note\">Automatic capture would need execution hooks and explicit project access. Existing historical chats can be imported as candidate records, with gaps labelled—not reconstructed as verified experiments.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"memory\">3. Shared memory needs different levels of trust.</h2>\n<p>A source, an observation and an interpretation are different things. The interface must keep that difference visible even when an agent writes fluent prose.</p>\n<div class=\"grid col-3\">\n<div class=\"card\"><div class=\"eyebrow\">Working memory</div><h3>What we are thinking</h3><p>Scratch notes, hypotheses, questions and agent drafts. Easy to capture and edit. Incomplete thinking is welcome.</p><span class=\"badge warn\">Not a finding</span></div>\n<div class=\"card\"><div class=\"eyebrow\">Evidence record</div><h3>What actually happened</h3><p>Sources, runs, observations, artifacts and explicit corrections. Keep the original record and its provenance.</p><span class=\"badge info\">Traceable</span></div>\n<div class=\"card\"><div class=\"eyebrow\">Durable knowledge</div><h3>What we currently believe</h3><p>Scoped findings and decisions, connected to supporting and conflicting evidence. Reviewed, but always revisable.</p><span class=\"badge new\">Reviewed under stated conditions</span></div>\n</div>\n<p><strong>The memory unit is a connected record:</strong> question → experiment → run → observation → finding → next decision. A paper or another note can support or challenge any relevant part. Show this small evidence chain on demand; a giant graph should not be the homepage.</p>\n<p>Every finding needs its scope, evidence links, author, review status and revision history. “Reviewed” means someone checked it, not that it is universally true. Confidence should have a reason, not an invented percentage. New conflicting evidence marks it for reconsideration; it does not silently erase the earlier conclusion.</p>\n<div class=\"callout\"><div class=\"callout-h\">Remember failures precisely</div><p>“The hypothesis was not supported,” “the run crashed,” and “the evaluation was invalid” must remain distinct. Otherwise a future agent can mistake a broken test for scientific evidence against an idea.</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>4. Literature should feed your thinking.</h2>\n<p>Start with a source and a reading question. Offer progressively deeper reading prompts: decide relevance, understand the argument, then examine or reconstruct the parts that matter. This adapts <a href=\"https://cseweb.ucsd.edu/~efernandes/teaching/res/keshav-howtoread.pdf\">S. Keshav’s three-pass approach</a>; not every paper needs every pass.</p>\n<p>Keep <strong>the authors’ claim, the exact source location, your interpretation and an AI suggestion</strong> visually distinct. An annotation can become a reusable idea, a question or an experiment proposal without copying the entire paper into another note. When several sources disagree, build a comparison around the question—not another stack of summaries.</p>\n<p>An optional “explain this in my own words” prompt protects your learning. AI can identify unclear reasoning and suggest connections, but it should not mark a source as understood on your behalf.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"trust\">5. Give AI initiative with clear boundaries.</h2>\n<p>You should not need to approve every timestamp, nor worry that an agent has rewritten your research history. Make the boundary visible and adjustable per project.</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Operation",
+      "Proposed default",
+      "Your control"
+    ],
+    "rows": [
+      [
+        "Capture run facts",
+        "Automatic after project-scoped capture is enabled. Preserve actor, time and source; redact secrets and respect exclusions.",
+        "Pause capture; inspect and remove sensitive records."
+      ],
+      [
+        "Suggest links or interpretations",
+        "AI drafts are visibly attributed and separate from accepted findings. Sources are required for factual claims.",
+        "Edit inline, reject, or promote selected text."
+      ],
+      [
+        "Change a durable finding",
+        "Show the proposed change, its reason, evidence and affected conclusions. Require review.",
+        "Accept, revise, keep both interpretations, or undo."
+      ],
+      [
+        "Change permissions, publish, delete, or run costly work",
+        "Separate explicit authorisation. A note suggesting an action is not permission to execute it.",
+        "Choose project access, budget and allowed operations."
+      ],
+      [
+        "Prepare another agent’s context",
+        "Retrieve relevant, permitted records and disclose omissions or stale sources. Notes are reference material, not executable instructions.",
+        "Inspect the context packet; exclude personal notes; correct it."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>A natural-language answer such as “Have we already tried this?” should open the actual run and explain the match. If the index is incomplete, say “I found no matching record in these sources,” not “We have never tried it.” Corrections should update the underlying record, so the next agent benefits too.</p>\n<p class=\"note\">These review and correction choices are my proposed application of <a href=\"https://www.microsoft.com/en-us/research/project/guidelines-for-human-ai-interaction/\">Microsoft Research’s human–AI interaction guidelines</a>, not a claim that citations or human review eliminate AI error.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>6. Make it calm enough to use every day.</h2>\n<p>I would use restrained typography, compact lists and generous reading space: roughly 14–15 px body text, 12–13 px navigation and modest headings at normal desktop scale, with user-adjustable size. Neutral surfaces, consistent file icons, one muted accent, visible keyboard focus and status labels that do not rely on colour alone.</p>\n<p>The content stays central. The AI panel collapses; the terminal docks under Files; Vibe Coding, Code and Visual agent remain work modes. Large dashboard cards, decorative gradients, streaks and note-count trophies do not deserve the first screen.</p>\n<p><strong>Progress means something changed:</strong> a question narrowed, an alternative ruled out, evidence reproduced, a contradiction discovered, or an output supported. A weekly digest should show those changes, blockers and decisions needing your attention—not an artificial “research completion” percentage.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>7. Keep Notion useful without making it carry everything.</h2>\n<p>For Linco, I would keep Notion as the human-editable knowledge surface and make Linco responsible for execution context and reliable capture. This is a proposed architecture, not an integration already installed.</p>\n<details><summary>Ownership, synchronisation and four-year durability</summary>\n<ul>\n<li><strong>Notion owns the narrative:</strong> papers’ reading notes, ideas, reviewed findings and decisions. A directly edited note remains the canonical note.</li>\n<li><strong>Linco records execution:</strong> a local structured ledger tracks sessions, runs and evidence pointers. Code belongs in the repository; full logs and datasets stay in their appropriate storage. Notes link to them.</li>\n<li><strong>One identity per record:</strong> stable IDs and revisions connect the two. Search indexes and agent briefings are derived and rebuildable; they are not competing authoritative copies.</li>\n<li><strong>Visible synchronisation:</strong> show offline, pending and conflict states. Queue supported local edits and require conflict resolution when both sides changed; never silently overwrite a person’s revision.</li>\n<li><strong>Inspectable retrieval:</strong> combine exact identifiers, ordinary text search and semantic retrieval. Include contradictory and superseding records when relevant, with source revisions and dates.</li>\n<li><strong>An exit path:</strong> design exports for notes, metadata, relationships and artifact references; test restoring them. “Synced to the cloud” is not the same as a verified backup.</li>\n</ul>\n<p>Do not automatically import the entire machine or grant all agents the entire library. Project access, personal-note exclusions, retention and deletion must cover both original records and their search indexes.</p>\n<p class=\"note\">Offline editing, automated capture, conflict resolution and complete export/restore still require implementation and testing. No automatic backups or additional external integrations have been configured here.</p>\n</details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"delivery\">8. Build one complete loop first.</h2>\n<p>The first release should prove this journey: <strong>open a project → receive a sourced briefing → run or inspect an experiment → review a finding → return with a fresh agent.</strong> Use the Linco revision as the pilot, as you suggested. Keep usability observations separate from claims about your research.</p>\n<p>Start with the resume page, a linked experiment/run record, an editable checkpoint, evidence-backed retrieval and a small review queue. Offer only a few context-sensitive templates: reading note, experiment, finding and review. Show the essential prompts first; reveal reproducibility details when needed.</p>\n<p>Defer a global knowledge graph, elaborate automation builders and universal connectors. First make one investigation reliably understandable from beginning to end.</p>\n<details><summary>How I would test whether it is actually good</summary>\n<ul>\n<li><strong>Return after an absence:</strong> can you identify the current question, previous result and next decision without opening old chats? Measure time and correctness against today’s workflow.</li>\n<li><strong>Change agents:</strong> can a fresh session describe the important failed attempt and cite its evidence? Check for unsupported claims and omissions.</li>\n<li><strong>Correct a conclusion:</strong> does retrieval show the revision and retain the old conclusion as superseded, without treating it as current?</li>\n<li><strong>Interrupt a run:</strong> is partial output labelled incomplete, with enough metadata to investigate or resume?</li>\n<li><strong>Challenge permissions and durability:</strong> do excluded notes stay out of context, and can an exported project be restored with its evidence links?</li>\n</ul>\n<p>These are proposed acceptance tests, not results. The main success measure is reliable resumption with less effort—not more notes, more agent messages or more time inside the app.</p>\n</details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"inspiration\">The research practices behind the design</h2>\n<p>There is no single “world’s best” note-taking method. I would borrow well-documented practices, then test the combination against your actual work. The AI workflow above is my design synthesis, not an endorsement by these authors.</p>\n<details><summary>Primary sources and the specific ideas worth borrowing</summary>\n<p><strong>Terence Tao — make reasoning recoverable.</strong> Preserve enough of an argument to reconstruct it later, including useful incomplete attempts. Product implication: keep the reasoning behind a stopped exploration, not just its final status. <a href=\"https://terrytao.wordpress.com/career-advice/write-down-what-youve-done/\">Write down what you’ve done</a>.</p>\n<p><strong>William Stafford Noble — leave a reproducible trail.</strong> Dated lab records should connect operations, observations, interpretations and failure explanations so a future reader can reconstruct the work. Product implication: pair a readable experiment record with its underlying run evidence. <a href=\"https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1000424\">A Quick Guide to Organizing Computational Biology Projects</a>.</p>\n<p><strong>Andy Matuschak — let ideas develop across projects.</strong> His evergreen-note practice emphasises focused, concept-oriented, connected notes that evolve. Product implication: an idea can outlive the paper or project where it began. <a href=\"https://notes.andymatuschak.org/Evergreen_notes\">Evergreen notes</a>.</p>\n<p><strong>S. Keshav — match reading depth to purpose.</strong> Use up to three passes rather than committing equal effort to every paper. Product implication: lightweight capture first, deeper interpretation where useful. <a href=\"https://cseweb.ucsd.edu/~efernandes/teaching/res/keshav-howtoread.pdf\">How to Read a Paper</a>.</p>\n<p><strong>Saleema Amershi and colleagues — design for AI being wrong.</strong> Their interaction guidelines address system behaviour at first use, during use, when errors occur and over time. Product implication: make scope, correction and review part of everyday interaction. <a href=\"https://www.microsoft.com/en-us/research/project/guidelines-for-human-ai-interaction/\">Guidelines for Human–AI Interaction</a>.</p>\n</details>\n<div class=\"callout olive\"><div class=\"callout-h\">My strongest recommendation</div><p>Make “we can reliably continue” the organising principle. A beautiful research workspace should help you think today while leaving enough evidence for you—and a different AI—to understand tomorrow.</p></div>\n<p class=\"note\">Review this proposal in place: edit any text directly in Linco’s notebook preview and save, or add a Markdown requirement underneath the section you want changed. This design brief follows the notebook skill’s editable shell; it is not a replacement for the proposed Notion knowledge store.</p>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { verifyTexSupplement } from './verify-tex-supplement.mjs'
 
 const VERSION = '2026.05'
 const RELEASE_ROOT = `https://github.com/rstudio/tinytex-releases/releases/download/v${VERSION}`
@@ -30,6 +31,8 @@ if (!bundle) {
 }
 
 const output = resolve('src-tauri', 'resources', 'tex', bundle.filename)
+const supplement = verifyTexSupplement(resolve('src-tauri', 'resources', 'tex', 'supplement'))
+console.log(`[tex] Verified ${supplement.packages} offline academic packages (${supplement.runfiles} runfiles)`)
 mkdirSync(dirname(output), { recursive: true })
 for (const candidate of Object.values(bundles)) {
   const path = resolve('src-tauri', 'resources', 'tex', candidate.filename)

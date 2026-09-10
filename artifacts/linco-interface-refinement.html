@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"html","html":"<h1>Linco — interface refinement</h1><p>The open dev app now uses compact system typography, neutral surfaces, and simple workspace tabs. Vibe Coding, Code, and Visual remain the primary navigation. Projects, sessions, and settings stay out of the main working area.</p>"},
+  {"type":"table","head":["Area","This revision"],"rows":[["Typography","12px default; the open dev preview uses your existing 11px size with system sans-serif. Menus, navigation, and composer now respect the font-size setting."],["Navigation","Left-aligned workspace tabs with a thin active marker, replacing the floating segmented control."],["Surfaces","Neutral light and charcoal dark themes, restrained green actions, flatter panels, and smaller corners."],["Welcome screen","An 18px default heading, direct instructions, and a simple recent-project list. Removed the sparkle illustration and promotional wording."],["Working area","40px title bar and 33px tool bar. The canvas occupies about 91% of the inspected dev window’s height."],["Terminal","Load the bundled font before initial measurement and place padding where the terminal fit logic accounts for it, preventing clipped line endings."]]},
+  {"type":"html","html":"<h2>Design references</h2><p><a href=\"https://linear.app/now/how-we-redesigned-the-linear-ui\">Linear’s UI redesign</a> informed the tighter alignment, reduced visual noise, and neutral surfaces. <a href=\"https://zed.dev/docs/appearance\">Zed’s appearance settings</a> informed keeping interface typography separate from code and terminal text. These are design references, not copied screens or assets.</p><h2>Verified</h2><p>29 unit tests and 9 browser tests passed. TypeScript and the production build passed. Checks cover all three workspaces, light/dark themes, Chinese navigation, compact windows, keyboard controls, saved font sizes, cold-start terminal sizing, and preservation of terminal/editor/preview state while switching workspaces.</p><p>The native dev window was also inspected with a real terminal and preview. Browser tests use mocked native operations; this revision does not claim new end-to-end validation of external PowerPoint or remote-file operations.</p><h2>Review it live</h2><p>The dev app is running with the refinement. Font choices remain adjustable under Settings → General. No new release was published; the earlier GitHub restore tag <code>restore/pre-vibe-redesign-2026-09-06</code> remains available.</p><p class=\"note\">This editable change note uses the HTML notebook skill’s standard shell. The application itself was changed directly in the repository.</p>"}
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

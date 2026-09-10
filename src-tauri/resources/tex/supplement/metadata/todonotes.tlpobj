@@ -1,0 +1,21 @@
+name todonotes
+category Package
+revision 77682
+shortdesc Marking things to do in a LaTeX document
+relocated 1
+longdesc The package lets the user mark things to do later, in a simple
+longdesc and visually appealing way. The package takes several options
+longdesc to enable customization/finetuning of the visual appearance.
+depend pgf
+depend tools
+depend xcolor
+depend xkeyval
+runfiles size=6
+ RELOC/tex/latex/todonotes/todonotes.sty
+catalogue-also todo
+catalogue-contact-bugs https://github.com/henrikmidtiby/todonotes/issues
+catalogue-contact-repository https://github.com/henrikmidtiby/todonotes
+catalogue-ctan /macros/latex/contrib/todonotes
+catalogue-license lppl1.3
+catalogue-topics notes editorial pgf-tikz tagged-pdf-incompatible
+catalogue-version 1.1.7

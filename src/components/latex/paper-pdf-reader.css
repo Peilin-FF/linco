@@ -1,0 +1,34 @@
+/* Minimal scoped text-layer rules for PDF.js (Apache-2.0, Mozilla Foundation).
+   Keep its transparent, selectable text above the original PDF canvas. */
+.paper-pdf-reader .paper-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  letter-spacing: normal;
+  text-align: initial;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  user-select: text;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.paper-pdf-reader .paper-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+.paper-pdf-reader .paper-text-layer > :not(.markedContent),
+.paper-pdf-reader .paper-text-layer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.paper-pdf-reader .paper-text-layer .markedContent { display: contents; }
+.paper-pdf-reader .paper-text-layer ::selection { background: rgb(76 131 205 / 0.35); }

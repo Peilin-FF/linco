@@ -75,13 +75,13 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.8:
-            - Keep existing conversations visible while terminal resize output is buffered, instead of briefly blanking the conversation pane.
-            - Reopen conversation history from a project-scoped memory cache while refreshing in the background; show a loading indicator on the first visit.
-            - Use 12px editor, terminal, and log defaults. Add a Reset to 12px control and normalize invalid saved interface sizes without overwriting valid preferences.
-            - Preserve selected themes when delayed project actions finish, serialize settings saves, and show a retry action if saving fails.
-            - Keep the SSH connection menu clickable above Files, Settings, and native Notion pages.
-            - Suppress separate Windows console windows when background history and proxy helpers launch. Embedded terminals and running agents stay unchanged.
+            Linco 1.0.9:
+            - Point the writing assistant at an experiment repository that names its own machine, so a manuscript kept on this computer can be reviewed against code that lives on a remote server.
+            - Run the paper assistant locally in every case. It reads the remote project over SSH and quotes fingerprinted excerpts, instead of running the model on the server.
+            - Reach a research host that is not the connected one, using that connection's saved identity.
+            - Read PDFs as one continuous scroll, with Ctrl and the wheel zooming at the pointer. Pages no longer flicker at particular zoom levels.
+            - Keep the slide canvas and research context side by side on a remote connection, and route figure drawing to a local agent so it reaches desktop PowerPoint.
+            - Keep selected text legible in every theme, including in the terminal, where selected cells previously kept an unreadable ANSI colour.
 
             Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true

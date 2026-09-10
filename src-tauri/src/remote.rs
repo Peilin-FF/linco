@@ -513,6 +513,48 @@ pub async fn ssh_connect(host: String, identity: Option<String>) -> Result<(), S
     .await
 }
 
+/// 为「不是当前工作区连接」的主机预热 ControlMaster。
+///
+/// 证据主机独立于论文所在机器,所以研究仓库可能在一台从未 `ssh_connect` 过的服务器上:
+/// 此时没有 master socket,而 `read_file`/`list_dir` 不带 `-i`,配置在 Linco 连接项里的
+/// identity 就用不上,认证会失败。这里按 host 找回那条连接的 identity 探一次;
+/// ControlPersist 之后的读取都复用同一条连接。已有 master 时开销约等于零。
+pub fn ensure_master(host: &str) -> Result<(), String> {
+    if host.trim().is_empty() {
+        return Ok(());
+    }
+    let identity = crate::config::load_config()
+        .ok()
+        .and_then(|config| {
+            config
+                .connections
+                .into_iter()
+                .find(|c| c.host.trim() == host.trim())
+                .map(|c| c.identity)
+        })
+        .filter(|id| !id.is_empty());
+    let mut cmd = Command::new("ssh");
+    cmd.args(ssh_opts());
+    cmd.arg("-o").arg("BatchMode=yes");
+    if let Some(id) = identity.as_ref() {
+        cmd.arg("-i").arg(id);
+    }
+    cmd.arg(host).arg("--").arg("echo").arg("__linco_ok__");
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    crate::proc_ext::no_window(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("ssh 启动失败: {e}"))?;
+    if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("__linco_ok__") {
+        Ok(())
+    } else {
+        Err(format!(
+            "Cannot reach the research host {host}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
 /// 探测 master 是否存活。
 #[tauri::command]
 pub async fn ssh_check(host: String) -> bool {

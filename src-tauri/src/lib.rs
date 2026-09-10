@@ -12,6 +12,10 @@ mod config;
 mod fs;
 mod git;
 mod latex;
+mod latex_cache;
+mod latex_build;
+mod paper_ai_job;
+mod latex_snapshot;
 mod latex_ai;
 mod model_test;
 mod notion;
@@ -22,6 +26,7 @@ mod preview;
 mod proc_ext;
 mod procs;
 mod remote;
+mod research;
 mod search;
 mod sessions;
 mod shadow;
@@ -48,6 +53,19 @@ pub fn run() {
 // Allows a separate, clearly labelled development window without changing the
 // production application identity or closing an existing user session.
 pub fn run_with_context(context: tauri::Context<tauri::Wry>) {
+    run_desktop(context, None)
+}
+
+/// The dev example owns a separate browser profile without duplicating the TeX
+/// runtime. Set it on the builder explicitly: this Tauri version's automatic
+/// WindowConfig conversion does not propagate data_directory to the runtime.
+pub fn run_development_context(mut context: tauri::Context<tauri::Wry>) {
+    let window = context.config().app.windows.first().cloned();
+    context.config_mut().app.windows.clear();
+    run_desktop(context, window)
+}
+
+fn run_desktop(context: tauri::Context<tauri::Wry>, development_window: Option<tauri::utils::config::WindowConfig>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -55,7 +73,14 @@ pub fn run_with_context(context: tauri::Context<tauri::Wry>) {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_drag::init())
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(config) = development_window {
+                let mut builder = tauri::WebviewWindowBuilder::from_config(app, &config)?;
+                if let Some(directory) = config.data_directory {
+                    builder = builder.data_directory(directory);
+                }
+                builder.build()?;
+            }
             #[cfg(windows)]
             if let Some(window) = app.get_webview_window("main") {
                 window.set_decorations(false)?;
@@ -170,9 +195,17 @@ pub fn run_with_context(context: tauri::Context<tauri::Wry>) {
                 latex::overleaf_publish,
                 latex::overleaf_collaboration_poll,
                 latex::overleaf_collaboration_apply,
+                latex::overleaf_sync_capabilities,
                 latex::latex_compile,
+                research::research_capture,
+                research::research_load,
+                research::research_save_figure,
+                research::research_powerpoint,
                 latex_ai::latex_ai_suggest,
                 latex_ai::latex_ai_review,
+                latex_ai::latex_ai_pdf_highlights,
+                paper_ai_job::latex_ai_pdf_progress,
+                paper_ai_job::latex_ai_pdf_cancel,
                 remote::ssh_config_hosts,
                 remote::ssh_connect,
                 remote::ssh_check,

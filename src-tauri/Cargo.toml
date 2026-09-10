@@ -1,6 +1,6 @@
 [package]
 name = "linco"
-version = "1.0.8"
+version = "1.0.9"
 description = "Linco — 直接驱动 Claude Code / Codex 等 CLI agent 的桌面应用"
 authors = ["Linco"]
 edition = "2021"
@@ -19,6 +19,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.8"
 base64 = "0.22"
+sha2 = "0.10"
+tokio = { version = "1", features = ["time", "macros"] }
 tauri-plugin-dialog = "2.7.1"
 regex = "1"
 tiny_http = "0.12"

@@ -21,11 +21,17 @@ import {
 } from 'lucide-react'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { useI18n } from '@/lib/i18n'
+import ResearchProduction, { usePaperResearch } from './ResearchProduction'
 
 interface DrawingViewProps {
   host?: string
   cwd?: string
+  /** This machine's working directory. The slide always lives here, because
+   *  PowerPoint and the drawing tools are local even when the project is not. */
+  localCwd?: string
   onSubmitToAgent?: (text: string) => void
+  /** Routes a drawing request to a local agent session while the workspace is remote. */
+  onSubmitToLocalAgent?: (text: string) => void
 }
 
 interface PowerPointLiveStatus {
@@ -297,9 +303,14 @@ function AnnotationToolButton({
 export default function DrawingView({
   host,
   cwd,
-  onSubmitToAgent
+  localCwd,
+  onSubmitToAgent,
+  onSubmitToLocalAgent
 }: DrawingViewProps): JSX.Element {
   const { t } = useI18n()
+  const { context, update } = usePaperResearch(host, cwd || '', cwd || '')
+  // With a remote project the Visual tab holds two surfaces; locally there is only the canvas.
+  const [surface, setSurface] = useState<'canvas' | 'research'>('canvas')
   const [status, setStatus] = useState<PowerPointLiveStatus | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -330,6 +341,8 @@ export default function DrawingView({
   }, [])
 
   useEffect(() => {
+    // Mirroring reads local PowerPoint through local commands, so a remote
+    // project is no reason to stop polling.
     let disposed = false
     const poll = async (): Promise<void> => {
       if (!disposed) await refresh()
@@ -342,7 +355,11 @@ export default function DrawingView({
     }
   }, [refresh])
 
-  const targetPath = joinPath(cwd, 'figure.pptx')
+  const figureCwd = host ? localCwd : cwd
+  const targetPath = joinPath(figureCwd, 'figure.pptx')
+  // Remote project: the drawing loop has to run on this machine.
+  const sendToAgent = host ? onSubmitToLocalAgent : onSubmitToAgent
+  const agentUnavailable = host ? !onSubmitToLocalAgent || !localCwd : !onSubmitToAgent
   const presentationPath = status?.file_path || targetPath
   const slideIndex = status?.slide_index || 1
   const slideKey = `${presentationPath}\n${slideIndex}`
@@ -528,7 +545,7 @@ export default function DrawingView({
   }
 
   const submitToAgent = async (): Promise<void> => {
-    if (!onSubmitToAgent || submitting) return
+    if (!sendToAgent || submitting) return
     let snapshot = annotations
     const pendingComment = textEditor?.value.trim()
     if (textEditor && pendingComment && !snapshot.some((item) => item.id === textEditor.id)) {
@@ -548,7 +565,7 @@ export default function DrawingView({
     }
 
     if (snapshot.length === 0) {
-      onSubmitToAgent(t('drawing.powerpoint.agentPrompt', { path: presentationPath }))
+      sendToAgent(t('drawing.powerpoint.agentPrompt', { path: presentationPath }))
       return
     }
 
@@ -565,7 +582,7 @@ export default function DrawingView({
         .map((annotation, index) => `${index + 1}. ${annotation.text}`)
         .join('\n')
       const markCount = snapshot.filter((annotation) => annotation.type !== 'text').length
-      onSubmitToAgent(
+      sendToAgent(
         t('drawing.powerpoint.annotationAgentPrompt', {
           path: presentationPath,
           slide: slideIndex,
@@ -586,14 +603,37 @@ export default function DrawingView({
   const previewUrl = status?.preview_path
     ? `${convertFileSrc(status.preview_path)}?v=${status.updated_at}`
     : ''
+  const surfaceTabs = (
+    <div className="flex shrink-0 items-center gap-1" role="tablist" aria-label={t('drawing.surface.label')}>
+      {(['canvas', 'research'] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="tab"
+          aria-selected={surface === option}
+          onClick={() => setSurface(option)}
+          className={`rounded-md px-2 py-1 text-[12px] ${surface === option ? 'bg-black/8 text-ink' : 'text-ink-muted hover:bg-black/5'}`}
+        >
+          {t(option === 'canvas' ? 'drawing.surface.canvas' : 'drawing.surface.research')}
+        </button>
+      ))}
+    </div>
+  )
+
   const canvasSize = status
     ? `${pointsToMillimeters(status.slide_width)} × ${pointsToMillimeters(status.slide_height)} mm`
     : '182 × 115 mm'
 
-  if (host) {
+  // Both surfaces are always available. The canvas is local either way, and the
+  // research surface reads evidence from whichever host its own context names,
+  // which is independent of where this workspace happens to be pointed.
+  if (surface === 'research') {
     return (
-      <div className="flex h-full items-center justify-center bg-white px-8 text-center text-sm text-ink-muted">
-        {t('drawing.powerpoint.remoteUnsupported')}
+      <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-canvas shadow-card ring-1 ring-black/5">
+        <div className="flex h-10 shrink-0 items-center gap-1 border-b border-black/8 px-2">{surfaceTabs}</div>
+        <div className="min-h-0 flex-1">
+          <ResearchProduction context={context} onContext={update} onAskAgent={onSubmitToAgent} />
+        </div>
       </div>
     )
   }
@@ -601,7 +641,7 @@ export default function DrawingView({
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg bg-canvas shadow-card ring-1 ring-black/5">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-black/8 px-2">
-        <Presentation size={16} className="shrink-0 text-ink-muted" />
+        {surfaceTabs}
         <button
           type="button"
           onClick={() => void refresh()}
@@ -632,7 +672,7 @@ export default function DrawingView({
             })}
           </span>
         )}
-        {onSubmitToAgent && (
+        {!agentUnavailable && (
           <button
             type="button"
             onClick={() => void submitToAgent()}

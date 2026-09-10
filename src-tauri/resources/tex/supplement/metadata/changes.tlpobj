@@ -1,0 +1,24 @@
+name changes
+category Package
+revision 79618
+shortdesc Manual change markup
+relocated 1
+longdesc The package allows the user to manually markup changes of text,
+longdesc such as additions, deletions, or replacements. Changed text is
+longdesc shown in a different color; deleted text is striked out.
+longdesc Additionally, text can be highlighted and/or commented. The
+longdesc package allows free definition of additional authors and their
+longdesc associated color. It also allows you to change the markup of
+longdesc changes, authors, highlights or comments. A Python script is
+longdesc provided for removing the changes.
+runfiles size=11
+ RELOC/scripts/changes/pyMergeChanges.py
+ RELOC/tex/latex/changes/changes.sty
+catalogue-contact-bugs https://gitlab.com/ekleinod/changes/issues
+catalogue-contact-home https://changes.sourceforge.net/
+catalogue-contact-repository https://gitlab.com/ekleinod/changes/
+catalogue-contact-support https://gitlab.com/ekleinod/changes/issues
+catalogue-ctan /macros/latex/contrib/changes
+catalogue-license lppl1.3
+catalogue-topics doc-tool editorial tagged-pdf-incompatible
+catalogue-version 4.2.1

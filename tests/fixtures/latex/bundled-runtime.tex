@@ -1,0 +1,44 @@
+\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,graphicx,booktabs,xcolor}
+\usepackage{natbib,hyperref}
+\usepackage[ruled]{algorithm2e}
+\usepackage{todonotes,changes,listingsutf8}
+\setlength{\marginparwidth}{2cm}
+\title{Linco Local TeX Runtime Check}
+\author{Synthetic test fixture --- not research findings}
+\date{}
+\begin{document}
+\maketitle
+\section{A self-contained academic document}
+This document checks the compiler and bundled academic packages. Its numbers
+are test data, not experimental results. The same source is compiled with
+pdfLaTeX, XeLaTeX, and LuaLaTeX.
+\begin{equation}
+  \mathcal{L}(\theta) = \frac{1}{n}\sum_{i=1}^{n}
+    \lVert f_\theta(x_i) - y_i \rVert_2^2.
+\end{equation}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+Fixture & Value \\
+\midrule
+Control & 12 \\
+Variant & 15 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{algorithm}[h]
+\KwIn{A local or remote paper project}
+Copy remote inputs to a private local folder\;
+Compile using Linco's bundled TeX\;
+\caption{Local compilation of remote source files}
+\end{algorithm}
+\todo[inline]{A bundled review-note package is available.}
+\added{Tracked additions render without downloading a package.}
+See the synthetic reference~\citep{fixture}.
+\begin{thebibliography}{1}
+\bibitem[Fixture(2026)]{fixture}
+Fixture. 2026. \emph{A synthetic reference for testing only}.
+\end{thebibliography}
+\end{document}

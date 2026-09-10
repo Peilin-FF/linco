@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_FONT_SIZE, normalizeFontSize, THEMES, terminalTheme, themeById } from '@/lib/theme'
+import { DEFAULT_FONT_SIZE, normalizeFontSize, selectionInk, THEMES, terminalTheme, themeById } from '@/lib/theme'
+import { contrast } from '@/lib/themeCatalog'
 
 describe('workbench themes', () => {
   it('offers Linco themes and retains the VS Code alternatives', () => {
@@ -101,5 +102,44 @@ describe('workbench themes', () => {
       green: '#107c10',
       brightBlue: '#0451a5'
     })
+  })
+})
+
+describe('selection stays legible in every theme', () => {
+  const hex = /^#[0-9a-f]{6}$/i
+
+  it('keeps the default ink readable on the selection highlight', () => {
+    for (const theme of THEMES) {
+      const { ink, selection } = theme.vars
+      if (!hex.test(selection) || !hex.test(ink)) continue
+      expect(
+        contrast(ink, selection),
+        `${theme.id} ink ${ink} on selection ${selection}`
+      ).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('gives the terminal a selection foreground that survives the raw ANSI palette', () => {
+    for (const theme of THEMES) {
+      const term = terminalTheme(theme)
+      const background = term.selectionBackground
+      const foreground = term.selectionForeground
+      expect(foreground, `${theme.id} has no selection foreground`).toBeTruthy()
+      if (!background || !hex.test(background) || !foreground || !hex.test(foreground)) continue
+      // Without an explicit foreground, selected cells keep their ANSI color and
+      // the dim entries used for secondary output fall to roughly 1:1 here.
+      expect(
+        contrast(foreground, background),
+        `${theme.id} selection ${foreground} on ${background}`
+      ).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('keeps the original ink when it already contrasts, and flips when it does not', () => {
+    expect(selectionInk('#ffffff', '#242628')).toBe('#242628')
+    expect(selectionInk('#242628', '#242628')).toBe('#ffffff')
+    expect(selectionInk('#f0f2d4', '#f0f2d4')).toBe('#000000')
+    // A non-hex or gradient value is left to the caller's own ink.
+    expect(selectionInk('color-mix(in srgb, red, blue)', '#242628')).toBe('#242628')
   })
 })

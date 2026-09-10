@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import {
@@ -30,6 +30,8 @@ import {
 import LatexVisualEditor, {
   type LatexEditorMode
 } from './latex/LatexVisualEditor'
+import { reviewScope } from '@/lib/latexReviewMemory'
+import ResearchProduction, { usePaperResearch } from './ResearchProduction'
 import {
   baseName,
   invalidateFile,
@@ -42,6 +44,7 @@ import {
 import { onRemoteFsChange } from '@/lib/watch'
 import {
   compileLatex,
+  latexRuntimeErrorKey,
   type LatexPolishMode,
   overleafClone,
   overleafCollaborationApply,
@@ -49,6 +52,9 @@ import {
   overleafProjectInfo,
   overleafPublish,
   overleafPull,
+  overleafMergePending,
+  shouldRetryOverleafMerge,
+  type OverleafMergePending,
   overleafStoreToken,
   reviewLatex,
   suggestLatex,
@@ -61,6 +67,8 @@ import {
   type LatexProjectTextFile
 } from '@/lib/latexProject'
 import { useI18n } from '@/lib/i18n'
+
+const PaperPdfReader = lazy(() => import('./latex/PaperPdfReader'))
 
 interface LatexViewProps {
   host?: string
@@ -111,7 +119,6 @@ type CollaborationState =
   | 'queued'
   | 'publishing'
   | 'pending'
-  | 'conflict'
   | 'offline'
   | 'paused'
 
@@ -386,6 +393,8 @@ export default function LatexView({
 }: LatexViewProps): JSX.Element {
   const { t } = useI18n()
   const [paperRoot, setPaperRoot] = useState('')
+  const [researchOpen, setResearchOpen] = useState(false)
+  const { context: researchContext, update: updateResearchContext } = usePaperResearch(host, paperRoot || cwd || '', cwd || '')
   const [files, setFiles] = useState<ProjectFile[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const [fileRailOpen, setFileRailOpen] = useState(true)
@@ -436,6 +445,8 @@ export default function LatexView({
   const savingRef = useRef(saving)
   const collaborationEnabledRef = useRef(collaborationEnabled)
   const collaborationAuthBlockedRef = useRef(collaborationAuthBlocked)
+  const pendingMergeRef = useRef<OverleafMergePending | null>(null)
+  const paperSyncGenerationRef = useRef(0)
   const saveTimerRef = useRef<number | null>(null)
   const livePublishTimerRef = useRef<number | null>(null)
   const ownWriteAtRef = useRef(0)
@@ -448,6 +459,8 @@ export default function LatexView({
   const writeChainRef = useRef<Promise<void>>(Promise.resolve())
   const loadGenerationRef = useRef(0)
   const refreshGenerationRef = useRef(0)
+  const compileGenerationRef = useRef(0)
+  const mainPathRef = useRef(mainPath)
   const outlineNavigationRevisionRef = useRef(0)
   const editorPreviewRef = useRef<HTMLElement | null>(null)
 
@@ -456,9 +469,18 @@ export default function LatexView({
   selectedPathRef.current = selectedPath
   hostRef.current = host
   paperRootRef.current = paperRoot
+  mainPathRef.current = mainPath
   projectInfoRef.current = projectInfo
   connectTokenRef.current = connectToken
   savingRef.current = saving
+
+  useEffect(() => {
+    compileGenerationRef.current++
+    setCompiling(false)
+    setCompileResult(null)
+    setPdfSrc('')
+    return () => { compileGenerationRef.current++ }
+  }, [host, paperRoot, mainPath])
   collaborationEnabledRef.current = collaborationEnabled
   collaborationAuthBlockedRef.current = collaborationAuthBlocked
 
@@ -531,6 +553,8 @@ export default function LatexView({
   }, [cwd, host])
 
   useEffect(() => {
+    paperSyncGenerationRef.current += 1
+    pendingMergeRef.current = null
     if (!paperRoot) {
       setProjectInfo(null)
       return
@@ -567,6 +591,7 @@ export default function LatexView({
     setPdfSrc('')
     setProjectInfo(null)
     setSyncError('')
+    setSyncing('')
     setCollaborationState('idle')
     setCollaborationAuthBlocked(false)
     setCollaborationApplying(false)
@@ -613,15 +638,17 @@ export default function LatexView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPath])
 
-  const saveNow = useCallback(async (): Promise<void> => {
+  const saveNow = useCallback(async (): Promise<boolean> => {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current)
       saveTimerRef.current = null
     }
     const path = selectedPathRef.current
-    if (!path || !dirtyRef.current) return
+    if (!dirtyRef.current) return true
+    if (!path) return false
     const snapshot = contentRef.current
     const targetHost = hostRef.current
+    let saved = false
     setSaving(true)
     writeChainRef.current = writeChainRef.current
       .catch(() => {})
@@ -629,7 +656,8 @@ export default function LatexView({
       .then(() => {
         ownWriteAtRef.current = Date.now()
         invalidateFile(path, targetHost)
-        if (contentRef.current === snapshot) {
+        saved = contentRef.current === snapshot && selectedPathRef.current === path && hostRef.current === targetHost
+        if (saved) {
           dirtyRef.current = false
           setDirty(false)
         }
@@ -638,9 +666,11 @@ export default function LatexView({
       .catch((reason: unknown) => setSaveError(compactError(reason)))
       .finally(() => setSaving(false))
     await writeChainRef.current
+    return saved
   }, [])
 
   const onEditorChange = (next: string): void => {
+    pendingMergeRef.current = null
     contentRef.current = next
     setContent(next)
     dirtyRef.current = true
@@ -709,7 +739,7 @@ export default function LatexView({
 
   const selectFile = async (path: string): Promise<void> => {
     if (path === selectedPathRef.current) return
-    await saveNow()
+    if (!await saveNow()) return
     setSelectedPath(path)
   }
 
@@ -720,7 +750,7 @@ export default function LatexView({
       if (disposed || (change.host || '') !== (hostRef.current || '')) return
       const current = selectedPathRef.current
       const ownWrite = Date.now() - ownWriteAtRef.current < 3_000
-      if (current && change.paths.some((path) => path === current)) {
+      if (!collaborationPollRef.current && current && change.paths.some((path) => path === current)) {
         if (ownWrite) return
         if (dirtyRef.current) setExternalConflict(true)
         else void loadFile(current, true)
@@ -741,6 +771,7 @@ export default function LatexView({
         !collaborationPollRef.current &&
         Date.now() > collaborationMutationUntilRef.current
       ) {
+        pendingMergeRef.current = null
         localLiveChangeRef.current = true
         localLiveRevisionRef.current += 1
         if (collaborationEnabledRef.current && projectInfoRef.current?.connected) {
@@ -773,23 +804,35 @@ export default function LatexView({
     []
   )
 
-  const compile = async (): Promise<void> => {
+  const compile = async (force = false): Promise<void> => {
     if (!paperRoot || !mainPath || compiling) return
-    await saveNow()
+    const compileScope = { host, root: paperRoot, main: mainPath }
+    const ticket = ++compileGenerationRef.current
+    const isCurrent = () => ticket === compileGenerationRef.current && hostRef.current === compileScope.host
+      && paperRootRef.current === compileScope.root && mainPathRef.current === compileScope.main
+    if (!await saveNow() || !isCurrent()) return
     setCompiling(true)
     setSaveError('')
     try {
-      const result = await compileLatex(paperRoot, mainPath, engine, host)
+      const result = await compileLatex(paperRoot, mainPath, engine, host, force)
+      if (!isCurrent()) return
       setCompileResult(result)
       setLogOpen(!result.success)
       setPreviewOpen(true)
       if (result.success) {
-        const src = host
+        const src = result.cached && compileResult?.pdf_path === result.pdf_path && pdfSrc
+          ? pdfSrc
+          : host && !result.pdf_is_local
           ? `data:application/pdf;base64,${await readBytes(result.pdf_path, host)}`
           : `${convertFileSrc(result.pdf_path)}?v=${Date.now()}`
+        if (!isCurrent()) return
         setPdfSrc(src)
+      } else {
+        setPdfSrc('')
       }
     } catch (reason) {
+      if (!isCurrent()) return
+      setPdfSrc('')
       setCompileResult({
         success: false,
         pdf_path: '',
@@ -800,19 +843,25 @@ export default function LatexView({
       setLogOpen(true)
       setPreviewOpen(true)
     } finally {
-      setCompiling(false)
+      if (isCurrent()) setCompiling(false)
     }
   }
 
   const sync = async (kind: 'pull' | 'publish'): Promise<void> => {
     if (!paperRoot || syncing || collaborationBusyRef.current) return
-    await saveNow()
-    if (collaborationBusyRef.current) return
+    const generation = paperSyncGenerationRef.current
+    const isCurrent = () => generation === paperSyncGenerationRef.current
+    if (!await saveNow()) return
+    if (!isCurrent() || collaborationBusyRef.current) return
     collaborationBusyRef.current = true
     collaborationPollRef.current = true
     setSyncing(kind)
     setSyncError('')
+    setCollaborationApplying(true)
+    pendingMergeRef.current = null
     try {
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+      if (!isCurrent() || !await saveNow() || !isCurrent()) return
       const next =
         kind === 'pull'
           ? await overleafPull(paperRoot, connectToken, host)
@@ -822,6 +871,7 @@ export default function LatexView({
               connectToken,
               host
             )
+      if (!isCurrent()) return
       projectInfoRef.current = next
       setProjectInfo(next)
       setCollaborationAuthBlocked(false)
@@ -831,22 +881,24 @@ export default function LatexView({
       }
       collaborationMutationUntilRef.current = Date.now() + 5_000
       await refreshProject()
+      if (!isCurrent()) return
       if (selectedPathRef.current) {
         if (dirtyRef.current) setExternalConflict(true)
         else await loadFile(selectedPathRef.current, true)
       }
       setCollaborationState('idle')
     } catch (reason) {
+      if (!isCurrent()) return
       const message = compactError(reason)
-      setSyncError(
-        message.includes('OVERLEAF_SYNC_CONFLICT')
-          ? t('latex.sync.conflictDetail')
-          : message
-      )
-      if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
-        setCollaborationAuthBlocked(true)
-        collaborationAuthBlockedRef.current = true
-        setCollaborationState('conflict')
+      const pending = overleafMergePending(message)
+      if (pending) {
+        pendingMergeRef.current = pending
+        setSyncError('')
+        collaborationAuthBlockedRef.current = false
+        setCollaborationAuthBlocked(false)
+        setCollaborationState('pending')
+      } else {
+        setSyncError(message)
       }
       if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
         setPendingSync(kind)
@@ -856,7 +908,10 @@ export default function LatexView({
         setCollaborationState('paused')
       }
     } finally {
-      setSyncing('')
+      if (isCurrent()) {
+        setSyncing('')
+        setCollaborationApplying(false)
+      }
       collaborationPollRef.current = false
       collaborationBusyRef.current = false
     }
@@ -866,6 +921,7 @@ export default function LatexView({
     if (
       !collaborationEnabledRef.current ||
       collaborationAuthBlockedRef.current ||
+      pendingMergeRef.current !== null ||
       !projectInfoRef.current?.connected ||
       !paperRootRef.current ||
       !localLiveChangeRef.current
@@ -877,7 +933,9 @@ export default function LatexView({
       return
     }
 
-    await saveNow()
+    const generation = paperSyncGenerationRef.current
+    const isCurrent = () => generation === paperSyncGenerationRef.current
+    if (!await saveNow() || !isCurrent()) return
     if (!localLiveChangeRef.current) return
     if (collaborationBusyRef.current) {
       queueLivePublishRef.current()
@@ -888,49 +946,63 @@ export default function LatexView({
     collaborationBusyRef.current = true
     collaborationPollRef.current = true
     setCollaborationState('publishing')
+    setCollaborationApplying(true)
     try {
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+      if (!isCurrent() || !await saveNow() || !isCurrent()) return
       const next = await overleafPublish(
         paperRootRef.current,
         `Collaborative update from Linco (${new Date().toLocaleString()})`,
         connectTokenRef.current,
         hostRef.current
       )
+      if (!isCurrent()) return
       projectInfoRef.current = next
       setProjectInfo(next)
       setSyncError('')
       setCollaborationAuthBlocked(false)
+      collaborationAuthBlockedRef.current = false
+      pendingMergeRef.current = null
       collaborationMutationUntilRef.current = Date.now() + 5_000
       if (localLiveRevisionRef.current === revision) {
         localLiveChangeRef.current = false
       }
       published = true
+      await refreshProject()
+      if (!isCurrent()) return
+      if (selectedPathRef.current) {
+        if (dirtyRef.current) setExternalConflict(true)
+        else await loadFile(selectedPathRef.current, true)
+      }
       setCollaborationState('idle')
     } catch (reason) {
+      if (!isCurrent()) return
       const message = compactError(reason)
       if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
         setCollaborationAuthBlocked(true)
         collaborationAuthBlockedRef.current = true
         setCollaborationState('paused')
-      } else if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
-        setSyncError(t('latex.sync.conflictDetail'))
-        setCollaborationAuthBlocked(true)
-        collaborationAuthBlockedRef.current = true
-        setCollaborationState('conflict')
+      } else if (overleafMergePending(message)) {
+        pendingMergeRef.current = overleafMergePending(message)
+        setSyncError('')
+        setCollaborationState('pending')
       } else {
+        setSyncError(message)
         setCollaborationState('offline')
       }
     } finally {
+      if (isCurrent()) setCollaborationApplying(false)
       collaborationPollRef.current = false
       collaborationBusyRef.current = false
       if (
-        published &&
+        isCurrent() && published &&
         localLiveChangeRef.current &&
         collaborationEnabledRef.current
       ) {
         queueLivePublishRef.current()
       }
     }
-  }, [saveNow, t])
+  }, [saveNow, refreshProject, loadFile])
 
   const queueLivePublish = useCallback((): void => {
     if (livePublishTimerRef.current !== null) {
@@ -940,6 +1012,7 @@ export default function LatexView({
     if (
       !collaborationEnabledRef.current ||
       collaborationAuthBlockedRef.current ||
+      pendingMergeRef.current !== null ||
       !projectInfoRef.current?.connected ||
       !localLiveChangeRef.current
     ) {
@@ -953,6 +1026,7 @@ export default function LatexView({
   queueLivePublishRef.current = queueLivePublish
 
   const toggleCollaboration = (): void => {
+    pendingMergeRef.current = null
     const next = !collaborationEnabled
     setCollaborationEnabled(next)
     collaborationEnabledRef.current = next
@@ -1025,6 +1099,17 @@ export default function LatexView({
           projectInfoRef.current = result.info
           setProjectInfo(result.info)
         }
+        if (pendingMergeRef.current) {
+          if (shouldRetryOverleafMerge(pendingMergeRef.current, result)) {
+            pendingMergeRef.current = null
+          } else {
+            // Recheck the remote quietly, but never repeat the same failed
+            // merge/publish until one side changes or the user presses Pull.
+            setCollaborationState('pending')
+            nextDelay = LIVE_POLL_BACKGROUND_MS
+            return
+          }
+        }
         if (result.pending) {
           setCollaborationState('pending')
           nextDelay = LIVE_POLL_PENDING_MS
@@ -1047,6 +1132,7 @@ export default function LatexView({
                 paperRoot,
                 hostRef.current
               )
+              if (stopped) return
               if (applied.info) {
                 projectInfoRef.current = applied.info
                 setProjectInfo(applied.info)
@@ -1094,18 +1180,17 @@ export default function LatexView({
           }
         }
       } catch (reason) {
+        if (stopped) return
         const message = compactError(reason)
         if (message.includes('OVERLEAF_AUTH_REQUIRED')) {
           authBlocked = true
           setCollaborationAuthBlocked(true)
           collaborationAuthBlockedRef.current = true
           setCollaborationState('paused')
-        } else if (message.includes('OVERLEAF_SYNC_CONFLICT')) {
-          setSyncError(t('latex.sync.conflictDetail'))
-          authBlocked = true
-          setCollaborationAuthBlocked(true)
-          collaborationAuthBlockedRef.current = true
-          setCollaborationState('conflict')
+        } else if (overleafMergePending(message)) {
+          pendingMergeRef.current = overleafMergePending(message)
+          setSyncError('')
+          setCollaborationState('pending')
           nextDelay = LIVE_POLL_BACKGROUND_MS
         } else {
           setCollaborationState('offline')
@@ -1215,7 +1300,9 @@ export default function LatexView({
       ? relativePath(cwd, paperRoot)
       : ''
   const collaborationStatus =
-    collaborationEnabled && collaborationState !== 'idle'
+    pendingMergeRef.current
+      ? t('latex.sync.liveState.pending')
+      : collaborationEnabled && collaborationState !== 'idle'
       ? t(`latex.sync.liveState.${collaborationState}`)
       : projectInfo?.behind
         ? t('latex.sync.behind', { n: projectInfo.behind })
@@ -1225,15 +1312,16 @@ export default function LatexView({
             ? t('latex.sync.liveState.idle')
             : t('latex.sync.synced')
   const collaborationStatusTone =
-    !collaborationEnabled
+    !collaborationEnabled || collaborationState === 'pending'
       ? 'text-ink-faint'
-      : collaborationState === 'conflict' || collaborationState === 'offline'
+      : collaborationState === 'offline'
       ? 'text-red-600'
-      : collaborationState === 'pending' ||
-          collaborationState === 'paused' ||
+      : collaborationState === 'paused' ||
           collaborationState === 'queued'
         ? 'text-amber-600'
         : 'text-emerald-600'
+  // 研究仓库换了主机时,工作区 cwd 不再是它的路径,不能继续兜底。
+  const researchRepo = researchContext.repo || (researchContext.host === (host || '') ? cwd || '' : '')
   const requestLatexSuggestion = useCallback(
     ({
       before,
@@ -1247,29 +1335,37 @@ export default function LatexView({
       mode: LatexPolishMode
     }) => {
       if (!cwd || !selectedPath) return Promise.reject(new Error(t('latex.selectFile')))
+      if (!researchRepo) return Promise.reject(new Error(t('latex.ai.researchRepoRequired', { host: researchContext.host })))
       return suggestLatex({
-        repo: cwd,
+        repo: researchRepo,
         currentFile: selectedPath,
         before,
         selection,
         after,
         mode,
-        host
+        evidencePaths: researchContext.paths,
+        paperBrief: researchContext.brief,
+        host,
+        researchHost: researchContext.host
       })
     },
-    [cwd, host, selectedPath, t]
+    [cwd, host, selectedPath, t, researchContext]
   )
   const reviewLatexSegments = useCallback(
     (segments: LatexReviewSegment[]) => {
       if (!cwd || !selectedPath) return Promise.reject(new Error(t('latex.selectFile')))
+      if (!researchRepo) return Promise.reject(new Error(t('latex.ai.researchRepoRequired', { host: researchContext.host })))
       return reviewLatex({
-        repo: cwd,
+        repo: researchRepo,
         currentFile: selectedPath,
         segments,
-        host
+        evidencePaths: researchContext.paths,
+        paperBrief: researchContext.brief,
+        host,
+        researchHost: researchContext.host
       })
     },
-    [cwd, host, selectedPath, t]
+    [cwd, host, selectedPath, t, researchContext]
   )
 
   const toggleFolder = (relative: string): void => {
@@ -1350,7 +1446,9 @@ export default function LatexView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-2xl bg-canvas shadow-card ring-1 ring-black/5">
+      {researchOpen && <div className="absolute inset-y-0 right-0 z-50 w-[min(560px,100%)] border-l border-black/10 shadow-xl"><ResearchProduction key={`${host}:${paperRoot}`} context={researchContext} onContext={updateResearchContext} passage={content} onClose={() => setResearchOpen(false)} onAskAgent={onSubmitToAgent} /></div>}
       <div className="flex h-11 shrink-0 items-center gap-1 border-b border-black/8 px-2">
+        <button onClick={() => setResearchOpen(true)} title={t('latex.ai.localExecution')} className="shrink-0 rounded-md border border-black/10 px-2 py-1 text-[11px] text-ink-muted hover:bg-black/5">Research context</button>
         <button
           onClick={() => setFileRailOpen((value) => !value)}
           className={`flex h-7 w-7 items-center justify-center rounded-md ${
@@ -1397,7 +1495,7 @@ export default function LatexView({
               title={
                 collaborationAuthBlocked
                   ? t('latex.authTitle')
-                  : collaborationStatus
+                  : pendingMergeRef.current ? t('latex.sync.pendingHint') : collaborationStatus
               }
             >
               <Cloud size={12} />
@@ -1457,7 +1555,8 @@ export default function LatexView({
           <option value="lualatex">LuaLaTeX</option>
         </select>
         <button
-          onClick={() => void compile()}
+          onClick={(event) => void compile(event.shiftKey)}
+          title={t('latex.compileHint')}
           disabled={compiling || !mainPath}
           className="flex h-7 shrink-0 items-center gap-1 rounded-md bg-ink px-2.5 text-[11px] font-medium text-canvas hover:opacity-85 disabled:opacity-40"
         >
@@ -1588,9 +1687,13 @@ export default function LatexView({
               </div>
             ) : selectedFile ? (
               <LatexVisualEditor
-                key={selectedFile.path}
+                key={reviewScope(host, cwd, selectedFile.path)}
+                memoryScope={reviewScope(host, cwd, selectedFile.path)}
+                contextIdentity={JSON.stringify(researchContext)}
                 value={content}
                 fileName={selectedFile.name}
+                projectFiles={files}
+                relativeFile={selectedFile.relative}
                 isMainDocument={selectedFile.path === mainPath}
                 mode={editorMode}
                 dirty={dirty}
@@ -1602,6 +1705,7 @@ export default function LatexView({
                 onMode={setEditorMode}
                 onChange={onEditorChange}
                 onSave={() => void saveNow()}
+                onSaveAndCompile={() => void compile()}
                 onRequestSuggestion={requestLatexSuggestion}
                 onReviewSegments={reviewLatexSegments}
               />
@@ -1634,8 +1738,13 @@ export default function LatexView({
                 {compileResult && (
                   <span className={compileResult.success ? 'text-emerald-600' : 'text-red-600'}>
                     {compileResult.success
-                      ? t('latex.compileSuccess', { seconds: (compileResult.duration_ms / 1000).toFixed(1) })
+                      ? t(compileResult.cached ? 'latex.compileCached' : 'latex.compileSuccess', { seconds: (compileResult.duration_ms / 1000).toFixed(1) })
                       : t('latex.compileFailed')}
+                  </span>
+                )}
+                {compileResult?.pdf_is_local && (
+                  <span className="text-ink-muted" title={t('latex.localRuntimeHint')}>
+                    {t('latex.localRuntime')}
                   </span>
                 )}
                 <div className="flex-1" />
@@ -1651,7 +1760,13 @@ export default function LatexView({
               </div>
               <div className="relative min-h-0 flex-1">
                 {pdfSrc ? (
-                  <embed src={pdfSrc} type="application/pdf" className="absolute inset-0 h-full w-full" />
+                  <div className="absolute inset-0">
+                    <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader2 size={18} className="animate-spin" /></div>}>
+                      <PaperPdfReader src={pdfSrc} documentId={cwd ? JSON.stringify([
+                        host || 'local', cwd, mainPath || selectedPath || 'paper.pdf',
+                      ]) : undefined} />
+                    </Suspense>
+                  </div>
                 ) : (
                   <div className="flex h-full flex-col items-center justify-center gap-2 text-[12px] text-ink-faint">
                     <FileText size={28} strokeWidth={1.4} />
@@ -1668,7 +1783,7 @@ export default function LatexView({
                     </button>
                     {compileResult.tool_missing ? (
                       <div className="font-sans text-[11px] text-amber-300">
-                        {t(host ? 'latex.remoteToolMissing' : 'latex.toolMissing')}
+                        {t(latexRuntimeErrorKey(compileResult, host))}
                       </div>
                     ) : diagnostics.length > 0 ? (
                       <div className="mb-2 space-y-1 border-b border-white/10 pb-2 text-red-300">

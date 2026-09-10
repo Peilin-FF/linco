@@ -15,6 +15,16 @@ pub fn background_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+/// Only for a child created by the caller in its own process group.
+pub fn terminate_owned_child(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    let _ = background_command("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).output();
+    #[cfg(unix)]
+    let _ = background_command("/bin/kill").args(["-KILL", &format!("-{}", child.id())]).status();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// 对本地 Command 应用「无控制台窗口」设置(仅 Windows 生效)。
 /// 用法:`no_window(&mut cmd);` 然后照常 `.output()/.spawn()`。
 #[allow(unused_variables)]

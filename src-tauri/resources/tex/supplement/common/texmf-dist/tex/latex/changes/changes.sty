@@ -1,0 +1,983 @@
+%%
+%% This is file `changes.sty',
+%% generated with the docstrip utility.
+%%
+%% The original source files were:
+%%
+%% changes.dtx  (with options: `changes')
+%% 
+%% changes.dtx
+%% Copyright 2007-2021 Ekkart Kleinod (ekleinod@edgesoft.de)
+%% 
+%% This work may be distributed and/or modified under the
+%% conditions of the LaTeX Project Public License, either version 1.3
+%% of this license or any later version.
+%% The latest version of this license is in
+%%  http://www.latex-project.org/lppl.txt
+%% and version 1.3 or later is part of all distributions of LaTeX
+%% version 2005/12/01 or later.
+%% 
+%% This work has the LPPL maintenance status `maintained'.
+%% The current maintainer of this work is Ekkart Kleinod.
+%% 
+%% This work consists of the files
+%% source/latex/changes/changes.drv
+%% source/latex/changes/changes.dtx
+%% source/latex/changes/changes.ins
+%% source/latex/changes/examples.dtx
+%% source/latex/changes/regression.dtx
+%% source/latex/changes/README
+%% source/latex/changes/userdoc/*.tex
+%% 
+%%   scripts/changes/pyMergeChanges.py
+%% and the derived files
+%% doc/latex/changes/changes.english.pdf
+%% doc/latex/changes/changes.english.withcode.pdf
+%% doc/latex/changes/changes.ngerman.pdf
+%% 
+%% doc/latex/changes/examples/changes.example.*.tex
+%% doc/latex/changes/examples/changes.example.*.pdf
+%% 
+%% doc/latex/changes/regression/changes.regression.*.tex
+%% doc/latex/changes/regression/changes.regression.*.pdf
+%% 
+%% tex/latex/changes/changes.sty
+%% 
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{changes}[2021/07/15 v4.2.1 changes package]
+\typeout{*** changes package 2021/07/15 v4.2.1 ***}
+\RequirePackage{xkeyval}
+\RequirePackage{etoolbox}
+\RequirePackage{xstring}
+\DeclareListParser{\dopsvlist}{|}
+\DeclareListParser*{\forpsvlist}{|}
+\newcommand{\Changes@tmplist}{}
+\newbool{Changes@inlist}
+\newrobustcmd{\IfIsInList}[4]{%
+\renewcommand{\Changes@tmplist}{}%
+\def\do{}%
+\renewcommand*{\do}[1]{%
+\listadd{\Changes@tmplist}{##1}%
+}%
+\expandafter\dopsvlist\expandafter{#2}%
+\setbool{Changes@inlist}{false}%
+\renewcommand*{\do}[1]{%
+\ifinlist{##1}{\Changes@tmplist}%
+{\setbool{Changes@inlist}{true}}%
+{}%
+}%
+\expandafter\dopsvlist\expandafter{#1}%
+\ifbool{Changes@inlist}%
+{#3}%
+{#4}%
+}
+\newbool{Changes@optiondraft}
+\setbool{Changes@optiondraft}{true}
+\DeclareOptionX{draft}{
+\setbool{Changes@optiondraft}{true}
+\typeout{changes-option '\CurrentOption'}
+}
+\DeclareOptionX{final}{
+\setbool{Changes@optiondraft}{false}
+\typeout{changes-option '\CurrentOption'}
+}
+\newcommand{\Changes@optioncommandnameprefix}{none}
+\DeclareOptionX{commandnameprefix}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{none|always|ifneeded}
+{\renewcommand{\Changes@optioncommandnameprefix}{#1}}
+{\PackageWarning{changes}{commandnameprefix '#1' unknown, using '\Changes@optioncommandnameprefix'}}
+}
+\typeout{changes-option 'commandnameprefix=\Changes@optioncommandnameprefix'}
+}
+\newcommand{\Changes@optionaddedmarkup}{colored}
+\newcommand{\Changes@optiondeletedmarkup}{sout}
+\newcommand{\Changes@optionhighlightmarkup}{background}
+\newcommand{\Changes@optioncommentmarkup}{todo}
+\newcommand{\Changes@optionmarkup}{default}
+\DeclareOptionX{markup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{bfit|default|nocolor|underlined}
+{\renewcommand{\Changes@optionmarkup}{#1}}
+{\PackageWarning{changes}{markup '#1' unknown, using '\Changes@optionmarkup'}}
+}
+\IfStrEq{\Changes@optionmarkup}{default}
+{
+}
+{}
+\IfStrEq{\Changes@optionmarkup}{underlined}
+{
+\renewcommand{\Changes@optionaddedmarkup}{uline}
+\renewcommand{\Changes@optionhighlightmarkup}{uwave}
+}
+{}
+\IfStrEq{\Changes@optionmarkup}{bfit}
+{
+\renewcommand{\Changes@optionaddedmarkup}{bf}
+\renewcommand{\Changes@optiondeletedmarkup}{it}
+}
+{}
+\IfStrEq{\Changes@optionmarkup}{nocolor}
+{
+\renewcommand{\Changes@optionaddedmarkup}{uline}
+\renewcommand{\Changes@optionhighlightmarkup}{uwave}
+}
+{}
+\typeout{changes-option 'markup=\Changes@optionmarkup'}
+}
+\DeclareOptionX{addedmarkup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{bf|colored|dashuline|dotuline|em|it|sl|uline|uuline|uwave}
+{\renewcommand{\Changes@optionaddedmarkup}{#1}}
+{\PackageWarning{changes}{addedmarkup '#1' unknown, using '\Changes@optionaddedmarkup'}}
+}
+\typeout{changes-option 'addedmarkup=\Changes@optionaddedmarkup'}
+}
+\DeclareOptionX{deletedmarkup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{bf|colored|dashuline|dotuline|em|it|sl|sout|uline|uuline|uwave|xout}
+{\renewcommand{\Changes@optiondeletedmarkup}{#1}}
+{\PackageWarning{changes}{deletedmarkup '#1' unknown, using '\Changes@optiondeletedmarkup'}}
+}
+\typeout{changes-option 'deletedmarkup=\Changes@optiondeletedmarkup'}
+}
+\DeclareOptionX{highlightmarkup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{background|uuline|uwave}
+{\renewcommand{\Changes@optionhighlightmarkup}{#1}}
+{\PackageWarning{changes}{highlightmarkup '#1' unknown, using '\Changes@optionhighlightmarkup'}}
+}
+\typeout{changes-option 'highlightmarkup=\Changes@optionhighlightmarkup'}
+}
+\DeclareOptionX{commentmarkup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{footnote|margin|todo|uwave}
+{\renewcommand{\Changes@optioncommentmarkup}{#1}}
+{\PackageWarning{changes}{commentmarkup '#1' unknown, using '\Changes@optioncommentmarkup'}}
+}
+\typeout{changes-option 'commentmarkup=\Changes@optioncommentmarkup'}
+}
+\newcommand{\Changes@optionauthormarkup}{superscript}
+\DeclareOptionX{authormarkup}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{brackets|footnote|none|subscript|superscript}
+{\renewcommand{\Changes@optionauthormarkup}{#1}}
+{\PackageWarning{changes}{authormarkup '#1' unknown, using '\Changes@optionauthormarkup'}}
+}
+\typeout{changes-option 'authormarkup=\Changes@optionauthormarkup'}
+}
+\newcommand{\Changes@optionauthormarkupposition}{right}
+\DeclareOptionX{authormarkupposition}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{left|right}
+{\renewcommand{\Changes@optionauthormarkupposition}{#1}}
+{\PackageWarning{changes}{authormarkupposition '#1' unknown, using '\Changes@optionauthormarkupposition'}}
+}
+\typeout{changes-option 'authormarkupposition=\Changes@optionauthormarkupposition'}
+}
+\newcommand{\Changes@optionauthormarkuptext}{id}
+\DeclareOptionX{authormarkuptext}{
+\ifblank{#1}
+{}
+{
+\IfIsInList{#1}{id|name}
+{\renewcommand{\Changes@optionauthormarkuptext}{#1}}
+{\PackageWarning{changes}{authormarkuptext '#1' unknown, using '\Changes@optionauthormarkuptext'}}
+}
+\typeout{changes-option 'authormarkuptext=\Changes@optionauthormarkuptext'}
+}
+\newcommand{\Changes@optiondefaultcolor}{blue}
+\DeclareOptionX{defaultcolor}{
+\ifblank{#1}
+{}
+{
+\renewcommand{\Changes@optiondefaultcolor}{#1}
+}
+\typeout{changes-option 'defaultcolor=\Changes@optiondefaultcolor'}
+}
+\DeclareOptionX{todonotes}{
+\typeout{todonotes-option '#1', passed to package todonotes}
+\PassOptionsToPackage{#1}{todonotes}
+}
+\DeclareOptionX{truncate}{
+\typeout{truncate-option '#1', passed to package truncate}
+\PassOptionsToPackage{#1}{truncate}
+}
+\DeclareOptionX{ulem}{
+\typeout{ulem-option '#1', passed to package ulem}
+\PassOptionsToPackage{#1}{ulem}
+}
+\DeclareOptionX{xcolor}{
+\typeout{xcolor-option '#1', passed to package xcolor}
+\PassOptionsToPackage{#1}{xcolor}
+}
+\DeclareOptionX*{
+\PackageWarning{changes}{Unknown option '\CurrentOption'}
+}
+\DeclareOptionX<Changes@definechangesauthor>{name}{\def\Changes@definechangesauthor@name{#1}}
+\DeclareOptionX<Changes@definechangesauthor>{color}{\def\Changes@definechangesauthor@color{#1}}
+\presetkeys{Changes@definechangesauthor}{
+name=\@empty,
+color=\Changes@optiondefaultcolor
+}{}
+\DeclareOptionX<Changes@added>{id}{\def\Changes@added@id{#1}}
+\DeclareOptionX<Changes@added>{comment}{\def\Changes@added@comment{#1}}
+\presetkeys{Changes@added}{
+id=\@empty,
+comment=\@empty,
+}{}
+\DeclareOptionX<Changes@deleted>{id}{\def\Changes@deleted@id{#1}}
+\DeclareOptionX<Changes@deleted>{comment}{\def\Changes@deleted@comment{#1}}
+\presetkeys{Changes@deleted}{
+id=\@empty,
+comment=\@empty,
+}{}
+\DeclareOptionX<Changes@replaced>{id}{\def\Changes@replaced@id{#1}}
+\DeclareOptionX<Changes@replaced>{comment}{\def\Changes@replaced@comment{#1}}
+\presetkeys{Changes@replaced}{
+id=\@empty,
+comment=\@empty,
+}{}
+\DeclareOptionX<Changes@highlight>{id}{\def\Changes@highlight@id{#1}}
+\DeclareOptionX<Changes@highlight>{comment}{\def\Changes@highlight@comment{#1}}
+\presetkeys{Changes@highlight}{
+id=\@empty,
+comment=\@empty,
+}{}
+\DeclareOptionX<Changes@comment>{id}{\def\Changes@comment@id{#1}}
+\presetkeys{Changes@comment}{
+id=\@empty,
+}{}
+\DeclareOptionX<Changes@loc>{style}{\def\Changes@loc@style{#1}}
+\DeclareOptionX<Changes@loc>{title}{\def\Changes@loc@title{#1}}
+\DeclareOptionX<Changes@loc>{show}{\def\Changes@loc@show{#1}}
+\presetkeys{Changes@loc}{
+style=list,
+title=\@empty,
+show=all,
+}{}
+\ExecuteOptionsX{
+ulem={normalem,normalbf},
+truncate={breakall,fit}
+}
+\ProcessOptionsX*\relax
+\newrobustcmd{\IfIsColored}[2]{%
+\IfStrEq{\Changes@optionmarkup}{nocolor}%
+{#2}%
+{#1}%
+}
+\newrobustcmd{\IfIsEmpty}[3]{%
+\ifboolexpr{%
+test {\ifblank{#1}} or%
+test {\ifstrempty{#1}} or%
+test {\ifdefstring{#1}{}} or%
+test {\ifdefstring{#1}{\@empty}}%
+}%
+{#2}%
+{#3}%
+}
+\newrobustcmd{\IfIsAnonymous}[3]{%
+\IfIsEmpty{#1}{#2}{#3}%
+}
+\newrobustcmd{\IfIsAuthorEmptyAtPosition}[4]{%
+\ifboolexpr{%
+test {\IfIsAuthorOutputEmpty{#1}} or%
+not test {\IfStrEq{\Changes@optionauthormarkupposition}{#2}}%
+}%
+{#3}%
+{#4}%
+}
+\newrobustcmd{\IfIsAuthorOutputEmpty}[3]{%
+\ifboolexpr{%
+test {\IfIsAnonymous{#1}} and%
+not test {\IfStrEq{\Changes@optionauthormarkuptext}{name}}%
+}%
+{#2}%
+{#3}%
+}
+\IfIsColored
+{\RequirePackage{xcolor}}
+{}
+\ifboolexpr{
+test {\IfIsInList{\Changes@optionaddedmarkup}{dashuline|dotuline|sout|uline|uuline|uwave|xout}} or
+test {\IfIsInList{\Changes@optiondeletedmarkup}{dashuline|dotuline|sout|uline|uuline|uwave|xout}} or
+test {\IfIsInList{\Changes@optionhighlightmarkup}{dashuline|dotuline|sout|uline|uuline|uwave|xout}}
+}
+{\RequirePackage{ulem}}
+{}
+\IfStrEq{\Changes@optioncommentmarkup}{todo}
+{\RequirePackage{todonotes}}
+{}
+\def\listofchangesname{List of changes}
+\def\summaryofchangesname{Changes}
+\def\compactsummaryofchangesname{Changes (compact)}
+\def\changesaddedname{Added}
+\def\changesdeletedname{Deleted}
+\def\changesreplacedname{Replaced}
+\def\changeshighlightname{Highlighted}
+\def\changescommentname{Commented}
+\def\changesauthorname{Author}
+\def\changesanonymousname{anonymous}
+\def\changesnochanges{No changes.}
+\def\changesnoloc{List of changes is available after the next \LaTeX\ run.}
+\def\changesnosoc{Summary of changes is available after the next \LaTeX\ run.}
+\ifboolexpr{
+test {\@ifpackageloaded{babel}} or
+test {\@ifpackageloaded{polyglossia}}
+}
+{
+\addto\captionsngerman{\def\listofchangesname{Liste der \"Anderungen}}
+\addto\captionsngerman{\def\summaryofchangesname{\"Anderungen}}
+\addto\captionsngerman{\def\compactsummaryofchangesname{\"Anderungen (kompakt)}}
+\addto\captionsngerman{\def\changesaddedname{Eingef\"ugt}}
+\addto\captionsngerman{\def\changesdeletedname{Gel\"oscht}}
+\addto\captionsngerman{\def\changesreplacedname{Ersetzt}}
+\addto\captionsngerman{\def\changeshighlightname{Hervorgehoben}}
+\addto\captionsngerman{\def\changescommentname{Kommentiert}}
+\addto\captionsngerman{\def\changesauthorname{Autor:in}}
+\addto\captionsngerman{\def\changesanonymousname{Anonym}}
+\addto\captionsngerman{\def\changesnochanges{Keine \"Anderungen.}}
+\addto\captionsngerman{\def\changesnoloc{Liste der \"Anderungen nach dem n\"achsten \LaTeX-Lauf verf\"ugbar.}}
+\addto\captionsngerman{\def\changesnosoc{\"Anderungen nach dem n\"achsten \LaTeX-Lauf verf\"ugbar.}}
+
+\addto\captionsgerman{\def\listofchangesname{Liste der \"Anderungen}}
+\addto\captionsgerman{\def\summaryofchangesname{\"Anderungen}}
+\addto\captionsgerman{\def\compactsummaryofchangesname{\"Anderungen (kompakt)}}
+\addto\captionsgerman{\def\changesaddedname{Eingef\"ugt}}
+\addto\captionsgerman{\def\changesdeletedname{Gel\"oscht}}
+\addto\captionsgerman{\def\changesreplacedname{Ersetzt}}
+\addto\captionsgerman{\def\changeshighlightname{Hervorgehoben}}
+\addto\captionsgerman{\def\changescommentname{Kommentiert}}
+\addto\captionsgerman{\def\changesauthorname{Autor:in}}
+\addto\captionsgerman{\def\changesanonymousname{Anonym}}
+\addto\captionsgerman{\def\changesnochanges{Keine \"Anderungen.}}
+\addto\captionsgerman{\def\changesnoloc{Liste der \"Anderungen nach dem n\"achsten \LaTeX-Lauf verf\"ugbar.}}
+\addto\captionsgerman{\def\changesnosoc{\"Anderungen nach dem n\"achsten \LaTeX-Lauf verf\"ugbar.}}
+
+\addto\captionsenglish{\def\listofchangesname{List of changes}}
+\addto\captionsenglish{\def\summaryofchangesname{Changes}}
+\addto\captionsenglish{\def\compactsummaryofchangesname{Changes (compact)}}
+\addto\captionsenglish{\def\changesaddedname{Added}}
+\addto\captionsenglish{\def\changesdeletedname{Deleted}}
+\addto\captionsenglish{\def\changesreplacedname{Replaced}}
+\addto\captionsenglish{\def\changeshighlightname{Highlighted}}
+\addto\captionsenglish{\def\changescommentname{Commented}}
+\addto\captionsenglish{\def\changesauthorname{Author}}
+\addto\captionsenglish{\def\changesanonymousname{anonymous}}
+\addto\captionsenglish{\def\changesnochanges{No changes.}}
+\addto\captionsenglish{\def\changesnoloc{List of changes is available after the next \LaTeX\ run.}}
+\addto\captionsenglish{\def\changesnosoc{Summary of changes is available after the next \LaTeX\ run.}}
+
+\addto\captionsbritish{\def\listofchangesname{List of changes}}
+\addto\captionsbritish{\def\summaryofchangesname{Changes}}
+\addto\captionsbritish{\def\compactsummaryofchangesname{Changes (compact)}}
+\addto\captionsbritish{\def\changesaddedname{Added}}
+\addto\captionsbritish{\def\changesdeletedname{Deleted}}
+\addto\captionsbritish{\def\changesreplacedname{Replaced}}
+\addto\captionsbritish{\def\changeshighlightname{Highlighted}}
+\addto\captionsbritish{\def\changescommentname{Commented}}
+\addto\captionsbritish{\def\changesauthorname{Author}}
+\addto\captionsbritish{\def\changesanonymousname{anonymous}}
+\addto\captionsbritish{\def\changesnochanges{No changes.}}
+\addto\captionsbritish{\def\changesnoloc{List of changes is available after the next \LaTeX\ run.}}
+\addto\captionsbritish{\def\changesnosoc{Summary of changes is available after the next \LaTeX\ run.}}
+
+\addto\captionsitalian{\def\listofchangesname{Lista delle modifiche}}
+\addto\captionsitalian{\def\summaryofchangesname{Modifiche}}
+\addto\captionsitalian{\def\compactsummaryofchangesname{Modifiche (coerente)}} % translation by me (EK), please provide correct translation
+\addto\captionsitalian{\def\changesaddedname{Aggiunte}}
+\addto\captionsitalian{\def\changesdeletedname{Cancellazioni}}
+\addto\captionsitalian{\def\changesreplacedname{Sostituzioni}}
+\addto\captionsitalian{\def\changeshighlightname{Accentare}} % translation by me (EK), please provide correct translation
+\addto\captionsitalian{\def\changescommentname{Commenti}} % translation by me (EK), please provide correct translation
+\addto\captionsitalian{\def\changesauthorname{Autore}}
+\addto\captionsitalian{\def\changesanonymousname{anonimo}}
+\addto\captionsitalian{\def\changesnochanges{Nessuna modifica.}} % translation by me (EK), please provide correct translation
+\addto\captionsitalian{\def\changesnoloc{La lista delle modifiche sar\`a disponibile alla prossima esecuzione di \LaTeX.}}
+\addto\captionsitalian{\def\changesnosoc{Le modifiche sar\`a disponibile alla prossima esecuzione di \LaTeX.}}
+
+\addto\captionsfrench{\def\listofchangesname{Liste des modifications}}
+\addto\captionsfrench{\def\summaryofchangesname{Modifications}}
+\addto\captionsfrench{\def\compactsummaryofchangesname{Modifications (compact)}}
+\addto\captionsfrench{\def\changesaddedname{Ajout\'e}}
+\addto\captionsfrench{\def\changesdeletedname{Supprim\'e}}
+\addto\captionsfrench{\def\changesreplacedname{Remplac\'e}}
+\addto\captionsfrench{\def\changeshighlightname{Mis en \'evidence}}
+\addto\captionsfrench{\def\changescommentname{Comment\'e}}
+\addto\captionsfrench{\def\changesauthorname{Auteur}}
+\addto\captionsfrench{\def\changesanonymousname{Anonyme}}
+\addto\captionsfrench{\def\changesnochanges{Pas de modification}}
+\addto\captionsfrench{\def\changesnoloc{Liste des modifications disponible apr\`es la prochaine ex\'ecution de \LaTeX.}}
+\addto\captionsfrench{\def\changesnosoc{Résumé des modifications disponible apr\`es la prochaine ex\'ecution de \LaTeX.}}
+}
+{}
+\newcommand{\Changes@locextension}{loc}
+\newcommand{\setlocextension}[1]{
+\renewcommand{\Changes@locextension}{#1}
+}
+\newcommand{\Changes@socextension}{soc}
+\newcommand{\setsocextension}[1]{
+\renewcommand{\Changes@socextension}{#1}
+}
+\newcounter{Changes@AuthorCount}
+\setcounter{Changes@AuthorCount}{0}
+\newcounter{Changes@Author}
+\newcommand*\definechangesauthor[2][]{
+\setkeys{Changes@definechangesauthor}{#1}
+\stepcounter{Changes@AuthorCount}
+\@namedef{Changes@AuthorID\theChanges@AuthorCount}{#2}
+\expandafter\let\csname Changes@AuthorName#2\endcsname=\Changes@definechangesauthor@name
+\expandafter\let\csname Changes@AuthorColor#2\endcsname=\Changes@definechangesauthor@color
+\newcounter{Changes@addedCount#2}
+\newcounter{Changes@deletedCount#2}
+\newcounter{Changes@replacedCount#2}
+\newcounter{Changes@highlightCount#2}
+\newcounter{Changes@commentCount#2}
+}
+\definechangesauthor{\@empty}
+\newrobustcmd{\setanonymousname}[1]{
+\AtBeginDocument{
+\def\changesanonymousname{#1}
+}
+}
+\newcommand{\Changes@Markup@author}[1]{%
+\IfStrEq{\Changes@optionauthormarkup}{superscript}%
+{\textsuperscript{#1}}%
+{}%
+\IfStrEq{\Changes@optionauthormarkup}{subscript}%
+{\textsubscript{#1}}%
+{}%
+\IfStrEq{\Changes@optionauthormarkup}{brackets}%
+{(#1)}%
+{}%
+\IfStrEq{\Changes@optionauthormarkup}{footnote}%
+{\footnote{#1}}%
+{}%
+\IfStrEq{\Changes@optionauthormarkup}{none}%
+{}%
+{}%
+}
+\newcommand{\setauthormarkup}[1]{
+\renewcommand{\Changes@Markup@author}[1]{#1}
+}
+\newcommand{\setauthormarkupposition}[1]{
+\renewcommand{\Changes@optionauthormarkupposition}{#1}
+}
+\newcommand{\setauthormarkuptext}[1]{
+\renewcommand{\Changes@optionauthormarkuptext}{#1}
+}
+\newcommand{\Changes@Markup}[2]{%
+\IfStrEq{#1}{background}%
+{%
+\IfIsColored%
+{\colorbox{authorcolor!30}{#2}}%
+{#2}%
+}%
+{}%
+\IfStrEq{#1}{bf}%
+{\textbf{#2}}%
+{}%
+\IfStrEq{#1}{colored}%
+{#2}%
+{}%
+\IfStrEq{#1}{dashuline}%
+{\dashuline{#2}}%
+{}%
+\IfStrEq{#1}{dotuline}%
+{\dotuline{#2}}%
+{}%
+\IfStrEq{#1}{em}%
+{\emph{#2}}%
+{}%
+\IfStrEq{#1}{it}%
+{\textit{#2}}%
+{}%
+\IfStrEq{#1}{sl}%
+{\textsl{#2}}%
+{}%
+\IfStrEq{#1}{sout}%
+{\sout{#2}}%
+{}%
+\IfStrEq{#1}{uline}%
+{\uline{#2}}%
+{}%
+\IfStrEq{#1}{uuline}%
+{\uuline{#2}}%
+{}%
+\IfStrEq{#1}{uwave}%
+{\uwave{#2}}%
+{}%
+\IfStrEq{#1}{xout}%
+{\xout{#2}}%
+{}%
+}
+\newcommand{\Changes@Markup@added}[1]{%
+\Changes@Markup{\Changes@optionaddedmarkup}{#1}{}%
+}
+\newcommand{\setaddedmarkup}[1]{
+\renewcommand{\Changes@Markup@added}[1]{#1}
+}
+\newcommand{\Changes@Markup@deleted}[1]{%
+\Changes@Markup{\Changes@optiondeletedmarkup}{#1}{}%
+}
+\newcommand{\setdeletedmarkup}[1]{
+\renewcommand{\Changes@Markup@deleted}[1]{#1}
+}
+\newcommand{\Changes@Markup@highlight}[1]{%
+\Changes@Markup{\Changes@optionhighlightmarkup}{#1}{}%
+}
+\newcommand{\sethighlightmarkup}[1]{
+\renewcommand{\Changes@Markup@highlight}[1]{#1}
+}
+\newcommand{\Changes@Markup@comment}[3]{%
+\IfStrEq{\Changes@optioncommentmarkup}{todo}%
+{%
+\IfIsColored%
+{\colorlet{Changes@todocolor}{authorcolor}}%
+{\colorlet{Changes@todocolor}{black}}%
+\todo[color=Changes@todocolor!10, bordercolor=Changes@todocolor, linecolor=Changes@todocolor!70, nolist]{%
+\textbf{[\IfIsAuthorOutputEmpty{#2}{}{#3~}\arabic{authorcommentcount}]} #1%
+}%
+}{}%
+\IfStrEq{\Changes@optioncommentmarkup}{margin}%
+{%
+\marginpar{%
+\IfIsColored%
+{\leavevmode\color{authorcolor}}%
+{}%
+\textbf{[\IfIsAuthorOutputEmpty{#2}{}{#3~}\arabic{authorcommentcount}]:} #1%
+}%
+}{}%
+\IfStrEq{\Changes@optioncommentmarkup}{footnote}%
+{%
+\footnote{%
+\textbf{[\IfIsAuthorOutputEmpty{#2}{}{#3~}\arabic{authorcommentcount}]:} #1%
+}%
+}{}%
+\IfStrEq{\Changes@optioncommentmarkup}{uwave}%
+{%
+{%
+\IfIsColored%
+{\color{authorcolor}}%
+{}%
+\allowbreak%
+\uwave{%
+\textbf{[\IfIsAuthorOutputEmpty{#2}{}{#3~}\arabic{authorcommentcount}]:} #1%
+}%
+}%
+}{}%
+}
+\newcommand{\setcommentmarkup}[1]{
+\renewcommand{\Changes@Markup@comment}[3]{#1}
+}
+\newbool{Changes@WrongID}
+\newcommand{\Changes@check@author}[1]{%
+\IfIsEmpty{#1}%
+{}%
+{%
+\setbool{Changes@WrongID}{true}%
+\setcounter{Changes@Author}{0}%
+\loop%
+\stepcounter{Changes@Author}%
+\IfStrEq{#1}{\csuse{Changes@AuthorID\theChanges@Author}}%
+{\setbool{Changes@WrongID}{false}}%
+{}%
+\ifnum\theChanges@Author<\theChanges@AuthorCount%
+\repeat%
+\ifbool{Changes@WrongID}%
+{%
+\PackageError{changes}%
+{Undefined changes author: #1}%
+{You have to define the author #1 with e.g.: \definechangesauthor{#1}}%
+}%
+{}%
+}%
+}
+\newrobustcmd{\Changes@output@author}[1]{%
+\IfStrEq{\Changes@optionauthormarkuptext}{id}%
+{#1}%
+{}%
+\IfStrEq{\Changes@optionauthormarkuptext}{name}%
+{%
+\IfIsAnonymous{#1}%
+{\changesanonymousname}%
+{%
+\IfStrEq{\csuse{Changes@AuthorName#1}}{}%
+{#1}%
+{\csuse{Changes@AuthorName#1}}%
+}%
+}%
+{}%
+}
+\newrobustcmd{\Changes@output@author@position}[2]{%
+\IfIsAuthorEmptyAtPosition{#1}{#2}%
+{}%
+{%
+\Changes@output@author{#1}%
+}%
+}
+\newrobustcmd{\Changes@set@color}[1]{%
+\IfIsColored%
+{\colorlet{authorcolor}{\csuse{Changes@AuthorColor#1}}}%
+{}%
+}
+\newcounter{authorcommentcount}
+\newrobustcmd{\Changes@set@commentcount}[1]{%
+\setcounter{authorcommentcount}{\value{Changes@commentCount#1}}%
+}
+\def\Changes@commandprefix{ch}
+\newrobustcmd{\Changes@set@commandname}[1]{
+\def\Changes@commandname{#1}
+\IfStrEq{\Changes@optioncommandnameprefix}{always}
+{
+\def\Changes@commandname{\Changes@commandprefix#1}
+\typeout{changes-package option commandnameprefix=always: using prefix on #1, new command name is \Changes@commandname.}
+}{
+\ifcsdef{#1}
+{
+\IfStrEq{\Changes@optioncommandnameprefix}{none}
+{
+\PackageError{changes}
+{Command #1 is already defined.}
+{Try package option commandnameprefix with "always" or "ifneeded", e.g. usepackage[commandnameprefix=always]{changes}}
+}{}
+\IfStrEq{\Changes@optioncommandnameprefix}{ifneeded}
+{
+\def\Changes@commandname{\Changes@commandprefix#1}
+\PackageWarning{changes}{Command #1 is already defined, using \Changes@commandname}
+}{}
+}
+{}
+}
+}
+\newrobustcmd{\Changes@output}[7]{%
+\ifbool{Changes@optiondraft}%
+{%
+\Changes@check@author{#2}%
+\Changes@set@color{#2}%
+{%
+\IfIsInList{#1}{added|deleted|replaced|highlight}%
+{%
+\IfIsEmpty{#5}%
+{%
+\IfIsAuthorEmptyAtPosition{#2}{left}%
+{}%
+{{%
+\IfIsColored%
+{\color{authorcolor}}%
+{}%
+\Changes@Markup@author{\Changes@output@author@position{#2}{left}}%
+}}%
+}{}%
+{%
+\IfStrEq{#1}{highlight}%
+{}{%
+\IfIsColored%
+{\color{authorcolor}}%
+{}%
+}%
+\IfStrEq{#1}{added}{\Changes@Markup@added{#3}}{}%
+\IfStrEq{#1}{deleted}{\Changes@Markup@deleted{#4}}{}%
+\IfStrEq{#1}{replaced}{{\Changes@Markup@added{#3}}\allowbreak\Changes@Markup@deleted{#4}}{}%
+\IfStrEq{#1}{highlight}{\Changes@Markup@highlight{#3}}{}%
+}%
+\IfIsEmpty{#5}%
+{%
+\IfIsAuthorEmptyAtPosition{#2}{right}%
+{}%
+{{%
+\IfIsColored%
+{\color{authorcolor}}%
+{}%
+\Changes@Markup@author{\Changes@output@author@position{#2}{right}}%
+}}%
+}{}%
+\stepcounter{Changes@#1Count#2}%
+}{}%
+\IfIsEmpty{#5}%
+{}%
+{%
+\stepcounter{Changes@commentCount#2}%
+\Changes@set@commentcount{#2}%
+\Changes@Markup@comment%
+{#5}%
+{#2}%
+{\Changes@output@author{#2}}%
+}%
+}%
+\IfIsEmpty{#2}%
+{\def\Changes@locid{}}%
+{\def\Changes@locid{~(#2)}}%
+\phantomsection\addcontentsline{\Changes@locextension}{#1}{#6\Changes@locid: \truncate{\Changestruncatewidth}{#7}}%
+}%
+{%
+\IfIsEmpty{#3}%
+{\@bsphack\@esphack}%
+{#3}%
+}%
+}
+\Changes@set@commandname{added}
+\expandafter\newcommand\expandafter{\csname\Changes@commandname\endcsname}[2][\@empty]{%
+\setkeys{Changes@added}{#1}%
+\Changes@output%
+{added}%
+{\Changes@added@id}%
+{#2}%
+{}%
+{\Changes@added@comment}%
+{\changesaddedname}%
+{#2}%
+}
+\Changes@set@commandname{deleted}
+\expandafter\newcommand\expandafter{\csname\Changes@commandname\endcsname}[2][\@empty]{%
+\setkeys{Changes@deleted}{#1}%
+\Changes@output%
+{deleted}%
+{\Changes@deleted@id}%
+{}%
+{#2}%
+{\Changes@deleted@comment}%
+{\changesdeletedname}%
+{#2}%
+}
+\Changes@set@commandname{replaced}
+\expandafter\newcommand\expandafter{\csname\Changes@commandname\endcsname}[3][\@empty]{%
+\setkeys{Changes@replaced}{#1}%
+\Changes@output%
+{replaced}%
+{\Changes@replaced@id}%
+{#2}%
+{#3}%
+{\Changes@replaced@comment}%
+{\changesreplacedname}%
+{#2}%
+}
+\Changes@set@commandname{highlight}
+\expandafter\newcommand\expandafter{\csname\Changes@commandname\endcsname}[2][\@empty]{%
+\setkeys{Changes@highlight}{#1}%
+\Changes@output%
+{highlight}%
+{\Changes@highlight@id}%
+{#2}%
+{}%
+{\Changes@highlight@comment}%
+{\changeshighlightname}%
+{#2}%
+}
+\Changes@set@commandname{comment}
+\expandafter\newcommand\expandafter{\csname\Changes@commandname\endcsname}[2][\@empty]{%
+\setkeys{Changes@comment}{#1}%
+\Changes@output%
+{comment}%
+{\Changes@comment@id}%
+{}%
+{}%
+{#2}%
+{\changescommentname}%
+{#2}%
+}
+\RequirePackage{truncate}
+\renewcommand\TruncateMarker{ [\dots\negthinspace]\ }
+\def\changes@chopline#1;#2;#3;#4;#5;#6;#7;#8 \\{%
+\def\Changes@Inid{#1}%
+\def\Changes@Incolor{#2}%
+\def\Changes@Inname{#3}%
+\def\Changes@Inadded{#4}%
+\def\Changes@Indeleted{#5}%
+\def\Changes@Inreplaced{#6}%
+\def\Changes@Inhighlight{#7}%
+\def\Changes@Incomment{#8}%
+}
+\newcommand{\ChangesListline}[4]{%
+\IfIsInList{#1}{\Changes@loc@show}{%
+\@ifundefined{@dotsep}%
+{\def\@dotsep{4.5}}%
+{}%
+\origcontentsline{change}{#2}{#3}{#4}
+}{}%
+}
+\newcommand*\l@change{\@dottedtocline{1}{0pt}{2em}}
+\newcommand{\settruncatewidth}[1]{
+\setlength{\Changestruncatewidth}{#1}
+}
+\newlength{\Changestruncatewidth}
+\settruncatewidth{.6\textwidth}
+\newcommand{\setsummarywidth}[1]{
+\setlength{\Changes@summary@width}{#1}
+}
+\newcommand{\setsummarytowidth}[1]{
+\settowidth{\Changes@summary@width}{#1}
+}
+\newlength{\Changes@summary@width}
+\setsummarywidth{.3\textwidth}
+\providecommand\phantomsection{}
+\newcommand{\listofchanges}[1][\@empty]{%
+\setkeys{Changes@loc}{#1}%
+\ifbool{Changes@optiondraft}%
+{%
+\IfIsInList{\Changes@loc@style}{list|summary|compactsummary}%
+{}%
+{%
+\PackageWarning{changes}{Wrong style for list of changes: '\Changes@loc@style', using 'list' instead.}%
+\def\Changes@loc@style{}%
+}%
+\IfIsEmpty{\Changes@loc@style}%
+{\def\Changes@loc@style{list}}%
+{}%
+\IfStrEq{\Changes@loc@show}{all}%
+{\def\Changes@loc@show{added|deleted|replaced|highlight|comment}}%
+{}%
+\IfIsInList{\Changes@loc@show}{added|deleted|replaced|highlight|comment}%
+{}%
+{%
+\PackageWarning{changes}{Wrong show-value for list of changes: '\Changes@loc@show', using 'all' instead.}%
+\def\Changes@loc@show{}%
+}%
+\IfIsEmpty{\Changes@loc@show}%
+{\def\Changes@loc@show{added|deleted|replaced|highlight|comment}}%
+{}%
+\IfIsEmpty{\Changes@loc@title}%
+{%
+\IfStrEq{\Changes@loc@style}{list}%
+{\def\Changes@heading{\listofchangesname}}{}%
+\IfStrEq{\Changes@loc@style}{summary}%
+{\def\Changes@heading{\summaryofchangesname}}{}%
+\IfStrEq{\Changes@loc@style}{compactsummary}%
+{\def\Changes@heading{\compactsummaryofchangesname}}{}%
+}%
+{\def\Changes@heading{\Changes@loc@title}}%
+\section*{\Changes@heading}
+\IfIsInList{\Changes@loc@style}{list}%
+{%
+\IfFileExists{\jobname.\Changes@locextension}%
+{%
+\let\origcontentsline\contentsline%
+\let\contentsline\ChangesListline%
+\newread\Changes@InFile%
+\openin\Changes@InFile=\jobname.\Changes@locextension%
+\loop\unless\ifeof\Changes@InFile%
+\read\Changes@InFile to \Changes@Line%
+\ifeof\Changes@InFile\else%
+\Changes@Line%
+\fi
+\repeat
+\closein\Changes@InFile%
+\let\contentsline\origcontentsline%
+}{%
+\emph{\changesnoloc}%
+\PackageWarning{changes}{LaTeX rerun needed for list of changes}%
+}%
+}{}%
+\IfIsInList{\Changes@loc@style}{summary|compactsummary}%
+{%
+\IfFileExists{\jobname.\Changes@socextension}%
+{%
+\ifdef{\ifbabelshorthand}{%
+\ifbabelshorthand{;}{\shorthandoff{;}}{}%
+}{}%
+\newread\Changes@InFile%
+\openin\Changes@InFile = \jobname.\Changes@socextension%
+\loop\unless\ifeof\Changes@InFile%
+\read\Changes@InFile to \Changes@Line%
+\ifeof\Changes@InFile\else%
+\expandafter\changes@chopline\Changes@Line\\%
+\textbf{%
+\IfIsColored%
+{\color{\Changes@Incolor}}%
+{}%
+\IfIsAnonymous{\Changes@Inid}%
+{\changesauthorname: \changesanonymousname}%
+{%
+\changesauthorname: \Changes@Inid%
+\IfIsEmpty{\Changes@Inname}%
+{}%
+{ (\Changes@Inname)}%
+}%
+}\\%
+\numdef{\Changes@InSum}{0}%
+\def\do{}%
+\renewcommand*{\do}[1]{%
+\numdef{\Changes@InSum}{\Changes@InSum + \csuse{Changes@In########1}}%
+}%
+\expandafter\dopsvlist\expandafter{\Changes@loc@show}%
+\ifnumcomp{\Changes@InSum}{=}{0}%
+{%
+\parbox{\Changes@summary@width}{\changesnochanges}\\[1ex]%
+}%
+{%
+\numdef{\Changes@InCount}{0}%
+\renewcommand*{\do}[1]{%
+\numdef{\Changes@InCount}{\Changes@InCount + \csuse{Changes@In########1}}%
+\ifboolexpr{%
+not test {\IfStrEq{\Changes@loc@style}{compactsummary}} or%
+test {\ifnumgreater{\csuse{Changes@In########1}}{0}}%
+}%
+{%
+\parbox{\Changes@summary@width}{\csuse{changes########1name}~\let\cleaders\leaders\dotfill~\csuse{Changes@In########1}}%
+\ifnumless{\Changes@InCount}{\Changes@InSum}%
+{\\}%
+{\\[1ex]}%
+}%
+{}%
+}%
+\expandafter\dopsvlist\expandafter{\Changes@loc@show}%
+}%
+\fi%
+\repeat
+\closein\Changes@InFile%
+\ifdef{\ifbabelshorthand}{%
+\ifbabelshorthand{;}{\shorthandon{;}}{}%
+}{}%
+}{%
+\emph{\changesnosoc}%
+\PackageWarning{changes}{LaTeX rerun needed for summary of changes}%
+}%
+}{}%
+}{}%
+}
+\AtEndDocument{%
+\newwrite\Changes@OutFile
+\immediate\openout\Changes@OutFile = \jobname.\Changes@socextension
+\let\Changes@protect\protect
+\let\protect\@unexpandable@protect
+\setcounter{Changes@Author}{0}
+\loop\unless\ifnum\theChanges@Author = \value{Changes@AuthorCount}
+\stepcounter{Changes@Author}%
+\def\Changes@ID{\csuse{Changes@AuthorID\theChanges@Author}}%
+\immediate\write\Changes@OutFile{\Changes@ID;%
+\csuse{Changes@AuthorColor\Changes@ID};%
+\csuse{Changes@AuthorName\Changes@ID};%
+\the\value{Changes@addedCount\Changes@ID};%
+\the\value{Changes@deletedCount\Changes@ID};%
+\the\value{Changes@replacedCount\Changes@ID};%
+\the\value{Changes@highlightCount\Changes@ID};%
+\the\value{Changes@commentCount\Changes@ID}}%
+\repeat
+\immediate\closeout\Changes@OutFile
+\let\protect\Changes@protect
+\if@filesw
+\@ifundefined{tf@\Changes@locextension}{
+\expandafter\newwrite\csname tf@\Changes@locextension\endcsname
+\immediate\openout \csname tf@\Changes@locextension\endcsname \jobname.\Changes@locextension\relax
+}{}
+\fi
+}
+%% Copyright 2007-2021 Ekkart Kleinod
+%%
+%% End of file `changes.sty'.

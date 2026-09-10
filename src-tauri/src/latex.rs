@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::env;
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -11,6 +10,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
+
+#[path = "latex_merge.rs"]
+mod merge;
 
 #[derive(Serialize)]
 pub struct OverleafProjectInfo {
@@ -26,6 +28,7 @@ pub struct OverleafProjectInfo {
 
 #[derive(Serialize)]
 pub struct OverleafCollaborationResult {
+    pub remote_head: Option<String>,
     pub remote_updated: bool,
     pub incoming: bool,
     pub applied: bool,
@@ -33,13 +36,17 @@ pub struct OverleafCollaborationResult {
     pub info: Option<OverleafProjectInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 pub struct LatexCompileResult {
     pub success: bool,
     pub pdf_path: String,
     pub log: String,
     pub duration_ms: u64,
     pub tool_missing: bool,
+    pub pdf_is_local: bool,
+    pub provenance_path: String,
+    #[serde(default)]
+    pub cached: bool,
 }
 
 struct GitOutput {
@@ -462,40 +469,71 @@ fn remembered_collaboration_head(key: &str) -> Option<String> {
         .and_then(|heads| heads.get(key).cloned())
 }
 
-fn remote_master_ref(remote: &str) -> String {
-    format!("refs/remotes/{remote}/master")
+fn collaboration_branches() -> &'static Mutex<HashMap<String, String>> {
+    static BRANCHES: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    BRANCHES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn parse_ls_remote_head(output: &str) -> Result<String, String> {
-    output
-        .lines()
-        .find_map(|line| line.split_whitespace().next())
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .ok_or_else(|| "Overleaf did not return a master branch".into())
+fn parse_remote_branch(output: &str, preferred: Option<&str>) -> Result<(String, String), String> {
+    let mut heads = HashMap::new();
+    let mut default = None;
+    for line in output.lines() {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+            default = fields[1].strip_prefix("refs/heads/");
+        } else if fields.len() == 2 && [40, 64].contains(&fields[0].len()) && fields[0].bytes().all(|b| b.is_ascii_hexdigit()) {
+            if let Some(branch) = fields[1].strip_prefix("refs/heads/") { heads.insert(branch, fields[0]); }
+        }
+    }
+    for name in preferred.into_iter().chain(default) {
+        if let Some(oid) = heads.get(name) { return Ok((name.to_string(), oid.to_string())); }
+    }
+    if heads.len() == 1 {
+        let (name, oid) = heads.into_iter().next().unwrap();
+        return Ok((name.to_string(), oid.to_string()));
+    }
+    Err(if heads.is_empty() { "The remote has no published branch. Create a branch on the remote before syncing." }
+        else { "The remote has several branches but no default. Configure this branch's upstream or the remote's default branch before syncing." }.into())
 }
 
-fn overleaf_master_oid(
+fn tracked_remote_ref(host: &Option<String>, repo: &str, remote: &str) -> Option<String> {
+    if let Some(branch) = collaboration_branches().lock().ok()?.get(&collaboration_key(host, repo, remote)).cloned() {
+        return Some(format!("refs/remotes/{remote}/{branch}"));
+    }
+    let upstream = git_ok_quick(host, repo, &["rev-parse", "--symbolic-full-name", "@{upstream}"], None).unwrap_or_default();
+    if upstream.trim().starts_with(&format!("refs/remotes/{remote}/")) { return Some(upstream.trim().into()); }
+    git_ok_quick(host, repo, &["symbolic-ref", &format!("refs/remotes/{remote}/HEAD")], None).ok().map(|value| value.trim().into())
+}
+
+fn overleaf_branch(
     host: &Option<String>,
     repo: &str,
     remote: &str,
     token: &str,
-) -> Result<String, String> {
-    parse_ls_remote_head(&git_ok_quick(
+) -> Result<(String, String), String> {
+    let upstream = git_ok_quick(host, repo, &["rev-parse", "--symbolic-full-name", "@{upstream}"], None).unwrap_or_default();
+    let prefix = format!("refs/remotes/{remote}/");
+    let preferred = upstream.trim().strip_prefix(&prefix);
+    let result = parse_remote_branch(&git_ok_quick(
         host,
         repo,
-        &["ls-remote", "--heads", remote, "refs/heads/master"],
+        &["ls-remote", "--symref", remote, "HEAD", "refs/heads/*"],
         Some(token),
-    )?)
+    )?, preferred)?;
+    if let Ok(mut branches) = collaboration_branches().lock() {
+        branches.insert(collaboration_key(host, repo, remote), result.0.clone());
+    }
+    Ok(result)
 }
 
-fn fetch_overleaf_master(
+fn fetch_overleaf_branch(
     host: &Option<String>,
     repo: &str,
     remote: &str,
     token: &str,
+    branch: &str,
 ) -> Result<(), String> {
-    let destination = remote_master_ref(remote);
+    let destination = format!("refs/remotes/{remote}/{branch}");
     git_ok(
         host,
         repo,
@@ -504,7 +542,7 @@ fn fetch_overleaf_master(
             "--quiet",
             "--no-tags",
             remote,
-            &format!("+refs/heads/master:{destination}"),
+            &format!("+refs/heads/{branch}:{destination}"),
         ],
         Some(token),
     )?;
@@ -549,17 +587,17 @@ fn info(host: &Option<String>, repo: &str) -> Result<OverleafProjectInfo, String
         value.dirty = dirty;
         return Ok(value);
     };
-    let counts = git_ok(
+    let counts = tracked_remote_ref(host, repo, &remote_name).and_then(|remote_ref| git_ok(
         host,
         repo,
         &[
             "rev-list",
             "--left-right",
             "--count",
-            &format!("HEAD...{remote_name}/master"),
+            &format!("HEAD...{remote_ref}"),
         ],
         None,
-    )
+    ).ok())
     .unwrap_or_default();
     let mut parts = counts.split_whitespace();
     let ahead = parts
@@ -662,20 +700,15 @@ pub async fn overleaf_pull(
     host: Option<String>,
 ) -> Result<OverleafProjectInfo, String> {
     crate::blocking::run(move || {
+        let lock = merge::repo_lock(&host, &repo);
+        let _guard = merge::lock(&lock)?;
         let (remote, url) = overleaf_remote(&host, &repo)?;
         let auth = token_for(&url, token.as_deref())?;
-        fetch_overleaf_master(&host, &repo, &remote, &auth)?;
-        let remote_ref = remote_master_ref(&remote);
-        let rebase = run_git(&host, &repo, &["rebase", "--autostash", &remote_ref], None)?;
-        if rebase.code != 0 {
-            let _ = run_git(&host, &repo, &["rebase", "--abort"], None);
-            let detail = if rebase.stderr.trim().is_empty() {
-                rebase.stdout
-            } else {
-                rebase.stderr
-            };
-            return Err(format!("OVERLEAF_SYNC_CONFLICT: {}", detail.trim()));
-        }
+        let (branch, _) = overleaf_branch(&host, &repo, &remote, &auth)?;
+        fetch_overleaf_branch(&host, &repo, &remote, &auth, &branch)?;
+        let remote_ref = format!("refs/remotes/{remote}/{branch}");
+        merge::checkpoint(&host, &repo, "Save manuscript checkpoint before pulling Overleaf changes")?;
+        merge::integrate(&host, &repo, &remote_ref)?;
         if let Ok(oid) = git_ok(&host, &repo, &["rev-parse", &remote_ref], None) {
             remember_collaboration_head(
                 collaboration_key(&host, &repo, &remote),
@@ -718,46 +751,24 @@ pub async fn overleaf_publish(
     host: Option<String>,
 ) -> Result<OverleafProjectInfo, String> {
     crate::blocking::run(move || {
+        let lock = merge::repo_lock(&host, &repo);
+        let _guard = merge::lock(&lock)?;
         let (remote, url) = overleaf_remote(&host, &repo)?;
         let auth = token_for(&url, token.as_deref())?;
-        git_ok(&host, &repo, &["add", "-A"], None)?;
-        let staged = run_git(&host, &repo, &["diff", "--cached", "--quiet"], None)?;
-        if staged.code == 1 {
-            let name = git_ok(&host, &repo, &["config", "user.name"], None).unwrap_or_default();
-            if name.trim().is_empty() {
-                git_ok(&host, &repo, &["config", "user.name", "Linco Author"], None)?;
-            }
-            let email = git_ok(&host, &repo, &["config", "user.email"], None).unwrap_or_default();
-            if email.trim().is_empty() {
-                git_ok(&host, &repo, &["config", "user.email", "linco@local"], None)?;
-            }
-            let commit_message = if message.trim().is_empty() {
-                "Update manuscript from Linco"
-            } else {
-                message.trim()
-            };
-            git_ok(&host, &repo, &["commit", "-m", commit_message], None)?;
-        } else if staged.code != 0 {
-            return Err(staged.stderr);
-        }
-        fetch_overleaf_master(&host, &repo, &remote, &auth)?;
-        let remote_ref = remote_master_ref(&remote);
-        let rebase = run_git(&host, &repo, &["rebase", &remote_ref], None)?;
-        if rebase.code != 0 {
-            let _ = run_git(&host, &repo, &["rebase", "--abort"], None);
-            let detail = if rebase.stderr.trim().is_empty() {
-                rebase.stdout
-            } else {
-                rebase.stderr
-            };
-            return Err(format!("OVERLEAF_SYNC_CONFLICT: {}", detail.trim()));
-        }
-        git_ok(&host, &repo, &["push", &remote, "HEAD:master"], Some(&auth))?;
+        let (branch, _) = overleaf_branch(&host, &repo, &remote, &auth)?;
+        fetch_overleaf_branch(&host, &repo, &remote, &auth, &branch)?;
+        merge::checkpoint(&host, &repo, if message.trim().is_empty() { "Update manuscript from Linco" } else { message.trim() })?;
+        let remote_ref = format!("refs/remotes/{remote}/{branch}");
+        merge::integrate(&host, &repo, &remote_ref)?;
+        git_ok(&host, &repo, &["push", &remote, &format!("HEAD:refs/heads/{branch}")], Some(&auth))?;
         remember_published_head(&host, &repo, &remote);
         info(&host, &repo)
     })
     .await
 }
+
+#[tauri::command]
+pub fn overleaf_sync_capabilities() -> u32 { 1 }
 
 fn collaboration_poll(
     repo: &str,
@@ -766,10 +777,11 @@ fn collaboration_poll(
 ) -> Result<OverleafCollaborationResult, String> {
     let (remote, url) = collaboration_remote(host, repo)?;
     let auth = token_for(&url, token)?;
-    let remote_oid = overleaf_master_oid(host, repo, &remote, &auth)?;
+    let (branch, remote_oid) = overleaf_branch(host, repo, &remote, &auth)?;
     let key = collaboration_key(host, repo, &remote);
     if remembered_collaboration_head(&key).as_deref() == Some(remote_oid.as_str()) {
         return Ok(OverleafCollaborationResult {
+            remote_head: Some(remote_oid),
             remote_updated: false,
             incoming: false,
             applied: false,
@@ -778,20 +790,21 @@ fn collaboration_poll(
         });
     }
 
-    let remote_ref = remote_master_ref(&remote);
+    let remote_ref = format!("refs/remotes/{remote}/{branch}");
     let tracked_oid =
         git_ok(host, repo, &["rev-parse", "--verify", &remote_ref], None).unwrap_or_default();
     if tracked_oid.trim() != remote_oid {
-        fetch_overleaf_master(host, repo, &remote, &auth)?;
+        fetch_overleaf_branch(host, repo, &remote, &auth, &branch)?;
     }
 
     let next = info(host, repo)?;
     let incoming = next.behind > 0;
     let pending = next.behind > 0;
     if !pending {
-        remember_collaboration_head(key, remote_oid);
+        remember_collaboration_head(key, remote_oid.clone());
     }
     Ok(OverleafCollaborationResult {
+        remote_head: Some(remote_oid),
         remote_updated: true,
         incoming,
         applied: false,
@@ -804,12 +817,15 @@ fn collaboration_apply(
     repo: &str,
     host: &Option<String>,
 ) -> Result<OverleafCollaborationResult, String> {
+    let lock = merge::repo_lock(host, repo);
+    let _guard = merge::lock(&lock)?;
     let (remote, _) = collaboration_remote(host, repo)?;
-    let remote_ref = remote_master_ref(&remote);
+    let remote_ref = tracked_remote_ref(host, repo, &remote).ok_or("Refresh the remote branch before applying changes")?;
     let mut next = info(host, repo)?;
     let incoming = next.behind > 0;
     let mut applied = false;
     if incoming && !next.dirty && next.ahead == 0 {
+        merge::checkpoint(host, repo, "Save manuscript checkpoint before synchronization")?;
         git_ok(host, repo, &["merge", "--ff-only", &remote_ref], None)?;
         next = info(host, repo)?;
         applied = true;
@@ -824,6 +840,7 @@ fn collaboration_apply(
         }
     }
     Ok(OverleafCollaborationResult {
+        remote_head: git_ok(host, repo, &["rev-parse", &remote_ref], None).ok().map(|head| head.trim().to_string()),
         remote_updated: false,
         incoming,
         applied,
@@ -849,22 +866,6 @@ pub async fn overleaf_collaboration_apply(
     crate::blocking::run(move || collaboration_apply(&repo, &host)).await
 }
 
-fn compile_output_dir(repo: &str, host: &Option<String>) -> String {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    repo.hash(&mut hasher);
-    host.hash(&mut hasher);
-    let key = format!("{:x}", hasher.finish());
-    if host.as_deref().filter(|value| !value.is_empty()).is_some() {
-        format!("/tmp/linco-latex-{key}")
-    } else {
-        std::env::temp_dir()
-            .join("linco-latex")
-            .join(key)
-            .to_string_lossy()
-            .to_string()
-    }
-}
-
 fn compiler_flag(engine: &str) -> Result<&'static str, String> {
     match engine {
         "pdflatex" | "" => Ok("-pdf"),
@@ -875,7 +876,7 @@ fn compiler_flag(engine: &str) -> Result<&'static str, String> {
 }
 
 const BUNDLED_TEX_VERSION: &str = "2026.05";
-const BUNDLED_TEX_SUPPLEMENT_VERSION: &str = "1";
+const BUNDLED_TEX_SUPPLEMENT_VERSION: &str = "2";
 
 fn tex_provision_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1215,12 +1216,31 @@ fn prepend_executable_dir(command: &mut Command, executable: &Path) {
 fn trim_log(mut log: String) -> String {
     const MAX_LOG: usize = 300_000;
     if log.len() > MAX_LOG {
-        log = format!(
-            "[Earlier compiler output omitted]\n{}",
-            &log[log.len() - MAX_LOG..]
-        );
+        let mut start = log.len() - MAX_LOG;
+        while !log.is_char_boundary(start) {
+            start += 1;
+        }
+        log = format!("[Earlier compiler output omitted]\n{}", &log[start..]);
     }
     log
+}
+
+/// Reject sibling-prefix matches and option-like paths before invoking any tool.
+fn compile_relative(repo: &str, main: &str) -> Result<String, String> {
+    let base = repo.replace('\\', "/").trim_end_matches('/').to_string();
+    let main = main.replace('\\', "/");
+    let relative = if main.starts_with('/') || main.as_bytes().get(1) == Some(&b':') {
+        main.strip_prefix(&(base + "/"))
+            .ok_or("The main TeX file must be inside the paper folder")?
+            .to_string()
+    } else {
+        main
+    };
+    crate::latex_snapshot::portable_relative(&relative)?;
+    if !relative.to_ascii_lowercase().ends_with(".tex") {
+        return Err("Select a .tex main file".into());
+    }
+    Ok(relative)
 }
 
 #[tauri::command]
@@ -1230,108 +1250,171 @@ pub async fn latex_compile(
     main_file: String,
     engine: String,
     host: Option<String>,
+    force: Option<bool>,
 ) -> Result<LatexCompileResult, String> {
     crate::blocking::run(move || {
         let started = Instant::now();
         let flag = compiler_flag(&engine)?;
-        let relative = main_file
-            .strip_prefix(repo.trim_end_matches(['/', '\\']))
-            .unwrap_or(&main_file)
-            .trim_start_matches(['/', '\\'])
-            .to_string();
-        if relative.is_empty() || relative.split(['/', '\\']).any(|part| part == "..") {
-            return Err("The main TeX file must be inside the project".into());
-        }
-        let stem = Path::new(&relative)
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .ok_or("Invalid main TeX filename")?;
-        let output_dir = compile_output_dir(&repo, &host);
-        let pdf_path = if host.as_deref().filter(|value| !value.is_empty()).is_some() {
-            format!("{output_dir}/{stem}.pdf")
-        } else {
-            Path::new(&output_dir)
-                .join(format!("{stem}.pdf"))
-                .to_string_lossy()
-                .to_string()
-        };
-
-        let output = if let Some(remote_host) = host.as_deref().filter(|value| !value.is_empty()) {
-            let command = format!(
-                "mkdir -p -- {out} && cd -- {repo} && if command -v latexmk >/dev/null 2>&1; then latexmk {flag} -interaction=nonstopmode -file-line-error -synctex=1 -halt-on-error -outdir={out} {main}; else echo __LINCO_LATEX_MISSING__ >&2; exit 127; fi",
-                out = crate::remote::shq(&output_dir),
-                repo = crate::remote::shq(&repo),
-                main = crate::remote::shq(&relative),
-            );
+        let relative = compile_relative(&repo, &main_file)?;
+        let snapshot = if let Some(remote_host) = host.as_deref().filter(|h| !h.is_empty()) {
             let value = crate::agent_rpc::call_background_timeout(
-                remote_host,
-                "shell",
-                serde_json::json!({ "cmd": command, "timeout": 180 }),
-                Duration::from_secs(190),
+                remote_host, "latex_snapshot", serde_json::json!({"repo": repo}), Duration::from_secs(90),
             )?;
-            let stdout = value
-                .get("stdout_b64")
-                .and_then(|item| item.as_str())
-                .and_then(|value| STANDARD.decode(value).ok())
-                .map(|value| String::from_utf8_lossy(&value).to_string())
-                .unwrap_or_default();
-            GitOutput {
-                code: value.get("code").and_then(|item| item.as_i64()).unwrap_or(-1) as i32,
-                stdout,
-                stderr: value
-                    .get("stderr")
-                    .and_then(|item| item.as_str())
-                    .unwrap_or_default()
-                    .to_string(),
-            }
-        } else {
-            std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
-            match ensure_local_latexmk(&app) {
-                Ok(latexmk) => {
-                    let mut command = Command::new(&latexmk);
-                    let out_arg = format!("-outdir={output_dir}");
-                    command.current_dir(&repo).args([
-                        flag,
-                        "-interaction=nonstopmode",
-                        "-file-line-error",
-                        "-synctex=1",
-                        "-halt-on-error",
-                        &out_arg,
-                        &relative,
-                    ]);
-                    prepend_executable_dir(&mut command, &latexmk);
-                    crate::proc_ext::no_window(&mut command);
-                    match command.output() {
-                        Ok(output) => GitOutput {
-                            code: output.status.code().unwrap_or(-1),
-                            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                        },
-                        Err(error) => GitOutput {
-                            code: 126,
-                            stdout: String::new(),
-                            stderr: format!("Unable to run bundled latexmk: {error}"),
-                        },
-                    }
+            Some(serde_json::from_value::<crate::latex_snapshot::Snapshot>(value).map_err(|e| e.to_string())?)
+        } else { None };
+        let files = snapshot.as_ref().map(|snapshot| snapshot.files.iter().map(|f| {
+            let data = STANDARD.decode(&f.data).map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({"path": f.path, "bytes": data.len(), "sha256": crate::latex_snapshot::fingerprint(&data)}))
+        }).collect::<Result<Vec<_>, String>>()).transpose()?;
+        let source_signature = if let Some(files) = &files {
+            Some(crate::latex_snapshot::fingerprint(&serde_json::to_vec(files).map_err(|e| e.to_string())?))
+        } else { crate::latex_cache::local_source_signature(Path::new(&repo)) };
+        let main_bytes = if let Some(snapshot) = &snapshot {
+            let main = snapshot.files.iter().find(|file| file.path == relative).ok_or("The main TeX file is missing")?;
+            STANDARD.decode(&main.data).map_err(|e| e.to_string())?
+        } else { std::fs::read(Path::new(&repo).join(&relative)).map_err(|e| e.to_string())? };
+        if main_bytes.iter().all(u8::is_ascii_whitespace) { return Err("The main TeX file is empty. Add document content before compiling.".into()); }
+        let runtime = ensure_local_latexmk(&app);
+        let app_data = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+        let build_key = {
+            let environment = ["TEXINPUTS", "BIBINPUTS", "BSTINPUTS", "TEXMFHOME", "TEXMFCNF", "TEXMFVAR"].map(|name| (name, env::var_os(name).map(|value| value.to_string_lossy().into_owned())));
+            let key = serde_json::json!(["latex-build-v1", host, repo, relative, engine, runtime.as_ref().ok(), BUNDLED_TEX_VERSION, BUNDLED_TEX_SUPPLEMENT_VERSION, environment]);
+            crate::latex_snapshot::fingerprint(key.to_string().as_bytes())
+        };
+        let build_directory = app_data.join("production-builds").join(build_key);
+        let _build_lock = crate::latex_build::lock(&build_directory)?;
+        let cache_file = runtime.as_ref().ok().map(|latexmk| {
+            let environment = ["TEXINPUTS", "BIBINPUTS", "BSTINPUTS", "TEXMFHOME", "TEXMFCNF", "TEXMFVAR"].map(|name| (name, env::var_os(name).map(|value| value.to_string_lossy().into_owned())));
+            let day = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() / 86400;
+            let key = serde_json::json!(["latex-cache-v1", host, repo, relative, engine, latexmk, BUNDLED_TEX_VERSION, BUNDLED_TEX_SUPPLEMENT_VERSION, environment, day]);
+            app_data.join("production-cache").join(format!("{}.json", crate::latex_snapshot::fingerprint(key.to_string().as_bytes())))
+        });
+        if !force.unwrap_or(false) {
+            if let (Some(cache), Some(signature)) = (&cache_file, &source_signature) {
+                if let Some(mut result) = crate::latex_cache::load(cache, signature, &app_data.join("production-jobs")) {
+                    result.cached = true;
+                    result.duration_ms = started.elapsed().as_millis() as u64;
+                    result.log = format!("Unchanged paper and compiler inputs; reused the verified local PDF. Shift-click Compile to rebuild.\n{}", result.log);
+                    return Ok(result);
                 }
-                Err(error) => GitOutput {
-                    code: 127,
-                    stdout: String::new(),
-                    stderr: format!("__LINCO_LATEX_MISSING__\n{error}"),
-                },
+            }
+        }
+        let job = crate::latex_snapshot::new_job(&app, "latex")?;
+        let archive_out = job.join("output");
+        std::fs::create_dir(&archive_out).map_err(|e| e.to_string())?;
+        let out = build_directory.join("output");
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let stem = Path::new(&relative).file_stem().and_then(|s| s.to_str()).ok_or("Invalid TeX filename")?;
+        let incremental = !force.unwrap_or(false) && out.join(format!("{stem}.fdb_latexmk")).is_file();
+        let mut manifest = serde_json::json!({
+            "version": 1, "kind": "latex", "source_host": host, "source_repo": repo,
+            "main_file": relative, "engine": engine, "execution": "local",
+            "shell_escape": false, "project_rc": false,
+            "build_state_reused": incremental,
+            "build_directory": build_directory,
+            "note": "Snapshot records source bytes, not proof of which code produced an experiment."
+        });
+        let working = if let Some(snapshot) = snapshot {
+            manifest["files"] = serde_json::json!(files);
+            let source = job.join("source");
+            std::fs::create_dir(&source).map_err(|e| e.to_string())?;
+            crate::latex_snapshot::materialize(snapshot, &source)?;
+            let mirror = build_directory.join("source");
+            manifest["source_files_changed"] = serde_json::json!(crate::latex_build::sync_sources(&source, &mirror)?);
+            mirror
+        } else { PathBuf::from(&repo) };
+        if !working.join(&relative).is_file() { return Err("The main TeX file was not present in the captured paper".into()); }
+        let provenance = job.join("provenance.json");
+        std::fs::write(&provenance, serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let pdf = archive_out.join(format!("{stem}.pdf"));
+        let log_path = job.join("compile.log");
+        let mut tool_missing = false;
+        let compiler_started = Instant::now();
+        manifest["prepare_ms"] = serde_json::json!(started.elapsed().as_millis() as u64);
+        let (code, log) = match &runtime {
+            Err(error) => { tool_missing = true; (127, format!("Local TeX runtime unavailable: {error}")) }
+            Ok(latexmk) => {
+                manifest["compiler_path"] = serde_json::json!(latexmk);
+                manifest["compiler_version_record"] = serde_json::json!("compile.log");
+                manifest["linco_bundled_tex_version_available"] = serde_json::json!(BUNDLED_TEX_VERSION);
+                manifest["linco_supplement_version_available"] = serde_json::json!(BUNDLED_TEX_SUPPLEMENT_VERSION);
+                manifest["runtime_note"] = serde_json::json!("Compiler overrides are respected. Tool versions are in compile.log; bundle versions are not an inventory of user-installed packages.");
+                let log_file = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
+                let out_arg = format!("-outdir={}", out.to_string_lossy());
+                let mut command = Command::new(&latexmk);
+                command.current_dir(&working).args([
+                    "-norc", "-no-shell-escape", flag, "-interaction=nonstopmode",
+                    "-file-line-error", "-synctex=1", "-halt-on-error", &out_arg, &format!("./{relative}"),
+                ]);
+                // Explicit clean rebuild only; ordinary edits keep auxiliary files.
+                if force.unwrap_or(false) { command.arg("-gg"); }
+                prepend_executable_dir(&mut command, &latexmk);
+                command.stdin(Stdio::null()).stdout(log_file.try_clone().map_err(|e| e.to_string())?).stderr(log_file);
+                crate::proc_ext::no_window(&mut command);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::CommandExt;
+                    command.process_group(0);
+                }
+                let mut child = command.spawn().map_err(|e| format!("Unable to start local latexmk: {e}"))?;
+                let deadline = Instant::now() + Duration::from_secs(180);
+                let mut stopped = false;
+                let code = loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => break status.code().unwrap_or(-1),
+                        result => {
+                            let wait_failed = result.is_err();
+                            if wait_failed || Instant::now() >= deadline || std::fs::metadata(&log_path).map(|m| m.len() > 10_000_000).unwrap_or(false) {
+                                // This process group was created above solely for this compilation.
+                                #[cfg(unix)]
+                                let _ = Command::new("/bin/kill").args(["-KILL", &format!("-{}", child.id())]).status();
+                                kill_child_tree(&mut child);
+                                stopped = true;
+                                break -1;
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                    }
+                };
+                use std::io::{Seek, SeekFrom};
+                let mut file = std::fs::File::open(&log_path).map_err(|e| e.to_string())?;
+                let length = file.metadata().map_err(|e| e.to_string())?.len();
+                file.seek(SeekFrom::Start(length.saturating_sub(300_000))).map_err(|e| e.to_string())?;
+                let mut bytes = Vec::new();
+                file.take(300_000).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                let mut log = String::from_utf8_lossy(&bytes).to_string();
+                if stopped { log.push_str("\nCompilation stopped: time or log-size limit reached.\n"); }
+                (code, log)
             }
         };
-        let tool_missing = output.code == 127 || output.stderr.contains("__LINCO_LATEX_MISSING__");
-        let log = trim_log(format!("{}{}", output.stdout, output.stderr));
-        Ok(LatexCompileResult {
-            success: output.code == 0,
-            pdf_path,
-            log,
-            duration_ms: started.elapsed().as_millis() as u64,
-            tool_missing,
-        })
-    })
-    .await
+        manifest["compiler_ms"] = serde_json::json!(compiler_started.elapsed().as_millis() as u64);
+        // Never expose a mutable build PDF (or an old PDF after a failed build).
+        // Source captures and published PDFs stay immutable and independently hashed.
+        if code == 0 {
+            for extension in ["pdf", "fls", "log", "synctex.gz"] {
+                let name = format!("{stem}.{extension}");
+                let source = out.join(&name);
+                if source.is_file() { std::fs::copy(source, archive_out.join(name)).map_err(|e| e.to_string())?; }
+            }
+        }
+        manifest["exit_code"] = serde_json::json!(code);
+        manifest["pdf_sha256"] = std::fs::read(&pdf).ok().map(|data| serde_json::json!(crate::latex_snapshot::fingerprint(&data))).unwrap_or(serde_json::Value::Null);
+        std::fs::write(&provenance, serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let result = LatexCompileResult {
+            success: code == 0 && pdf.is_file(), pdf_path: pdf.to_string_lossy().into_owned(),
+            log: trim_log(format!("Compiled locally ({}). Source: {}\nReproduction record: {}\n{}", if incremental { "incremental build" } else { "clean build" }, host.as_deref().unwrap_or("local"), provenance.display(), log)),
+            duration_ms: started.elapsed().as_millis() as u64, tool_missing, pdf_is_local: true,
+            provenance_path: provenance.to_string_lossy().into_owned(),
+            cached: false,
+        };
+        if let (Some(cache), Some(signature), Ok(latexmk)) = (&cache_file, &source_signature, &runtime) {
+            if host.as_deref().filter(|h| !h.is_empty()).is_some()
+                || crate::latex_cache::local_source_signature(&working).as_ref() == Some(signature) {
+                let _ = crate::latex_cache::save(cache, signature, &working, &out, latexmk, &result);
+            }
+        }
+        Ok(result)
+    }).await
 }
 
 #[cfg(test)]
@@ -1380,17 +1463,28 @@ mod tests {
     }
 
     #[test]
-    fn parses_remote_master_oid() {
-        assert_eq!(
-            parse_ls_remote_head("0123456789abcdef0123456789abcdef01234567\trefs/heads/master\n")
-                .unwrap(),
-            "0123456789abcdef0123456789abcdef01234567"
-        );
-        assert!(parse_ls_remote_head("").is_err());
+    fn discovers_remote_default_or_upstream_without_assuming_master() {
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let output = format!("ref: refs/heads/main\tHEAD\n{oid}\tHEAD\n{oid}\trefs/heads/main\n{oid}\trefs/heads/paper\n");
+        assert_eq!(parse_remote_branch(&output, None).unwrap().0, "main");
+        assert_eq!(parse_remote_branch(&output, Some("paper")).unwrap().0, "paper");
+        assert_eq!(parse_remote_branch(&output, Some("master")).unwrap().0, "main");
+        assert_eq!(parse_remote_branch(&format!("{oid}\trefs/heads/main\n"), None).unwrap().0, "main");
+        assert!(parse_remote_branch(&format!("{oid}\trefs/heads/main\n{oid}\trefs/heads/paper\n"), None).is_err());
+        assert!(parse_remote_branch("", None).is_err());
     }
 
     #[test]
     fn collaboration_poll_fetches_only_new_heads_and_preserves_dirty_drafts() {
+        collaboration_roundtrip("master");
+    }
+
+    #[test]
+    fn collaboration_works_when_only_main_exists_on_the_remote() {
+        collaboration_roundtrip("main");
+    }
+
+    fn collaboration_roundtrip(branch: &str) {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1402,8 +1496,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         test_git(&root, &["init", "--bare", remote.to_str().unwrap()]);
+        test_git(&remote, &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")]);
         std::fs::create_dir_all(&author).unwrap();
-        test_git(&author, &["init", "-b", "master"]);
+        test_git(&author, &["init", "-b", branch]);
         configure_test_author(&author);
         std::fs::write(author.join("main.tex"), "version one\n").unwrap();
         test_git(&author, &["add", "main.tex"]);
@@ -1412,7 +1507,7 @@ mod tests {
             &author,
             &["remote", "add", "overleaf", remote.to_str().unwrap()],
         );
-        test_git(&author, &["push", "-u", "overleaf", "master"]);
+        test_git(&author, &["push", "-u", "overleaf", branch]);
         test_git(
             &root,
             &[
@@ -1437,7 +1532,7 @@ mod tests {
         std::fs::write(author.join("main.tex"), "version two\n").unwrap();
         test_git(&author, &["add", "main.tex"]);
         test_git(&author, &["commit", "-m", "collaborator update"]);
-        test_git(&author, &["push", "overleaf", "master"]);
+        test_git(&author, &["push", "overleaf", branch]);
 
         let fetched = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
         assert!(fetched.remote_updated);
@@ -1464,7 +1559,7 @@ mod tests {
             &author,
             &["commit", "-m", "overlapping collaborator update"],
         );
-        test_git(&author, &["push", "overleaf", "master"]);
+        test_git(&author, &["push", "overleaf", branch]);
 
         let pending = collaboration_poll(&local_path, Some("test-token"), &None).unwrap();
         assert!(pending.remote_updated);

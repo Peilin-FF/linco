@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import {
   vscodeDarkEditorTheme,
   vscodeLightEditorTheme
 } from '@/lib/codeMirrorTheme'
-import { EditorSelection, type EditorState, type Extension } from '@codemirror/state'
+import { EditorSelection, Prec, StateEffect, StateField, type EditorState, type Extension } from '@codemirror/state'
+import { acceptCompletion, autocompletion, completionKeymap, startCompletion } from '@codemirror/autocomplete'
+import { latexProjectCompletionSource, type LatexCompletionFile } from '@/lib/latexCompletions'
 import {
   Decoration,
   type DecorationSet,
@@ -24,6 +26,7 @@ import {
   Check,
   Code2,
   Heading1,
+  History,
   Image,
   Italic,
   Link,
@@ -50,11 +53,31 @@ import type {
 } from '@/lib/latex'
 import './latex-fonts.css'
 
+// Updating review marks must not reconfigure the editor: a full reconfiguration
+// discards CodeMirror's active snippet fields while the user is still typing.
+const setAiMarks = StateEffect.define<DecorationSet>()
+const aiMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    const replacement = transaction.effects.find(effect => effect.is(setAiMarks))
+    return replacement ? replacement.value : value.map(transaction.changes)
+  },
+  provide: field => EditorView.decorations.from(field),
+})
+import {
+  loadReviewMemory, nextReviewMemory, restoreReviewState, saveReviewMemory,
+  type ReviewMemory, type ReviewCheckpoint, type SavedWritingIssue
+} from '@/lib/latexReviewMemory'
+
 export type LatexEditorMode = 'visual' | 'source'
 
 interface LatexVisualEditorProps {
   value: string
   fileName: string
+  projectFiles?: readonly LatexCompletionFile[]
+  relativeFile?: string
+  memoryScope: string
+  contextIdentity?: string
   isMainDocument: boolean
   mode: LatexEditorMode
   dirty: boolean
@@ -66,6 +89,7 @@ interface LatexVisualEditorProps {
   onMode: (mode: LatexEditorMode) => void
   onChange: (value: string) => void
   onSave: () => void
+  onSaveAndCompile?: () => void
   onRequestSuggestion?: (context: {
     before: string
     selection: string
@@ -84,6 +108,7 @@ interface ReviewSegmentRange extends LatexReviewSegment {
 }
 
 interface ResolvedReviewIssue extends LatexReviewIssue {
+  context?: import('@/lib/researchProduction').EvidenceReference[]
   id: string
   from: number
   to: number
@@ -93,6 +118,7 @@ interface ResolvedReviewIssue extends LatexReviewIssue {
 }
 
 interface ResolvedPolishIssue {
+  context?: import('@/lib/researchProduction').EvidenceReference[]
   id: string
   original: string
   replacement: string
@@ -730,8 +756,12 @@ function ToolbarButton({
 }
 
 export default function LatexVisualEditor({
+  memoryScope,
+  contextIdentity = '',
   value,
   fileName,
+  projectFiles,
+  relativeFile,
   isMainDocument,
   mode,
   dirty,
@@ -743,6 +773,7 @@ export default function LatexVisualEditor({
   onMode,
   onChange,
   onSave,
+  onSaveAndCompile,
   onRequestSuggestion,
   onReviewSegments
 }: LatexVisualEditorProps): JSX.Element {
@@ -774,6 +805,20 @@ export default function LatexVisualEditor({
   const reviewPendingRef = useRef(false)
   const reviewedSegmentsRef = useRef(new Set<string>())
   const ignoredIssuesRef = useRef(new Set<string>())
+  const reviewEnabledRef = useRef(false)
+  const memoryRef = useRef<ReviewMemory | null>(null)
+  const contextIdentityRef = useRef(contextIdentity)
+  const sourceRef = useRef(value)
+  const memoryReadyRef = useRef(false)
+  const memoryQueueRef = useRef(Promise.resolve())
+  const memoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const memoryMountedRef = useRef(true)
+  const [memoryStatus, setMemoryStatus] = useState('loading')
+  const [memoryError, setMemoryError] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<ReviewCheckpoint[]>([])
+  const [restored, setRestored] = useState(false)
+  const persistRef = useRef<(label?: ReviewCheckpoint['label'], decision?: SavedWritingIssue) => void>(() => {})
   const runReviewRef = useRef<() => Promise<void>>(async () => {})
   const scheduleReviewRef = useRef<(delay?: number) => void>(() => {})
 
@@ -789,8 +834,44 @@ export default function LatexVisualEditor({
     setPolishIssues(next)
   }
 
+  persistRef.current = (label, decision): void => {
+    if (!memoryReadyRef.current) return
+    if (memoryTimerRef.current !== null) clearTimeout(memoryTimerRef.current)
+    memoryTimerRef.current = null
+    try {
+      const next = nextReviewMemory(memoryRef.current, memoryScope, {
+        source: sourceRef.current,
+        contextIdentity,
+        reviews: reviewIssuesRef.current,
+        polish: polishIssuesRef.current,
+        reviewed: [...reviewedSegmentsRef.current],
+        ignored: [...ignoredIssuesRef.current]
+      }, label, decision)
+      memoryRef.current = next
+      if (memoryMountedRef.current) {
+        setCheckpoints(next.checkpoints)
+        setMemoryStatus('saving')
+      }
+      // Keep transaction order, including writes queued just before unmount.
+      memoryQueueRef.current = memoryQueueRef.current.then(() => saveReviewMemory(next))
+      void memoryQueueRef.current.then(() => {
+        if (memoryMountedRef.current && memoryRef.current?.revision === next.revision) {
+          setMemoryStatus('saved')
+        }
+      }).catch(reason => {
+        if (memoryMountedRef.current) {
+          setMemoryStatus('error')
+          setMemoryError(String(reason))
+        }
+      })
+    } catch (reason) {
+      setMemoryStatus('error')
+      setMemoryError(String(reason))
+    }
+  }
+
   const scheduleReview = (delay = 900): void => {
-    if (!active || !reviewCallbackRef.current) return
+    if (!active || !reviewCallbackRef.current || !reviewEnabledRef.current || !memoryReadyRef.current) return
     if (reviewTimerRef.current !== null) window.clearTimeout(reviewTimerRef.current)
     reviewTimerRef.current = window.setTimeout(() => {
       reviewTimerRef.current = null
@@ -802,7 +883,7 @@ export default function LatexVisualEditor({
   runReviewRef.current = async (): Promise<void> => {
     const view = editorRef.current
     const review = reviewCallbackRef.current
-    if (!active || !view || !review) return
+    if (!active || !view || !review || !reviewEnabledRef.current || !memoryReadyRef.current) return
     if (reviewInFlightRef.current) {
       reviewPendingRef.current = true
       return
@@ -879,7 +960,8 @@ export default function LatexVisualEditor({
           to,
           agent: result.agent,
           model: result.model,
-          filesConsidered: result.filesConsidered
+          filesConsidered: result.filesConsidered,
+          context: result.context?.filter(source => issue.evidence.includes(source.path))
         }]
       })
       replaceReviewIssues([
@@ -890,6 +972,8 @@ export default function LatexVisualEditor({
         reviewedSegmentsRef.current.has(segment.cacheKey)
       ).length
       setReviewProgress({ checked, total: allSegments.length })
+      setRestored(false)
+      persistRef.current('review')
       continueInBackground = checked < allSegments.length
     } catch (reason) {
       if (generation === reviewGenerationRef.current) {
@@ -908,27 +992,62 @@ export default function LatexVisualEditor({
   }
 
   useEffect(() => {
-    replacePolishIssues([])
-    setPolishPopover(null)
-    setSuggestionError('')
-    reviewGenerationRef.current += 1
-    reviewedSegmentsRef.current.clear()
-    ignoredIssuesRef.current.clear()
-    replaceReviewIssues([])
-    setReviewProgress({ checked: 0, total: 0 })
-    setReviewError('')
-    setReviewPopover(null)
-    if (active) scheduleReviewRef.current(700)
+    let cancelled = false
+    memoryMountedRef.current = true
+    void loadReviewMemory(memoryScope).then(memory => {
+      if (cancelled) return
+      memoryRef.current = memory
+      if (memory) {
+        const source = sourceRef.current
+        const state = restoreReviewState(memory, source, contextIdentityRef.current)
+        replaceReviewIssues(state.reviews)
+        replacePolishIssues(state.polish)
+        reviewedSegmentsRef.current = new Set(state.reviewed)
+        ignoredIssuesRef.current = new Set(state.ignored)
+        setCheckpoints(memory.checkpoints)
+        setRestored(true)
+        const segments = latexProseSegments(source)
+        setReviewProgress({ checked: segments.filter(segment => state.reviewed.includes(segment.cacheKey)).length, total: segments.length })
+      }
+      memoryReadyRef.current = true
+      setMemoryStatus(memory ? 'saved' : 'ready')
+    }).catch(reason => {
+      if (!cancelled) {
+        setMemoryStatus('error')
+        setMemoryError(String(reason))
+      }
+    })
     return () => {
+      cancelled = true
+      if (memoryTimerRef.current !== null) persistRef.current()
+      memoryMountedRef.current = false
       reviewGenerationRef.current += 1
       if (reviewTimerRef.current !== null) {
         window.clearTimeout(reviewTimerRef.current)
         reviewTimerRef.current = null
       }
     }
-    // The editor component is keyed by file path, so this resets once per opened file.
+    // Parent keys the editor by the complete host/project/file identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileName])
+  }, [memoryScope])
+
+  useEffect(() => {
+    if (contextIdentityRef.current === contextIdentity) return
+    contextIdentityRef.current = contextIdentity
+    reviewGenerationRef.current++
+    reviewEnabledRef.current = false
+    reviewedSegmentsRef.current.clear()
+    ignoredIssuesRef.current.clear()
+    setReviewProgress({ checked: 0, total: 0 })
+    setReviewError('')
+    setSuggestionError('')
+    replaceReviewIssues([])
+    replacePolishIssues([])
+    setReviewPopover(null)
+    setPolishPopover(null)
+    setRestored(true)
+    persistRef.current()
+  }, [contextIdentity])
 
   useEffect(() => {
     if (!active) {
@@ -946,7 +1065,8 @@ export default function LatexVisualEditor({
 
   const requestSuggestion = async (): Promise<void> => {
     const view = editorRef.current
-    if (!view || !onRequestSuggestion || suggesting) return
+    if (!view || !onRequestSuggestion || suggesting || !memoryReadyRef.current) return
+    const generation = reviewGenerationRef.current
     const selection = view.state.selection.main
     const source = view.state.doc.toString()
     let from = selection.from
@@ -969,7 +1089,6 @@ export default function LatexVisualEditor({
     const beforeStart = Math.max(0, from - 6000)
     const afterEnd = Math.min(source.length, to + 1800)
     const original = source.slice(from, to)
-    replacePolishIssues([])
     setPolishPopover(null)
     setSuggesting(true)
     setSuggestionError('')
@@ -980,7 +1099,7 @@ export default function LatexVisualEditor({
         after: source.slice(to, afterEnd),
         mode: polishMode
       })
-      if (editorRef.current?.state.doc.toString() !== source) return
+      if (generation !== reviewGenerationRef.current || editorRef.current?.state.doc.toString() !== source) return
       const resolved = result.edits.flatMap((edit): ResolvedPolishIssue[] => {
         const offset = original.indexOf(edit.original)
         if (
@@ -997,7 +1116,8 @@ export default function LatexVisualEditor({
           to: issueFrom + edit.original.length,
           agent: result.agent,
           model: result.model,
-          filesConsidered: result.filesConsidered
+          filesConsidered: result.filesConsidered,
+          context: result.context?.filter(source => edit.evidence.includes(source.path))
         }]
       })
       const nonOverlapping = resolved
@@ -1005,11 +1125,13 @@ export default function LatexVisualEditor({
         .filter((issue, index, issues) => index === 0 || issue.from >= issues[index - 1].to)
       view.dispatch({ selection: EditorSelection.cursor(from) })
       replacePolishIssues(nonOverlapping)
+      setRestored(false)
+      persistRef.current('polish')
       if (nonOverlapping.length === 0) {
         setSuggestionError(t('latex.ai.noPolishChanges'))
       }
     } catch (reason) {
-      setSuggestionError(reason instanceof Error ? reason.message : String(reason))
+      if (generation === reviewGenerationRef.current) setSuggestionError(reason instanceof Error ? reason.message : String(reason))
     } finally {
       setSuggesting(false)
     }
@@ -1023,11 +1145,12 @@ export default function LatexVisualEditor({
     replacePolishIssues([])
     setPolishPopover(null)
     setSuggestionError('')
+    persistRef.current()
   }
 
   const acceptPolishIssue = (issue: ResolvedPolishIssue): void => {
     const view = editorRef.current
-    if (!view || view.state.sliceDoc(issue.from, issue.to) !== issue.original) return
+    if (readOnly || !view || view.state.sliceDoc(issue.from, issue.to) !== issue.original) return
     const delta = issue.replacement.length - issue.original.length
     const remaining = polishIssuesRef.current
       .filter((candidate) => candidate.id !== issue.id)
@@ -1052,6 +1175,7 @@ export default function LatexVisualEditor({
     applyingPolishIssueRef.current = false
     setPolishPopover(null)
     view.focus()
+    persistRef.current('accepted', issue)
   }
 
   const rejectPolishIssue = (issue: ResolvedPolishIssue): void => {
@@ -1060,11 +1184,12 @@ export default function LatexVisualEditor({
     )
     setPolishPopover(null)
     editorRef.current?.focus()
+    persistRef.current('dismissed', issue)
   }
 
   const acceptReviewIssue = (issue: ResolvedReviewIssue): void => {
     const view = editorRef.current
-    if (!view || view.state.sliceDoc(issue.from, issue.to) !== issue.original) return
+    if (readOnly || !view || view.state.sliceDoc(issue.from, issue.to) !== issue.original) return
     view.dispatch({
       changes: { from: issue.from, to: issue.to, insert: issue.replacement },
       selection: EditorSelection.cursor(issue.from + issue.replacement.length),
@@ -1072,6 +1197,7 @@ export default function LatexVisualEditor({
     })
     setReviewPopover(null)
     view.focus()
+    persistRef.current('accepted', issue)
   }
 
   const rejectReviewIssue = (issue: ResolvedReviewIssue): void => {
@@ -1079,26 +1205,21 @@ export default function LatexVisualEditor({
     replaceReviewIssues(reviewIssuesRef.current.filter((candidate) => candidate.id !== issue.id))
     setReviewPopover(null)
     editorRef.current?.focus()
+    persistRef.current('dismissed', issue)
   }
 
-  const reviewDecorations = useMemo(
-    () =>
-      EditorView.decorations.of(
-        Decoration.set(
-          reviewIssues.map((issue) =>
-            Decoration.mark({
-              class: 'linco-latex-ai-issue',
-              attributes: {
-                'data-latex-review-id': issue.id,
-                'aria-label': issue.reason || t(`latex.ai.category.${issue.category}`)
-              }
-            }).range(issue.from, issue.to)
-          ),
-          true
-        )
-      ),
-    [reviewIssues, t]
-  )
+  useEffect(() => {
+    const view = editorRef.current
+    if (!view) return
+    const marks = [
+      ...reviewIssues.map(issue => ({ issue, className: 'linco-latex-ai-issue', attribute: 'data-latex-review-id' })),
+      ...polishIssues.map(issue => ({ issue, className: 'linco-latex-polish-issue', attribute: 'data-latex-polish-id' })),
+    ].filter(({ issue }) => issue.from >= 0 && issue.to <= view.state.doc.length && issue.from < issue.to)
+      .map(({ issue, className, attribute }) => Decoration.mark({
+        class: className, attributes: { [attribute]: issue.id, 'aria-label': issue.reason },
+      }).range(issue.from, issue.to))
+    view.dispatch({ effects: setAiMarks.of(Decoration.set(marks, true)) })
+  }, [reviewIssues, polishIssues])
 
   const reviewInteraction = useMemo(
     () =>
@@ -1122,25 +1243,6 @@ export default function LatexVisualEditor({
         }
       }),
     []
-  )
-
-  const polishDecorations = useMemo(
-    () =>
-      EditorView.decorations.of(
-        Decoration.set(
-          polishIssues.map((issue) =>
-            Decoration.mark({
-              class: 'linco-latex-polish-issue',
-              attributes: {
-                'data-latex-polish-id': issue.id,
-                'aria-label': issue.reason || t('latex.ai.polishSuggestion')
-              }
-            }).range(issue.from, issue.to)
-          ),
-          true
-        )
-      ),
-    [polishIssues, t]
   )
 
   const polishInteraction = useMemo(
@@ -1168,13 +1270,44 @@ export default function LatexVisualEditor({
     []
   )
 
+  const editorActions = useRef({ onSave, onSaveAndCompile, onChange, requestSuggestion })
+  editorActions.current = { onSave, onSaveAndCompile, onChange, requestSuggestion }
+  const forwardEditorChange = useCallback((text: string) => editorActions.current.onChange(text), [])
+  const editorBasicSetup = useMemo(() => ({
+    lineNumbers: mode === 'source',
+    highlightActiveLine: mode === 'source',
+    highlightActiveLineGutter: mode === 'source',
+    foldGutter: mode === 'source',
+    tabSize: 2,
+    defaultKeymap: false,
+    searchKeymap: false,
+    historyKeymap: false,
+    autocompletion: false,
+    completionKeymap: false,
+  }), [mode])
+
+  const completionExtensions = useMemo(() => [
+    autocompletion({
+      override: [latexProjectCompletionSource(projectFiles || [], relativeFile)],
+      activateOnTyping: true,
+      defaultKeymap: false,
+      interactionDelay: 0,
+      maxRenderedOptions: 40,
+    }),
+    Prec.highest(keymap.of([{ key: 'Tab', run: acceptCompletion }, ...completionKeymap])),
+    EditorView.theme({
+      '.cm-tooltip-autocomplete': { fontSize: '12px', lineHeight: '1.6', maxWidth: 'min(480px, 90vw)' },
+      '.cm-completionDetail': { fontSize: '11px', opacity: '0.65', marginLeft: '14px' },
+    }),
+  ], [projectFiles, relativeFile])
+
   const extensions = useMemo<Extension[]>(
     () => [
       latex({
         fileName,
         autoCloseTags: true,
         autoCloseBrackets: true,
-        enableAutocomplete: true,
+        enableAutocomplete: false,
         enableLinting: true,
         enableTooltips: mode === 'source',
         linter: {
@@ -1183,13 +1316,16 @@ export default function LatexVisualEditor({
           checkCitesWithoutBibliography: false
         }
       }),
+      completionExtensions,
       EditorView.lineWrapping,
       keymap.of([
         {
           key: 'Mod-s',
           preventDefault: true,
           run: () => {
-            onSave()
+            const actions = editorActions.current
+            const save = actions.onSaveAndCompile || actions.onSave
+            save()
             return true
           }
         },
@@ -1197,7 +1333,7 @@ export default function LatexVisualEditor({
           key: 'Alt-\\',
           preventDefault: true,
           run: () => {
-            void requestSuggestion()
+            void editorActions.current.requestSuggestion()
             return true
           }
         },
@@ -1213,21 +1349,31 @@ export default function LatexVisualEditor({
           setSuggestionError('')
         }
         if (update.docChanged) {
+          sourceRef.current = update.state.doc.toString()
           reviewGenerationRef.current += 1
+          reviewEnabledRef.current = false
+          reviewPendingRef.current = false
           reviewedSegmentsRef.current.clear()
-          replaceReviewIssues([])
+          ignoredIssuesRef.current.clear()
+          replaceReviewIssues(reviewIssuesRef.current.flatMap(issue => {
+            const from = update.changes.mapPos(issue.from, 1)
+            const to = update.changes.mapPos(issue.to, -1)
+            return from < to && update.state.sliceDoc(from, to) === issue.original
+              ? [{ ...issue, from, to }] : []
+          }))
           setReviewProgress({ checked: 0, total: 0 })
           setReviewPopover(null)
-          scheduleReviewRef.current(1_500)
+          if (memoryReadyRef.current) setMemoryStatus('saving')
+          if (memoryTimerRef.current !== null) clearTimeout(memoryTimerRef.current)
+          memoryTimerRef.current = setTimeout(() => persistRef.current(), 400)
         } else if (update.viewportChanged) {
           setPolishPopover(null)
           setReviewPopover(null)
           scheduleReviewRef.current(450)
         }
       }),
-      reviewDecorations,
+      aiMarks,
       reviewInteraction,
-      polishDecorations,
       polishInteraction,
       reviewTheme,
       polishTheme,
@@ -1237,14 +1383,12 @@ export default function LatexVisualEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       fileName,
+      projectFiles,
+      relativeFile,
       isMainDocument,
       mode,
-      onSave,
-      onRequestSuggestion,
-      suggesting,
-      reviewDecorations,
+      completionExtensions,
       reviewInteraction,
-      polishDecorations,
       polishInteraction
     ]
   )
@@ -1310,8 +1454,70 @@ export default function LatexVisualEditor({
       ? polishIssues.find((issue) => issue.id === polishPopover.id) || null
       : null
 
+  const exportHistory = (): void => {
+    if (memoryTimerRef.current !== null) persistRef.current()
+    if (!memoryRef.current) return
+    const url = URL.createObjectURL(new Blob([JSON.stringify(memoryRef.current, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'linco-writing-history.json'
+    link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
   return (
     <div ref={containerRef} className="relative flex h-full min-h-0 flex-col bg-canvas">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 border-b border-black/5 px-3 py-1 text-[11px] text-ink-muted" role="status">
+        <span>{t(`latex.memory.${memoryStatus}`)}</span>
+        {restored && <span>{t('latex.memory.restored')}</span>}
+        {memoryError && <span className="text-red-600">{memoryError}</span>}
+      </div>
+      {historyOpen && (
+        <section aria-label={t('latex.memory.history')} className="absolute inset-y-10 right-0 z-40 flex w-[min(420px,100%)] flex-col border-l border-black/10 bg-canvas shadow-xl">
+          <div className="flex items-center justify-between border-b border-black/10 p-3 text-[12px]">
+            <strong>{t('latex.memory.history')}</strong>
+            <button type="button" disabled={!memoryRef.current} onClick={exportHistory} className="rounded px-2 py-1 hover:bg-black/5 disabled:opacity-40">{t('latex.memory.export')}</button>
+            <button type="button" onClick={() => setHistoryOpen(false)} aria-label={t('common.close')}><X size={15} /></button>
+          </div>
+          <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3 text-[12px]">
+            <p className="text-ink-muted">{t('latex.memory.local')}</p>
+            {checkpoints.some(point => point.state.reviews.some(issue => issue.context?.length) || point.state.polish.some(issue => issue.context?.length)) && <p className="text-ink-muted">{t('latex.memory.evidenceNote')}</p>}
+            {checkpoints.some(point => point.state.source !== value) && <p className="rounded bg-amber-500/10 p-2 text-ink">{t('latex.memory.stale')}</p>}
+            <h3 className="font-semibold">{t('latex.memory.pending')}</h3>
+            {[...reviewIssues, ...polishIssues].map(issue => (
+              <article key={issue.id} className="space-y-2 rounded-lg border border-black/10 p-3">
+                <p className="whitespace-pre-wrap text-ink-muted line-through">{issue.original}</p>
+                <p className="whitespace-pre-wrap text-ink">{issue.replacement}</p>
+                <p className="text-ink-muted">{issue.reason}</p>
+                {issue.evidence.length > 0 && <p className="break-all text-[10px] text-ink-muted">{issue.evidence.join(' · ')}</p>}
+                {issue.context?.map(source => <details key={source.path} className="text-[10px]"><summary className="cursor-pointer break-all">{source.path} · SHA256 {source.sha256.slice(0, 12)}</summary><pre className="max-h-36 overflow-auto whitespace-pre-wrap">{source.excerpt}</pre></details>)}
+                <div className="flex justify-end gap-3">
+                  <button type="button" onClick={() => {
+                    const review = reviewIssues.find(candidate => candidate.id === issue.id)
+                    if (review) rejectReviewIssue(review)
+                    else rejectPolishIssue(issue)
+                  }}>{t('latex.ai.reject')}</button>
+                  <button type="button" disabled={readOnly} onClick={() => {
+                    const review = reviewIssues.find(candidate => candidate.id === issue.id)
+                    if (review) acceptReviewIssue(review)
+                    else acceptPolishIssue(issue)
+                  }} className="font-medium text-accent disabled:opacity-40">{t('latex.ai.accept')}</button>
+                </div>
+              </article>
+            ))}
+            {reviewIssues.length + polishIssues.length === 0 && <p className="text-ink-muted">{t('latex.memory.noPending')}</p>}
+            <h3 className="font-semibold">{t('latex.memory.checkpoints')}</h3>
+            {[...checkpoints].reverse().map((point, index) => (
+              <details key={`${point.at}:${index}`} className="rounded-lg border border-black/10 p-3">
+                <summary className="cursor-pointer">{t(`latex.memory.${point.label}`)} · {new Date(point.at).toLocaleString()}</summary>
+                <p className="my-2 text-ink-muted">{point.state.source === value && (point.state.contextIdentity || '') === contextIdentity ? t('latex.memory.match') : t('latex.memory.old')}</p>
+                {point.decision && <div className="space-y-1 whitespace-pre-wrap"><p className="line-through">{point.decision.original}</p><p>{point.decision.replacement}</p><p className="text-ink-muted">{point.decision.reason}</p></div>}
+                {[...point.state.reviews, ...point.state.polish].map(issue => <div key={issue.id} className="mt-2 space-y-1 border-t border-black/5 pt-2"><p>{issue.original} → {issue.replacement}</p><p className="text-ink-muted">{issue.reason}</p><p className="break-all text-[10px]">{issue.agent} · {issue.model} · {issue.evidence.join(' · ')}</p>{issue.context?.map(source => <details key={source.path}><summary className="cursor-pointer break-all text-[10px]">{source.path} · SHA256 {source.sha256.slice(0, 12)}</summary><pre className="max-h-36 overflow-auto whitespace-pre-wrap text-[10px]">{source.excerpt}</pre></details>)}</div>)}
+              </details>
+            ))}
+          </div>
+        </section>
+      )}
       <div className="shrink-0 border-b border-black/8">
         <div className="flex h-9 items-center gap-0.5 px-2">
           <div className="mr-1 flex shrink-0 items-center rounded-md bg-sidebar p-0.5 text-[11px]">
@@ -1334,6 +1540,17 @@ export default function LatexVisualEditor({
               {t('latex.mode.visual')}
             </button>
           </div>
+          <button
+            type="button"
+            disabled={readOnly}
+            title={t('latex.completion.hint')}
+            className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-ink-muted hover:bg-black/5 disabled:opacity-40"
+            onClick={() => {
+              if (editorRef.current) { editorRef.current.focus(); startCompletion(editorRef.current) }
+            }}
+          >
+            <Braces size={12} />{t('latex.completion.show')}
+          </button>
           {onReviewSegments && (
             <div className="relative shrink-0">
               <ToolbarButton
@@ -1347,6 +1564,8 @@ export default function LatexVisualEditor({
                       }`
                 }
                 onClick={() => {
+                  if (!memoryReadyRef.current || reviewing) return
+                  reviewEnabledRef.current = true
                   reviewGenerationRef.current += 1
                   reviewedSegmentsRef.current.clear()
                   replaceReviewIssues([])
@@ -1413,6 +1632,11 @@ export default function LatexVisualEditor({
             </div>
           )}
           <div className="flex-1" />
+          <button type="button" onClick={() => setHistoryOpen(open => !open)}
+            aria-expanded={historyOpen} aria-label={t('latex.memory.history')}
+            className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-ink-muted hover:bg-black/5">
+            <History size={13} />{t('latex.memory.history')} {checkpoints.length || ''}
+          </button>
           <span className="shrink-0 px-1 text-[10px] text-ink-faint">
             {saving ? t('latex.saving') : dirty ? t('latex.unsaved') : t('latex.saved')}
           </span>
@@ -1653,7 +1877,7 @@ export default function LatexVisualEditor({
       <div className="min-h-0 flex-1 overflow-hidden">
         <CodeMirror
           value={value}
-          onChange={onChange}
+          onChange={forwardEditorChange}
           editable={!readOnly}
           autoFocus={mode === 'source'}
           onCreateEditor={(view) => {
@@ -1668,16 +1892,7 @@ export default function LatexVisualEditor({
               : vscodeLightEditorTheme
           }
           height="100%"
-          basicSetup={{
-            lineNumbers: mode === 'source',
-            highlightActiveLine: mode === 'source',
-            highlightActiveLineGutter: mode === 'source',
-            foldGutter: mode === 'source',
-            tabSize: 2,
-            defaultKeymap: false,
-            searchKeymap: false,
-            historyKeymap: false
-          }}
+          basicSetup={editorBasicSetup}
           style={{ height: '100%', fontSize: mode === 'visual' ? 16 : 13 }}
         />
       </div>

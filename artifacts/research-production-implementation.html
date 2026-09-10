@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Linco · implementation handoff · 9 September 2026</div><h1>From research evidence to a paper you can trust</h1><p class=\"lede\">A first implementation of remote research context, reviewable academic edits, durable review memory, and local figure / TeX production.</p><div class=\"summary-band\"><div><span class=\"k\">Source</span>Implemented</div><div><span class=\"k\">Component tests</span>Passed</div><div><span class=\"k\">Desktop executable</span>Rebuild pending</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout rec\"><div class=\"callout-h\">One remaining build gate</div><p>The updated desktop executable cannot be built here yet: Microsoft C++ Build Tools and the Windows SDK are missing. The existing development window still uses an older native backend. Its live-reloaded frontend is not proof that the new commands are available.</p><p><b>Next action:</b> approve installing the Windows build tools, then rebuild and validate the actual desktop workflow. No release was published and the installed v1.0.8 app was not replaced.</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>The interaction model</h2><div class=\"callout olive\"><b>Choose the evidence once.</b> Point Research context at the experiment repository, even when the paper lives in a different repository on the same host. Select code, configuration, results and notes explicitly.</div><div class=\"grid col-3\"><div class=\"card\"><div class=\"eyebrow\">01 · Understand</div><h3>Remote evidence</h3><p>Capture only selected text files. Keep exact bytes, source paths, timestamps and SHA-256 fingerprints locally. Refresh checks for changes.</p></div><div class=\"card\"><div class=\"eyebrow\">02 · Collaborate</div><h3>Reviewable writing</h3><p>Request language and project-consistency suggestions. Read their reasons and cited excerpts; accept or reject individual edits. Old findings remain in history.</p></div><div class=\"card\"><div class=\"eyebrow\">03 · Produce</div><h3>Local tools</h3><p>Compile a bounded remote paper snapshot with local TeX. Render selected CSV/TSV results locally to SVG and editable PowerPoint bar figures.</p></div></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Where to open it after rebuilding",
+      "What you can do",
+      "What remains under your control"
+    ],
+    "rows": [
+      [
+        "Documents → Research context",
+        "Set a separate research repository, select evidence files, write the paper brief, capture or refresh sources.",
+        "No whole-repository upload; review selected files for private data before sharing."
+      ],
+      [
+        "Documents → Review / Polish → Review history",
+        "Request academic corrections, inspect reasons and evidence excerpts, accept/reject edits, export history.",
+        "No automatic AI calls when reopening. Changed text or refreshed evidence retires stale active suggestions."
+      ],
+      [
+        "Research context → Export context for ChatGPT",
+        "Download a bounded packet with manuscript text, author brief and source excerpts.",
+        "You decide whether to upload it to ChatGPT. Browser chats do not synchronize automatically."
+      ],
+      [
+        "Research context → Publication figure; also Drawing in a remote session",
+        "Choose columns, units and chart type; save a new figure revision with its exact data and recipe.",
+        "Missing values and ambiguous tables are rejected. No silent aggregation or invented error bars."
+      ],
+      [
+        "Figure → Open editable PowerPoint → Approve preview and save",
+        "Prepare native editable objects locally, inspect the preview, then explicitly save.",
+        "Windows PowerPoint and Node.js are required locally, not on the remote server. Manual edits still need scientific review."
+      ],
+      [
+        "Documents → Compile",
+        "Copy supported paper inputs from the remote repository into a fresh local job and use the local TeX runtime.",
+        "Remote files are read-only during compilation. PDF, log, source hashes and compiler path remain in the local job."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>What is preserved between sessions</h2><p>Paper reviews are scoped by host, repository and complete manuscript path. Checkpoints retain the source text, suggested edits, decisions, model metadata and cited source excerpts. A second window cannot silently overwrite another window’s saved history.</p><p>Research captures restore from local disk without calling the model or rereading the server. New source fingerprints invalidate active findings while keeping earlier checkpoints. Each figure revision saves its SVG, exact table, recipe and initial geometry. PowerPoint saves also record inspected native objects and the final presentation fingerprint.</p><div class=\"callout\"><b>Fingerprint ≠ scientific proof.</b> A current code file does not prove that an earlier experiment used that revision. Configuration does not prove a run completed. Missing evidence is not proof that a claim is false. The reviewer is instructed to distinguish these cases, but a human must still check claims, provenance and citations.</div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Validation performed",
+      "Result",
+      "Scope / limitation"
+    ],
+    "rows": [
+      [
+        "TypeScript unit suite",
+        "308 passed",
+        "Parsing, rendering geometry, review memory and existing regression tests."
+      ],
+      [
+        "Browser interaction tests",
+        "8 passed",
+        "Restore without AI calls, accept/reject history, cross-window conflict handling, changed-evidence invalidation, exact figure geometry, explicit PowerPoint save and late-response isolation."
+      ],
+      [
+        "Python agent tests in WSL",
+        "7 passed",
+        "Selected-file boundaries, symlinks, path traversal, binary/size limits, FIFOs and source changes during capture."
+      ],
+      [
+        "Frontend",
+        "Type check and production build passed",
+        "Frontend validation is separate from the native executable."
+      ],
+      [
+        "Rust",
+        "Metadata/type check passed against a coherent set of cached dependencies",
+        "Checks native source types without linking. A normal Cargo build and native Rust test execution remain pending the C++ toolchain."
+      ],
+      [
+        "Real remote paper → local TeX",
+        "Passed; exit 0; PDF produced",
+        "14 files / 119,416 bytes captured read-only. The current main file produces one page; this does not validate a complete scientific manuscript. Existing xcolor, note-margin and empty-bibliography warnings remain."
+      ],
+      [
+        "Real Windows PowerPoint component",
+        "Prepared, visually inspected and saved successfully; zero layout warnings",
+        "Synthetic test values only, not the researcher’s experiment results. SVG and native shape geometry use the same renderer."
+      ],
+      [
+        "Release / platform matrix",
+        "Not performed",
+        "No new installer, updater notification or GitHub release. macOS end-to-end validation is still required."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>Bundling the tools, not installing them on every server</h2><p>The remote-paper test exposed missing TeX packages. The offline supplement now adds <code>changes</code>, <code>todonotes</code>, <code>truncate</code> and <code>listingsutf8</code>, with upstream license notices, package metadata and archive hashes. Both Windows and macOS bundle configurations include the supplement; only Windows compilation was exercised here.</p><p>Compilation disables project <code>latexmkrc</code> loading and shell escape, uses a fresh output directory, and has time/log-size limits. This is not a complete operating-system sandbox: compile only trusted TeX projects.</p><p>Package source: <a href=\"https://ctan.org/pkg/changes\">CTAN Changes</a>. Bundle provenance: <code>src-tauri/resources/tex/supplement/README.md</code>.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Important limits of this first implementation</h2><ul><li>The integrated writer currently polishes and reviews manuscript passages; it is not yet an end-to-end autonomous full-paper drafting or claim-verification system. Live model quality has not been benchmarked in this turn.</li><li>Explicit evidence capture is limited to 16 UTF-8 files, 1 MiB per file and 8 MiB total. Model/export excerpts are bounded and may omit relevant evidence. Remote TeX snapshots have separate 2,000-file / 100 MiB limits and do not follow symlinks.</li><li>Figure rendering currently supports small categorical bar/line charts with up to 20 short labels. It does not calculate statistical tests, uncertainty or numerical x-axis spacing. Editable PowerPoint export currently supports bars on Windows.</li><li>Review history is local IndexedDB with an explicit 20 MB text limit; export it for backup. Capture and production directories are retained on disk. There is no automatic cross-device backup or retention manager yet.</li><li>Nothing automatically writes figures back to the remote paper. Evidence and saved figures are records of inputs and outputs, not a guarantee of experimental reproducibility.</li></ul>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Files and verification records</h2><p>Main implementation: <code>src/components/ResearchProduction.tsx</code>, <code>src/lib/researchProduction.ts</code>, <code>src-tauri/src/research.rs</code>, <code>src-tauri/src/latex_snapshot.rs</code>, <code>src-tauri/src/latex_ai.rs</code>, <code>src-tauri/src/latex.rs</code>, and <code>scripts/render-research-powerpoint.mjs</code>.</p><p>Test logs: <a href=\"research-final-unit-tests.log\">unit suite</a> · <a href=\"research-final-browser-tests.log\">browser suite</a> · <a href=\"research-rust-verified.log\">Rust type check</a> · <a href=\"research-latex-final-smoke.log\">remote-to-local TeX</a> · <a href=\"research-powerpoint-record-test.log\">PowerPoint</a>.</p><p>Local PDF: <a href=\"../tmp/research-production-smoke-efhTar/output/iclr2027_conference.pdf\">compiled current manuscript</a>. Editable test figure: <a href=\"../tmp/research-production-smoke-9dCROC/figure.pptx\">synthetic PowerPoint fixture</a>. These test directories are ignored by Git; the remote paper was not edited.</p><p>The editable notebook format comes from the HTML kit. The PowerPoint Live skill informed native-object rendering, layout inspection and preview-before-save. The ChatGPT handoff follows the separation between <a href=\"https://learn.chatgpt.com/docs/projects\">ChatGPT Projects</a> and a <a href=\"https://learn.chatgpt.com/docs/non-interactive-mode\">non-interactive Codex workflow</a>; it does not claim the same models, writing quality or shared browser-chat state.</p>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

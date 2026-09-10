@@ -1132,6 +1132,55 @@ export default function App(): JSX.Element {
     handle.focus()
   }
 
+  // Figure work always belongs to this machine: the slide canvas drives desktop
+  // PowerPoint over COM, and the agent reaches it through an MCP server registered
+  // with the local CLI. When the workspace is remote the resident session runs on
+  // the server, so a request to draw is routed to a local session on the local
+  // working directory instead, created on demand and then kept like any other.
+  const localFigureCwd = config?.cwd || undefined
+  const localFigureChatId = `chat:local:${agentId}:${localFigureCwd ?? ''}`
+
+  const submitToLocalAgent = (text: string): void => {
+    const body = text.trim()
+    if (!body || !localFigureCwd) return
+    setChatSessions((prev) => prev.some((s) => s.id === localFigureChatId)
+      ? prev
+      : [...prev, {
+          id: localFigureChatId,
+          connId: 'local',
+          cwd: localFigureCwd,
+          host: undefined,
+          identity: undefined,
+          env: agentEnvVars,
+          command: initialCommand,
+          usage: {
+            agentId: defaultAgent?.id || 'agent',
+            agentName: defaultAgent?.name || 'Agent',
+            provider: defaultAgent?.provider || '',
+            model: defaultAgent?.model || ''
+          }
+        }])
+    // A session created just now has no PTY yet, so wait for its handle rather
+    // than dropping the request.
+    const started = Date.now()
+    const deliver = (): void => {
+      const handle = chatRefs.current.get(localFigureChatId)
+      if (!handle) {
+        if (Date.now() - started < 20000) window.setTimeout(deliver, 150)
+        return
+      }
+      handle.write(body)
+      const isWindows = navigator.platform.toLowerCase().includes('win')
+      if (isWindows) {
+        window.setTimeout(() => handle.write('\r'), 120)
+        window.setTimeout(() => handle.write('\r'), 320)
+      } else {
+        window.setTimeout(() => handle.write('\r'), 16)
+      }
+    }
+    deliver()
+  }
+
   const handleInstallUpdate = async (): Promise<void> => {
     if (!availableUpdate || installingUpdate) return
     setInstallingUpdate(true)
@@ -1561,6 +1610,8 @@ export default function App(): JSX.Element {
               className="absolute right-0 top-0 bottom-0 z-10"
             >
               <DrawingView
+                localCwd={localFigureCwd}
+                onSubmitToLocalAgent={submitToLocalAgent}
                 host={host}
                 cwd={cwd}
                 onSubmitToAgent={submitToAgent}

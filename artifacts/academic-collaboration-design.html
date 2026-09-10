@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Linco · interaction design proposal · 9 September 2026</div><h1>A writing partner that remembers the science.</h1><p class=\"lede\">You own the argument. Your preferred AI helps express it. Linco connects every revision to the evidence and decisions behind it.</p><div class=\"summary-band\"><div><span class=\"k\">Primary surface</span>The manuscript, not a terminal</div><div><span class=\"k\">Unit of collaboration</span>A passage + its claim + its evidence</div><div><span class=\"k\">Status</span>Design proposal, not shipped functionality</div></div><div class=\"callout rec\"><div class=\"callout-h\">My product decision</div>Build a manuscript-centered workspace with a collapsible review margin and a durable research memory. Let you write with ChatGPT in the browser when you prefer it; keep coding agents available for collecting project evidence and running explicitly approved checks.</div><p>Your experience that ChatGPT writes better is a useful product requirement, not something to argue away. It does not establish that one model is universally better. We should preserve the experience you prefer and evaluate writing quality on your own passages.</p><div class=\"toc\"><a href=\"#workspace\">Workspace</a><a href=\"#collaboration\">Collaboration loop</a><a href=\"#memory\">Saved analysis</a><a href=\"#chatgpt\">ChatGPT handoff</a><a href=\"#delivery\">First delivery</a></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"workspace\">01 · One paper. One focused conversation.</h2><p>The manuscript gets most of the window. A small project outline stays on the left; one contextual panel on the right switches between discussion, suggestions, and supporting evidence. History is a drawer, not a permanent fourth column.</p><svg viewBox=\"0 0 960 500\" width=\"100%\" role=\"img\" aria-labelledby=\"writing-layout-title writing-layout-desc\"><title id=\"writing-layout-title\">Proposed Linco writing workspace</title><desc id=\"writing-layout-desc\">A compact project outline, large manuscript editor, and contextual review margin. The bottom resume strip shows a saved checkpoint and evidence that needs rechecking. Controls are an illustration, not working product buttons.</desc><rect x=\"1\" y=\"1\" width=\"958\" height=\"498\" rx=\"16\" fill=\"#FAF9F5\" stroke=\"#D1CFC5\"/><path d=\"M1 56H959M170 56V446M652 56V446M1 446H959\" stroke=\"#D1CFC5\" fill=\"none\"/><g font-family=\"system-ui, sans-serif\" fill=\"#3D3D3A\"><text x=\"20\" y=\"34\" font-size=\"17\" font-weight=\"650\">Linco</text><text x=\"98\" y=\"33\" font-size=\"13\">Project Atlas / Paper</text><text x=\"374\" y=\"33\" font-size=\"13\">Write</text><text x=\"439\" y=\"33\" font-size=\"13\">Review</text><text x=\"516\" y=\"33\" font-size=\"13\">Preview</text><text x=\"756\" y=\"33\" font-size=\"12\">Saved locally · History</text><text x=\"20\" y=\"88\" font-size=\"11\" fill=\"#87867F\">PAPER OUTLINE</text><text x=\"20\" y=\"124\" font-size=\"13\">Abstract</text><rect x=\"11\" y=\"141\" width=\"148\" height=\"33\" rx=\"7\" fill=\"#E6E3DA\"/><text x=\"20\" y=\"162\" font-size=\"13\" font-weight=\"600\">Introduction</text><text x=\"20\" y=\"201\" font-size=\"13\">Related work</text><text x=\"20\" y=\"240\" font-size=\"13\">Method</text><text x=\"20\" y=\"279\" font-size=\"13\">Experiments</text><text x=\"20\" y=\"318\" font-size=\"13\">Limitations</text><text x=\"20\" y=\"402\" font-size=\"12\">Evidence library ↗</text><text x=\"204\" y=\"91\" font-size=\"11\" fill=\"#87867F\">INTRODUCTION · PARAGRAPH 3</text><text x=\"204\" y=\"131\" font-size=\"25\" font-family=\"Georgia, serif\">What does the evidence support?</text><g font-size=\"16\" font-family=\"Georgia, serif\"><text x=\"204\" y=\"174\">Prior work leaves open whether peer feedback</text><text x=\"204\" y=\"202\">remains useful under distribution shift.</text><rect x=\"201\" y=\"218\" width=\"420\" height=\"27\" rx=\"4\" fill=\"#FAF3E6\"/><text x=\"204\" y=\"237\">Our method consistently improves robustness.</text><text x=\"204\" y=\"274\">We study this question through controlled</text><text x=\"204\" y=\"302\">comparisons of feedback selection strategies.</text></g><rect x=\"204\" y=\"336\" width=\"408\" height=\"36\" rx=\"8\" fill=\"#FFFFFF\" stroke=\"#D1CFC5\"/><text x=\"216\" y=\"359\" font-size=\"12\">Polish  ·  Strengthen argument  ·  Check evidence</text><text x=\"204\" y=\"414\" font-size=\"11\" fill=\"#87867F\">Illustrative text, not a finding from your research</text><text x=\"677\" y=\"90\" font-size=\"12\" font-weight=\"650\">REVIEW MARGIN</text><rect x=\"675\" y=\"108\" width=\"262\" height=\"225\" rx=\"11\" fill=\"#FFFFFF\" stroke=\"#D1CFC5\"/><text x=\"691\" y=\"135\" font-size=\"12\" fill=\"#9A6B28\">NEEDS EVIDENCE · CLAIM C-07</text><text x=\"691\" y=\"165\" font-size=\"14\" font-weight=\"600\">“Consistently” is too broad.</text><g font-size=\"12\"><text x=\"691\" y=\"193\">Only one setting is linked to this claim.</text><text x=\"691\" y=\"218\">Narrow the wording, or attach</text><text x=\"691\" y=\"237\">the remaining evaluations.</text><text x=\"691\" y=\"272\" fill=\"#788C5D\">View evidence →</text><text x=\"691\" y=\"307\">Compare wording · Keep mine</text></g><rect x=\"675\" y=\"354\" width=\"262\" height=\"67\" rx=\"8\" fill=\"#FFFFFF\" stroke=\"#D1CFC5\"/><text x=\"689\" y=\"379\" font-size=\"12\">Ask about this passage…</text><text x=\"689\" y=\"405\" font-size=\"11\" fill=\"#87867F\">Context: selection + 2 approved sources</text><circle cx=\"23\" cy=\"472\" r=\"4\" fill=\"#788C5D\"/><text x=\"36\" y=\"477\" font-size=\"12\">Checkpoint 12 · Your wording decisions are saved</text><text x=\"604\" y=\"477\" font-size=\"12\" fill=\"#9A6B28\">1 source changed · Recheck affected claims →</text></g></svg><p class=\"note\">Visual specification: quiet warm or dark paper surfaces; frosted glass only on navigation chrome, never behind manuscript text. Compact 12px controls, independently adjustable 14–16px reading text, restrained serif prose, monospaced source view. Theme and size persist. On narrow windows, the review margin becomes a drawer. All severity labels use text as well as color.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"collaboration\">02 · Different responsibilities, one shared state</h2><p>These are task roles, not four compulsory chatbots. One provider can perform several roles. Separate prompts, permissions, and outputs prevent writing assistance from silently turning into repository maintenance.</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Role",
+      "Responsible for",
+      "Not allowed to assume"
+    ],
+    "rows": [
+      [
+        "You — author",
+        "Research question, contribution, interpretation, intended voice, final approval.",
+        "That fluent writing means the claim is correct."
+      ],
+      [
+        "Writing partner — your chosen AI",
+        "Argument structure, section drafting, sentence alternatives, grammar and cohesion.",
+        "Missing results, citations, novelty, or a stronger claim than the evidence supports."
+      ],
+      [
+        "Evidence assistant — repository tools / coding agent",
+        "Read selected code revisions, inspect run artifacts, trace tables and citations, propose reproducibility checks.",
+        "That the current code was used in an older run; that a configured experiment actually completed."
+      ],
+      [
+        "Linco — coordinator",
+        "Keep manuscript versions, evidence links, review decisions, approvals, task progress and resumable checkpoints.",
+        "That provider chat history is a sufficient or portable research record."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<h2>03 · The core loop: propose → discuss → compare → approve → remember</h2><div class=\"timeline\"><div class=\"tl-entry\"><div class=\"tl-time\">1 · Frame</div><div class=\"tl-body\"><b>You select a passage or section.</b> Choose Polish, Draft, or Check evidence. Linco shows the active project, passage, intended audience, and sources that will be shared. Defaults come from a reusable paper brief; no repeated questionnaire.</div></div><div class=\"tl-entry\"><div class=\"tl-time\">2 · Ground</div><div class=\"tl-body\"><b>The assistant checks whether it has enough context.</b> If one missing choice changes the scientific meaning, ask one focused question. Otherwise work with explicit limitations. “No linked evidence” is not “this claim is false.”</div></div><div class=\"tl-entry\"><div class=\"tl-time\">3 · Propose</div><div class=\"tl-body\"><b>Return an editorial card, not a wall of chat.</b> Show the original, proposed wording, a short rationale, meaning-change label, and exact supporting excerpts when relevant. One default revision; alternatives are available on request.</div></div><div class=\"tl-entry\"><div class=\"tl-time\">4 · Negotiate</div><div class=\"tl-body\"><b>You can edit the proposed wording directly.</b> Reply “too strong,” “keep this term,” “show the evidence,” or “try another framing” on that card. Discussion stays anchored to the paragraph. Drafting a whole section starts with an argument outline for approval.</div></div><div class=\"tl-entry\"><div class=\"tl-time\">5 · Commit</div><div class=\"tl-body\"><b>Accept selected changes, keep yours, or defer.</b> Check the current text against the revision’s base before applying. A newer human edit causes a conflict preview, never an overwrite. Separate wording-only edits from changes to claims.</div></div><div class=\"tl-entry\"><div class=\"tl-time\">6 · Remember</div><div class=\"tl-body\"><b>Save a checkpoint automatically.</b> Record what changed, why, evidence versions, accepted and rejected proposals, and the next unresolved question. Returning restores this state locally without starting another model request.</div></div></div><div class=\"callout olive\"><div class=\"callout-h\">Conversation is a negotiation around an artifact</div>The useful result is not “the AI answered.” It is “we clarified the claim, improved the paragraph, and recorded why this version is defensible.”</div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>04 · Walk through a realistic writing session</h2><p class=\"note\">Expand the steps below. This is an illustrative interaction walkthrough, not a live model or an audit of your experimental results.</p><details open><summary>You: “Draft the introduction from this project.”</summary><p>Linco first offers an editable <b>paper brief</b>: research question, contribution candidates, strongest evidence, relevant prior work, limitations, target venue and year, and terminology to preserve. Paper folder, code repository, and experiment records are linked separately.</p><p>The assistant asks: “Is the main contribution the selection method, or the empirical finding about feedback reliability?” Your answer sets the outline. It does not start by describing scripts and modules.</p></details><details><summary>AI: “Here is the argument before the prose.”</summary><p><b>Problem → unresolved gap → proposed idea → evidence → qualified contribution.</b> Each contribution points to an evidence card or a clearly marked gap. You reorder this outline and approve it before section drafting.</p><p>In the manuscript: discuss mechanisms and scientific implications. Function names and launch commands belong in reproducibility material when needed. Missing citations remain requests for sources, never fabricated bibliography entries.</p></details><details><summary>You: “Make this sentence stronger, but don’t overclaim.”</summary><div class=\"file-diff\"><div class=\"fd-head\"><span class=\"fd-path\">Introduction · claim C-07 · illustrative revision</span></div><pre class=\"diff\"><span class=\"dl del\">Our method consistently improves robustness.</span><span class=\"dl add\">In the evaluated setting, our method improves robustness relative to the tested baseline.</span></pre></div><p><span class=\"badge warn\">Scientific scope changed</span> This alternative is appropriate only if the linked evaluation actually supports the direction and comparison. Otherwise the assistant offers a research-question formulation and requests the missing result. It never makes the example wording a fact merely by saving it.</p><p>You choose “Keep the qualification” and pin the preference: “Do not generalize beyond evaluated settings.” Linco remembers the decision and its scope.</p></details><details><summary>Next week: “Where were we?”</summary><div class=\"callout\"><div class=\"callout-h\">Resume · Introduction checkpoint 12</div><p>We settled the framing around feedback reliability. Two wording suggestions remain. The cross-domain claim still needs evidence. One linked evaluation has changed since this review.</p><p><b>Suggested next action:</b> compare the changed evaluation with claim C-07. Existing grammar decisions do not need to be repeated.</p></div></details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>05 · Three review lenses, different standards of proof</h2><div class=\"grid col-3\"><div class=\"card\"><div class=\"eyebrow\">Language</div><h3>Is it clear?</h3><p>Grammar, spelling, concision, cohesion and consistent terminology. Preserve equations and citation keys. Label optional style preferences as optional.</p></div><div class=\"card\"><div class=\"eyebrow\">Argument</div><h3>Does it persuade?</h3><p>Motivation, gap, contribution, comparison fairness, limitations and logical flow. Ask whether the conclusion follows from the presented evidence.</p></div><div class=\"card\"><div class=\"eyebrow\">Evidence</div><h3>Can we support it?</h3><p>Link a claim to a specific run, table, source passage or code revision. Distinguish supported, contradicted, needs evidence, and stale. Show what was checked.</p></div></div><p>AI suggestions are proposals until you accept them; accepted prose is not automatically a verified research fact. An AI-inferred claim-to-source link stays provisional until its source is inspected. Never display an invented “conference acceptance score.” Venue expectations and policies must be checked for the selected year; strong writing cannot substitute for strong research.</p><p>Expensive project-wide reviews are explicit actions. Lightweight checks can be opt-in while typing. Progress reports say “7 of 12 passages checked; 2 evidence gaps” rather than implying the whole paper has been verified.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"memory\">06 · A saved analysis stack that does not forget rejected ideas</h2><p><b>Use a checkpoint timeline with branches, not a destructive last-in-first-out stack.</b> “Try a different framing” creates a branch. Returning to an old analysis does not roll back the manuscript. Restoring old prose is a separate, previewed action.</p><div class=\"grid col-2\"><div class=\"card\"><h3>Project memory</h3><p>Question, terminology, evidence ledger, explored approaches, negative results, limitations and confirmed decisions. Every conclusion includes its source, scope, date and status. “Not yet tested” stays distinct from “tested and unsuccessful.”</p></div><div class=\"card\"><h3>Writing checkpoint</h3><p>Manuscript version, active section, pending edits, brief rationale, evidence fingerprints, decisions, branch parent and next step. Also record provider/model, task configuration and the context manifest used.</p></div></div><p>Save useful analysis outputs and concise rationales—not an AI’s private internal reasoning. Summaries help resume work but never replace underlying sources, findings or decisions.</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Event",
+      "What the user sees",
+      "Persistence rule"
+    ],
+    "rows": [
+      [
+        "Close and reopen",
+        "The same passage, pending suggestions and last decision.",
+        "Restore local state first; no network call required."
+      ],
+      [
+        "Manuscript edited elsewhere",
+        "Some suggestions are stale; compare before applying.",
+        "Match source version and anchored text; do not trust old offsets."
+      ],
+      [
+        "A linked result or code revision changes",
+        "Recheck affected claims, with the exact changed source.",
+        "Track dependencies; missing/offline sources are unverified, not silently current."
+      ],
+      [
+        "You reject an edit",
+        "It stays dismissed in the relevant context.",
+        "Do not repeat it unless relevant evidence or text changes; explain why it returned."
+      ],
+      [
+        "You try another narrative",
+        "Two named branches, compared side by side.",
+        "Preserve both branches and their decisions; explicit merge."
+      ],
+      [
+        "A request fails or the app crashes",
+        "Last completed findings remain; interrupted task is visible.",
+        "Persist before dispatch and after each completed unit; explicit retry, no blind replay."
+      ],
+      [
+        "You change AI provider",
+        "Continue with an inspectable context packet.",
+        "Provider-neutral memory remains authoritative; no promise of identical output or imported hidden state."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>Implementation contract for durable memory</summary><p>Use a versioned local database with transactional writes, scoped by a stable Linco project ID, manuscript ID and branch. Store source snapshots and evidence fingerprints as content-addressed objects. Keep connection details separate; equal folder names on two hosts must not collide.</p><p>Save decisions immediately; debounce ordinary text snapshots. Provide user-controlled backup/export in portable JSON and Markdown plus referenced manuscript versions. Credentials stay out of the export. Bound disposable cache, but do not silently expire pinned decisions or research conclusions. A database failure shows “Not saved” and offers recovery/export.</p><p>Default to local-only storage. Optional encrypted sync is a separate, explicit feature; app storage does not automatically follow the remote repository to another computer. Project export/import supplies the first portable path.</p><p>On resume, construct the next model request from the paper brief, relevant confirmed memory, selected passage, unresolved issues and approved evidence. Show this context before sending. Never rely solely on a provider conversation identifier.</p></details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"chatgpt\">07 · Respect your preference for ChatGPT’s web writing experience</h2><p><b>I would support browser ChatGPT as a first-class handoff, not force you to write in a coding terminal.</b> Separately, Linco can offer an integrated API writing mode. These are different experiences; an API model call should not be labeled “the ChatGPT web app.”</p><p>Official documentation describes ChatGPT projects as organizing related chats, files and instructions, and says a ChatGPT project does not itself provide direct access to a local folder: sources need to be uploaded or connected. <a href=\"https://learn.chatgpt.com/docs/projects\">OpenAI: Projects and chats</a>.</p><div class=\"callout rec\"><div class=\"callout-h\">A practical first workflow</div><b>Prepare writing packet → preview what leaves Linco → copy/download → open your ChatGPT project → write there → paste/import the result into Linco → compare and approve.</b><p>The packet contains the selected section, agreed argument, verified evidence excerpts, citation keys, style preferences, unresolved questions and a source-version ID. It excludes secrets, unrelated files and raw logs by default. Linco shows exactly what was omitted, too.</p></div><p>Import matches the result to the exported base version. If you edited the paper meanwhile, Linco shows a three-way comparison. Ordinary pasted prose is supported; we should not require ChatGPT to emit perfect JSON. Unrecognized formatting opens in a staging editor, never overwrites the paper.</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Integration route",
+      "User benefit",
+      "Boundary / recommendation"
+    ],
+    "rows": [
+      [
+        "ChatGPT browser handoff — first",
+        "Use the writing experience you already prefer; bring revisions back with provenance.",
+        "Manual sharing/import initially. No assumed embedding, browser scraping, account-cookie access, or automatic transcript sync."
+      ],
+      [
+        "Integrated writing API — optional",
+        "Inline drafting, streaming suggestions, direct review cards and controlled context.",
+        "Requires configured API access and visible usage controls. Does not promise ChatGPT web parity or the same subscription entitlements."
+      ],
+      [
+        "Supported connector — later feasibility work",
+        "Selected project evidence and review proposals could travel through a supported connection.",
+        "Validate supported interfaces and account access first; explicit authentication and least-privilege sharing. Not a dependency for the first version."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<p>OpenAI’s API supports durable conversation objects, but that is provider conversation state—not a complete research record or proof that Linco can import your browser chats. Keep the authoritative editorial history in Linco. <a href=\"https://developers.openai.com/api/docs/guides/conversation-state\">OpenAI: Conversation state</a>.</p><details><summary>How we choose the writing experience rather than guess</summary><p>Use 8–12 representative passages you approve: introduction, method, results and limitations. Compare your preferred ChatGPT workflow with Linco’s candidate writing mode using the same evidence packet and task. Hide the origin while you judge voice, clarity, scientific fidelity, unsupported claims and effort to reach a usable revision. Where settings differ, record them rather than pretending this is a controlled model benchmark.</p><p>Default to the experience you prefer. Improve the weaker parts of Linco’s context and review workflow before adding a longer model menu. No actual model evaluation has been run for this proposal.</p></details>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>08 · Better collaboration while I build this with you</h2><p>Every meaningful revision should leave one compact work card in Linco, linked to the changed files and the current-turn diff:</p><div class=\"card\"><div class=\"eyebrow\">Example work card · not an implemented result</div><h3>Preserve paper review state</h3><p><b>Outcome:</b> reopen the paper without losing decisions.</p><p><b>Current step:</b> validate restoration after a source edit.</p><p><b>Decision needed:</b> none; project-local memory is the default.</p><p><b>Next preview:</b> close/reopen a paper, then inspect a stale suggestion.</p><p><b>Evidence of completion:</b> tested behavior, known limits, exact diff, checkpoint identifier.</p></div><p>I should ask for your judgment where it matters—voice, scientific interpretation, and interaction preference—while handling routine implementation and checks. Product design, implemented code, locally verified behavior and published releases get separate status labels. A mockup must never look like a completed release announcement.</p>"
+  },
+  {
+    "type": "html",
+    "html": "<h2 id=\"delivery\">09 · Build the smallest complete collaboration loop first</h2><p>The existing editor already has passage-level polish, review suggestions, and in-memory issue tracking. Its opened-file effect clears review state, and the current drafting prompt limits an empty-selection continuation to three sentences. The new interaction model therefore needs real persistence and a section-drafting workflow, not just a more academic system prompt.</p><p class=\"note\">Inspected: <code>src/components/latex/LatexVisualEditor.tsx</code>, <code>src-tauri/src/latex_ai.rs</code>. The compiler snapshot groundwork from the preceding work remains uncommitted; this proposal does not claim that compilation or the new writing workflow is finished.</p>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Order",
+      "Complete user-visible slice",
+      "Acceptance check"
+    ],
+    "rows": [
+      [
+        "1 · Remember",
+        "Saved findings, editorial decisions, resume card and stale-state handling.",
+        "Accept one edit, dismiss one, close/reopen: both decisions persist; reopening makes no model request."
+      ],
+      [
+        "2 · Collaborate",
+        "Paper brief, approved context packet, ChatGPT handoff and import-to-diff.",
+        "Export a passage, edit it locally, import an external revision: conflict is shown and no text is overwritten."
+      ],
+      [
+        "3 · Draft scientifically",
+        "Argument outline approval, section drafting, language/argument/evidence lenses.",
+        "Unsupported results and citations remain flagged gaps; scientific scope changes require explicit approval."
+      ],
+      [
+        "4 · Ground and validate",
+        "Run/version-aware evidence links, selective rechecks, app-managed compile workflow.",
+        "Change a linked result: only dependent claims become stale; failed saves cannot compile an older manuscript as if it were current."
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout olive\"><div class=\"callout-h\">The distinguishing promise</div>Write with the AI you prefer. Return to a workspace that remembers what you explored, what the evidence supports, and why you chose these words.</div><p class=\"note\">Design only: this notebook uses Linco’s shared notebook shell and editable cells, with expandable walkthroughs and a static workspace illustration. It adds no live ChatGPT connection, runs no experiments, uploads no project files, and publishes no app release.</p>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

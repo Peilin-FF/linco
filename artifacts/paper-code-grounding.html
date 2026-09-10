@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grounding the paper in the code</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+ {
+  "type": "html",
+  "html": "<div class=\"eyebrow\">Linco &#183; paper workflow assessment &#183; 10 September 2026</div><h1>The feature works. It just cannot span two machines.</h1><p class=\"lede\">The assistant already walks your repository, ranks files against the passage you are editing, pulls them over SSH and quotes them with fingerprints. None of that is missing. What is missing is the ability to say that the paper is here and the code is over there, and that is precisely the arrangement you work in.</p><div class=\"summary-band\"><div><span class=\"k\">Diagnosis</span>One active connection drives everything</div><div><span class=\"k\">Today</span>Move the paper to the server and it works</div><div><span class=\"k\">Proper fix</span>Let evidence name its own machine</div><div><span class=\"k\">Tree state</span>Typecheck clean, 372 tests pass</div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>Why it feels disconnected</h2><p>Linco holds exactly one active connection. The working directory is chosen by whether that connection is set: remote if it is, local if it is not. Every panel, including the writing assistant&#8217;s evidence gathering, is handed that single pair. So the manuscript and the experiment code are always assumed to live on the same machine.</p><p>You clone Overleaf projects to Windows and write there, while your experiments sit on the server. That puts them on opposite sides of a boundary the system has no way to describe, and the assistant ends up searching your Windows disk for code that is not on it. It then answers from the prose alone, which is exactly the ill-suited advice you describe.</p><svg viewBox=\"0 0 900 300\" width=\"100%\" role=\"img\" aria-label=\"Two modes: everything on the server works, paper local with code remote does not\">\n<defs>\n<marker id=\"ah\" markerWidth=\"9\" markerHeight=\"9\" refX=\"8\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L0,6 L8,3 z\" fill=\"var(--olive)\"/></marker>\n<marker id=\"ahc\" markerWidth=\"9\" markerHeight=\"9\" refX=\"8\" refY=\"3\" orient=\"auto\"><path d=\"M0,0 L0,6 L8,3 z\" fill=\"var(--clay)\"/></marker>\n</defs>\n<text x=\"14\" y=\"20\" font-family=\"ui-monospace,monospace\" font-size=\"11\" fill=\"var(--olive)\">MODE A &#8212; CONNECTION ACTIVE, PAPER ON THE SERVER &#183; WORKS TODAY</text>\n<rect x=\"14\" y=\"30\" width=\"250\" height=\"96\" rx=\"10\" fill=\"var(--paper)\" stroke=\"var(--g300)\" stroke-width=\"1.5\"/>\n<text x=\"30\" y=\"52\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">WINDOWS</text>\n<text x=\"30\" y=\"76\" font-family=\"Georgia,serif\" font-size=\"14\" fill=\"var(--slate)\">Editor, bundled TeX</text>\n<text x=\"30\" y=\"98\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">compiles the snapshot locally</text>\n<text x=\"30\" y=\"116\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">renders figures locally</text>\n<rect x=\"636\" y=\"30\" width=\"250\" height=\"96\" rx=\"10\" fill=\"var(--paper)\" stroke=\"var(--olive)\" stroke-width=\"1.5\"/>\n<text x=\"652\" y=\"52\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">SERVER</text>\n<text x=\"652\" y=\"76\" font-family=\"Georgia,serif\" font-size=\"14\" fill=\"var(--slate)\">Paper + experiments</text>\n<text x=\"652\" y=\"98\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">assistant runs here, in the repo</text>\n<text x=\"652\" y=\"116\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">walks it, reads it, quotes it</text>\n<line x1=\"272\" y1=\"70\" x2=\"628\" y2=\"70\" stroke=\"var(--olive)\" stroke-width=\"1.5\" marker-end=\"url(#ah)\"/>\n<text x=\"450\" y=\"62\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--olive)\">one host, so evidence and manuscript agree</text>\n<line x1=\"628\" y1=\"104\" x2=\"272\" y2=\"104\" stroke=\"var(--olive)\" stroke-width=\"1.5\" marker-end=\"url(#ah)\"/>\n<text x=\"450\" y=\"96\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--olive)\">sources come down, PDF is built here</text>\n<text x=\"14\" y=\"182\" font-family=\"ui-monospace,monospace\" font-size=\"11\" fill=\"var(--clay)\">MODE B &#8212; PAPER CLONED TO WINDOWS &#183; WHAT YOU ACTUALLY DO</text>\n<rect x=\"14\" y=\"192\" width=\"250\" height=\"96\" rx=\"10\" fill=\"var(--paper)\" stroke=\"var(--clay)\" stroke-width=\"1.5\"/>\n<text x=\"30\" y=\"214\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">WINDOWS</text>\n<text x=\"30\" y=\"238\" font-family=\"Georgia,serif\" font-size=\"14\" fill=\"var(--slate)\">Paper, an Overleaf clone</text>\n<text x=\"30\" y=\"260\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">assistant runs here</text>\n<text x=\"30\" y=\"278\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">searches this disk for your code</text>\n<rect x=\"636\" y=\"192\" width=\"250\" height=\"96\" rx=\"10\" fill=\"var(--paper)\" stroke=\"var(--g300)\" stroke-width=\"1.5\"/>\n<text x=\"652\" y=\"214\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">SERVER</text>\n<text x=\"652\" y=\"238\" font-family=\"Georgia,serif\" font-size=\"14\" fill=\"var(--g500)\">Experiments</text>\n<text x=\"652\" y=\"260\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--g500)\">unreachable in this mode</text>\n<line x1=\"272\" y1=\"240\" x2=\"628\" y2=\"240\" stroke=\"var(--clay)\" stroke-width=\"1.5\" stroke-dasharray=\"5 4\" marker-end=\"url(#ahc)\"/>\n<circle cx=\"450\" cy=\"240\" r=\"13\" fill=\"var(--paper)\" stroke=\"var(--clay)\" stroke-width=\"1.5\"/>\n<path d=\"M444,234 L456,246 M456,234 L444,246\" stroke=\"var(--clay)\" stroke-width=\"1.8\"/>\n<text x=\"450\" y=\"270\" text-anchor=\"middle\" font-family=\"ui-monospace,monospace\" font-size=\"10\" fill=\"var(--clay)\">evidence inherits the manuscript&#8217;s machine, and the manuscript is local</text>\n</svg>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>What is already built</h2><p>Worth stating plainly, because it changes what should be built next. When the paper and the code do sit together, the loop you want already runs.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Capability",
+   "What it does today",
+   "Limits worth knowing"
+  ],
+  "rows": [
+   [
+    "Repository-grounded polish",
+    "Walks the project, ranks files by filename and keyword overlap against the passage, boosts what a text search matched, quotes excerpts with fingerprints. Works against the server as well as local disk",
+    "Twelve files and twenty-four thousand characters of evidence per request"
+   ],
+   [
+    "Where the assistant runs",
+    "With a subscription-mode agent and a connection active, it executes on the server inside the repository, so it can read code the prompt never named",
+    "That extra reading is not recorded, so suggestions can rest on sources they do not cite"
+   ],
+   [
+    "Whole-file review",
+    "Batches prose segments, returns accept or reject suggestions, has a repository consistency category",
+    "Sends no repository evidence at all unless you have typed file paths by hand"
+   ],
+   [
+    "Compile",
+    "Pulls the paper off the server and builds it with bundled TeX on Windows. The server needs no TeX",
+    "Rebuild after a prose edit measured at four and a half seconds. No shell escape and no project build config, so code listings and build-time vector conversion will not work"
+   ],
+   [
+    "Figures",
+    "Renders captured result files to publication SVG and to editable PowerPoint, locally",
+    "Nothing is written back into the paper automatically"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<h2>What to do this week</h2><div class=\"callout rec\"><div class=\"callout-h\">Put the manuscript on the server</div><p>Clone the Overleaf project into the same tree as your experiment repositories, keep the connection active, and point the research repository field at the experiment directory. The assistant then discovers and reads your code the way it was designed to, and compilation still happens on Windows against the bundled TeX, so you gain the context without needing anything installed over there.</p><p>This costs one clone and changes no code. It is worth doing before building anything, because it tells you whether repository grounding actually improves your revisions or whether the retrieval quality below is the real limit.</p></div><p class=\"note\">Your own audit of that server flagged a missing TeX toolchain. That no longer blocks anything: remote papers are snapshotted and compiled locally, and the build is recorded as local execution.</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>What stays broken in either mode</h2><div class=\"grid col-2\"><div class=\"card\"><div class=\"eyebrow\">Gap 1</div><h3>Results and logs are filtered out</h3><p>Automatic discovery skips output, checkpoint and experiment-tracking directories. Logs and notebooks are never eligible at all. Tables and metrics arrive only if you name them by hand, one to sixteen files at a time.</p><p>For a paper whose contribution is measured, that excludes most of the evidence that matters. The code that could have produced a number is admitted; the file holding the number is not.</p></div><div class=\"card\"><div class=\"eyebrow\">Gap 2</div><h3>Review runs blind</h3><p>Checking a whole section against the project is the request you will make most, and it is the one path that sends zero repository context by default. It offers a consistency verdict with nothing to be consistent with.</p></div><div class=\"card\"><div class=\"eyebrow\">Gap 3</div><h3>Relevance is decided before reading</h3><p>Files are picked by keyword overlap with the passage, then frozen. The assistant cannot follow a call, open the module underneath, or check what a configuration value actually is. One guess, made without reading anything.</p></div><div class=\"card\"><div class=\"eyebrow\">Gap 4</div><h3>Numbers have no origin</h3><p>Nothing records which file or run produced any figure in your tables, so a stale number is indistinguishable from a fresh one. A stale copy of your method section is sitting beside the live one right now, about twice its length.</p></div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>The size of the checking problem</h2><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">510</div><div class=\"stat-label\">numeric literals in your experiment section</div></div><div class=\"stat-card\"><div class=\"stat-num\">866</div><div class=\"stat-label\">numeric literals in your appendix</div></div><div class=\"stat-card\"><div class=\"stat-num\">12</div><div class=\"stat-label\">files of evidence per request, at most</div></div><div class=\"stat-card\"><div class=\"stat-num\">0</div><div class=\"stat-label\">tied to a file that produced them</div></div></div><p class=\"note\">Counted from your local clone. Not every literal is a result, since citation years and layout arguments are in there too. The result tables are among them, and none of them carry any record of where the value came from.</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>Order of work</h2><p>Ordered by friction removed for effort spent, assuming you would rather finish a paper than a platform.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "#",
+   "Change",
+   "Why it matters here",
+   "Rough size"
+  ],
+  "rows": [
+   [
+    "1",
+    "Let the evidence root name its own host, independent of the manuscript",
+    "Makes your actual arrangement expressible, so you can keep drafting in a local Overleaf clone and still be grounded in remote code",
+    "A day. The remote walk and read already exist and are already used by discovery"
+   ],
+   [
+    "2",
+    "Admit result files, logs and notebooks under explicit bounds, reading log tails rather than whole logs",
+    "The numbers in your tables live in exactly the files currently excluded",
+    "Hours. An allowlist and a size rule"
+   ],
+   [
+    "3",
+    "Give whole-file review the evidence that passage polish already gets",
+    "The request you will make most is the one that currently sends nothing",
+    "Hours. The path exists on the polish side"
+   ],
+   [
+    "4",
+    "Let the assistant search and read on its own, bounded and with every path recorded",
+    "Lifts the ceiling on relevance, and replaces the unrecorded reading it already does with cited sources",
+    "Days. The loop, the budget, the citation record"
+   ],
+   [
+    "5",
+    "Record where each number came from and re-check when the source changes",
+    "Turns a vague worry about stale results into a specific list, and clears the staleness warning instead of accumulating it",
+    "Days. Reuses capture, hashing and the checkpoint history"
+   ],
+   [
+    "6",
+    "Land the in-flight work",
+    "Ninety-seven uncommitted paths, clean typecheck, 372 passing tests, no commit",
+    "Hours"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<h2>Two things you will hit anyway</h2><div class=\"grid col-2\"><div class=\"card\"><h3>Position sync is built but never read</h3><p>Compilation already emits and archives the file that maps source lines to positions in the PDF, and nothing consumes it. Jumping between a sentence and its place in the PDF is nearly free from here and would be felt on every revision pass.</p></div><div class=\"card\"><h3>Shell escape is off, deliberately and permanently</h3><p>Builds run without shell escape and ignore project build configuration. Overleaf projects that depend on syntax-highlighted listings, build-time vector conversion or externalized diagrams will not compile. Better to know before importing one.</p></div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>What I would leave alone</h2><div class=\"procon\"><div class=\"pros\"><ul><li>TeX stays bundled on Windows. Provisioning a TeX tree per server is recurring work with no benefit, and the snapshot-and-build-locally design already removes the need.</li><li>Evidence stays exact bytes with fingerprints. That is what makes a later claim auditable, and it should survive every change above.</li><li>The Overleaf merge stays as it is. It refuses to write conflict markers, never picks a winner, and treats unresolved as a normal state rather than an error. That is the right posture for a manuscript.</li></ul></div><div class=\"cons\"><ul><li>No writes to the experiment repository. Read-only keeps the review honest and the blast radius at zero.</li><li>No calling any of this verification. A fingerprint does not prove which revision produced a result, as your own interface already says.</li><li>No raising the evidence cap as a substitute for relevance. A larger fixed bundle is more tokens spent on files the passage does not need.</li></ul></div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>Limits of this assessment</h2><p>I read the repository, your configuration and the local clone of the paper. I did not connect to the server, so the size and shape of the experiment repositories are unknown to me and any retrieval budget will need tuning against them. I did not run the assistant on a real passage, so the claim that retrieval beats keyword ranking is an argument from the mechanism rather than a measurement. The counts come from the clone as it stands and will drift as you write.</p><p class=\"note\">Nothing in the working tree was changed to produce this.</p>"
+ }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

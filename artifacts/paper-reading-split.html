@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {"type":"html","html":"<div class=\"eyebrow\">Linco · 10 September 2026 · implementation record</div><h1>Read the paper. Review the project separately.</h1><p class=\"lede\">Highlights help you understand a paper. The writing assistant checks whether the manuscript matches your research. These now have separate information boundaries.</p>"},
+  {"type":"table","head":["Responsibility","Input","Execution"],"rows":[["PDF highlights","Extracted PDF text only","Configured local AI connection"],["Article drafting & project consistency","Manuscript and relevant project evidence","Remote Codex in your SSH / subscription workflow; unchanged"],["LaTeX compilation & PDF display","Paper sources and compiled PDF","Local TeX and PDF renderer; unchanged"]]},
+  {"type":"html","html":"<div class=\"card\"><h2>What changed</h2><ul><li>The highlighting command no longer accepts a repository, SSH host, evidence paths, or author brief. It does not fetch project context before analysis.</li><li>The prompt contains only PDF pages and explicitly excludes project review. The local CLI runs in a private app-owned job folder.</li><li>The reader works without a project. Its local document identifier coordinates previews but is never sent to the highlighting backend.</li><li>Saved readings depend on PDF text and AI configuration, not project notes. Older project-grounded records remain on disk but are not reused for PDF-only readings.</li><li>Exact-quote matching, category colors, explanations, cancellation, progress, and retained previous highlights remain available.</li></ul><p>Project-aware writing prompts and remote execution were not changed. No VPN, account, or provider settings were modified.</p></div>"},
+  {"type":"html","html":"<div class=\"callout\"><div class=\"callout-h\">Local connection does not mean an offline model</div><p>The configured local agent still needs its own sign-in and network connection. The highlighter no longer waits for SSH project evidence, but this change does not guarantee a particular model response time. It reads selectable PDF text, not figures or scanned pages. Highlights are reading aids, not independent validation of scientific claims.</p></div>"},
+  {"type":"table","head":["Verification","Result"],"rows":[["Frontend unit tests","366 passed across 26 files"],["Native LaTeX / AI tests","21 passed"],["Native cancellation lifecycle","1 passed"],["PDF reader browser tests","5 passed: PDF-only payload, standalone reading, exact highlights, saved results, cancellation, and older-backend handling"],["Research production browser tests","4 passed"],["Writing-history browser tests","4 passed on separate rerun. Initial run had one page-reload timeout; the rerun's first test was still slow (1.8 minutes)."],["TypeScript / production frontend build","Passed; existing large-vendor-chunk warning remains"],["Desktop backend","Built successfully, including the named dev-window example"],["Launch","Automatic launch was blocked by the execution environment. The current app remains open; the new native backend is not running yet."],["Live cloud AI","Not rerun this turn. Browser results use synthetic PDF content and mocked AI, not a measured live-model performance result."]]},
+  {"type":"html","html":"<div class=\"card\"><h2>Rebuilt desktop version is ready</h2><p>Build: <code>C:\\Users\\Peilin\\Desktop\\Github\\linco\\tmp\\paper-pdf-only.exe</code>. Automatic launch was blocked; no alternate launch route was attempted. A frontend hot reload alone cannot update an older native backend.</p><p>To open the named dev window yourself, run the following in PowerShell from the repository while its frontend dev server is running on port 1420:</p><pre><code>$env:LINCO_PAPER_DEV_PORT = '9231'\n.\\tmp\\paper-pdf-only.exe</code></pre><p>The window is named <strong>Linco — PDF-only Reading Dev</strong>. In the paper PDF view, look for <strong>PDF text only · local AI connection</strong>. The installed release and existing sessions are left untouched. This change has not been published to GitHub releases.</p><p>Logs: <a href=\"paper-pdf-only-check-20260910.log\">frontend and browser checks</a> · <a href=\"paper-pdf-only-build-20260910.log\">native tests</a> · <a href=\"paper-pdf-only-build-error-20260910.log\">native build output</a> · <a href=\"paper-pdf-only-memory-recheck-20260910.log\">writing-history recheck</a>.</p></div>"},
+  {"type":"html","html":"<div class=\"card\"><h2>What about web ChatGPT?</h2><p>This revision keeps the configured local agent; it does not automate a browser chat or add a new API connection. Codex supports ChatGPT subscription sign-in for local use, as well as API-key access. <a href=\"https://learn.chatgpt.com/docs/auth\">OpenAI authentication documentation</a>.</p><p>Linco's existing <strong>Export context for ChatGPT</strong> remains a manual writing workflow: you choose what to upload. Automatic browser-chat highlight synchronization and independent per-role model selectors are not implemented in this revision.</p></div>"}
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

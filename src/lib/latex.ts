@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import type { EvidenceReference } from './researchProduction'
 
 export interface OverleafProjectInfo {
   connected: boolean
@@ -12,6 +13,7 @@ export interface OverleafProjectInfo {
 }
 
 export interface OverleafCollaborationResult {
+  remote_head?: string | null
   remote_updated: boolean
   incoming: boolean
   applied: boolean
@@ -25,9 +27,23 @@ export interface LatexCompileResult {
   log: string
   duration_ms: number
   tool_missing: boolean
+  pdf_is_local?: boolean
+  provenance_path?: string
+  cached?: boolean
+}
+
+/** Older desktop backends compile on SSH hosts; current ones always use local TeX. */
+export function latexRuntimeErrorKey(
+  result: Pick<LatexCompileResult, 'pdf_is_local'>,
+  host?: string
+): 'latex.desktopUpdateRequired' | 'latex.toolMissing' {
+  return host && result.pdf_is_local !== true
+    ? 'latex.desktopUpdateRequired'
+    : 'latex.toolMissing'
 }
 
 export interface LatexAiSuggestion {
+  context?: EvidenceReference[]
   suggestion: string
   edits: LatexPolishEdit[]
   evidence: string[]
@@ -60,6 +76,7 @@ export interface LatexReviewIssue {
 }
 
 export interface LatexReviewResult {
+  context?: EvidenceReference[]
   issues: LatexReviewIssue[]
   agent: string
   model: string
@@ -97,11 +114,11 @@ export function overleafPull(
   token?: string,
   host?: string
 ): Promise<OverleafProjectInfo> {
-  return invoke('overleaf_pull', {
+  return requireSafePaperSync().then(() => invoke('overleaf_pull', {
     repo,
     token: sessionToken(token),
     host: remoteHost(host)
-  })
+  }))
 }
 
 export function overleafStoreToken(
@@ -124,12 +141,31 @@ export function overleafPublish(
   token?: string,
   host?: string
 ): Promise<OverleafProjectInfo> {
-  return invoke('overleaf_publish', {
+  return requireSafePaperSync().then(() => invoke('overleaf_publish', {
     repo,
     message,
     token: sessionToken(token),
     host: remoteHost(host)
-  })
+  }))
+}
+
+export async function requireSafePaperSync(): Promise<void> {
+  const version = await invoke<number>('overleaf_sync_capabilities').catch(() => 0)
+  if (typeof version !== 'number' || version < 1) throw new Error('Safe paper merging needs the updated desktop backend. Rebuild and reopen Linco; reconnecting Overleaf will not update the app.')
+}
+
+export interface OverleafMergePending { remoteHead: string | null }
+
+/** A genuine overlap is a saved, pending state, not an authentication failure. */
+export function overleafMergePending(reason: string): OverleafMergePending | null {
+  if (!reason.includes('OVERLEAF_SYNC_PENDING') && !reason.includes('OVERLEAF_SYNC_CONFLICT')) return null
+  const heads = /OVERLEAF_SYNC_PENDING:\s+([\da-f]{40}|[\da-f]{64})\s+([\da-f]{40}|[\da-f]{64})\./i.exec(reason)
+  return { remoteHead: heads?.[2] || null }
+}
+
+export function shouldRetryOverleafMerge(pending: OverleafMergePending, result: OverleafCollaborationResult): boolean {
+  return !!(result.remote_head && result.remote_head !== pending.remoteHead)
+    || !!(result.info && !result.pending && result.info.behind === 0)
 }
 
 export function overleafCollaborationPoll(
@@ -158,12 +194,14 @@ export function compileLatex(
   repo: string,
   mainFile: string,
   engine: 'pdflatex' | 'xelatex' | 'lualatex',
-  host?: string
+  host?: string,
+  force = false
 ): Promise<LatexCompileResult> {
   return invoke('latex_compile', {
     repo,
     mainFile,
     engine,
+    force,
     host: remoteHost(host)
   })
 }
@@ -176,6 +214,9 @@ export function suggestLatex(options: {
   after: string
   mode: LatexPolishMode
   host?: string
+  researchHost?: string
+  evidencePaths?: string[]
+  paperBrief?: string
 }): Promise<LatexAiSuggestion> {
   return invoke('latex_ai_suggest', {
     repo: options.repo,
@@ -184,7 +225,11 @@ export function suggestLatex(options: {
     selection: options.selection,
     after: options.after,
     projectAware: options.mode === 'project',
-    host: remoteHost(options.host)
+    evidencePaths: options.evidencePaths || [],
+    paperBrief: options.paperBrief || '',
+    host: remoteHost(options.host),
+    // 空串代表“研究仓库在本机”,不能经 remoteHost 变成 null——那会退回继承稿件主机。
+    researchHost: options.researchHost ?? ''
   })
 }
 
@@ -193,11 +238,17 @@ export function reviewLatex(options: {
   currentFile: string
   segments: LatexReviewSegment[]
   host?: string
+  researchHost?: string
+  evidencePaths?: string[]
+  paperBrief?: string
 }): Promise<LatexReviewResult> {
   return invoke('latex_ai_review', {
     repo: options.repo,
     currentFile: options.currentFile,
     segments: options.segments,
-    host: remoteHost(options.host)
+    evidencePaths: options.evidencePaths || [],
+    paperBrief: options.paperBrief || '',
+    host: remoteHost(options.host),
+    researchHost: options.researchHost ?? ''
   })
 }

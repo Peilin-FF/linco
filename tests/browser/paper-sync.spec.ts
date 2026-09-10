@@ -1,0 +1,61 @@
+import { expect, test } from '@playwright/test'
+
+test('compatible Pull updates the editor silently and does not publish', async ({ page }) => {
+  await page.goto('/tests/browser/paper-sync.html')
+  await expect(page.locator('.cm-content')).toContainText('seed 1')
+  await page.getByRole('button', { name: 'Pull', exact: true }).click()
+  await expect(page.locator('.cm-content')).toContainText('Batch 8; seed 2.')
+  expect(await page.evaluate(() => (window as any).paperSyncTest.publishes)).toBe(0)
+  await expect(page.getByText(/Both you and a collaborator/)).toHaveCount(0)
+})
+
+test('true overlap is a quiet pending status, not a warning or sign-in dialog', async ({ page }) => {
+  await page.goto('/tests/browser/paper-sync.html?pending=1')
+  await expect(page.locator('.cm-content')).toContainText('seed 1')
+  await page.getByRole('button', { name: 'Pull', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Sync pending', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Sync pending', exact: true })).toBeDisabled()
+  await expect(page.getByText(/Both you and a collaborator|OVERLEAF_SYNC_PENDING/)).toHaveCount(0)
+  await expect(page.locator('.cm-content')).toContainText('seed 1')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await page.screenshot({ path: 'artifacts/paper-quiet-sync-preview.png' })
+  await page.evaluate(() => { (window as any).paperSyncTest.resolve = true })
+  await page.getByRole('button', { name: 'Pull', exact: true }).click()
+  await expect(page.locator('.cm-content')).toContainText('seed 2')
+  await expect(page.getByRole('button', { name: 'Sync pending', exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => (window as any).paperSyncTest.publishes)).toBe(0)
+})
+
+test('automatic synchronization does not repeatedly retry an unchanged overlap', async ({ page }) => {
+  await page.clock.install()
+  await page.goto('/tests/browser/paper-sync.html?pending=1&live=1')
+  await expect(page.getByRole('button', { name: 'Sync pending', exact: true })).toBeVisible({ timeout: 20000 })
+  await expect.poll(() => page.evaluate(() => (window as any).paperSyncTest.publishes)).toBe(1)
+  await page.clock.runFor(45000)
+  expect(await page.evaluate(() => (window as any).paperSyncTest.polls)).toBeGreaterThan(1)
+  expect(await page.evaluate(() => (window as any).paperSyncTest.publishes)).toBe(1)
+  await page.evaluate(() => { (window as any).paperSyncTest.remoteHead = 'c'.repeat(40); (window as any).paperSyncTest.resolve = true })
+  await page.clock.runFor(45000)
+  await expect.poll(() => page.evaluate(() => (window as any).paperSyncTest.publishes)).toBe(2)
+  await expect(page.locator('.cm-content')).toContainText('seed 2')
+})
+
+test('old backend is actionable and never invokes unsafe synchronization', async ({ page }) => {
+  await page.goto('/tests/browser/paper-sync.html?old=1')
+  await page.getByRole('button', { name: 'Pull', exact: true }).click()
+  await expect(page.getByText(/Safe paper merging needs the updated desktop backend/)).toBeVisible()
+  expect(await page.evaluate(() => (window as any).paperSyncTest.pulls)).toBe(0)
+})
+
+test('late sync responses do not replace another project editor', async ({ page }) => {
+  await page.goto('/tests/browser/paper-sync.html?slow=1')
+  await expect(page.locator('.cm-content')).toContainText('seed 1')
+  await page.getByRole('button', { name: 'Pull', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).paperSyncTest.pulls)).toBe(1)
+  await page.getByRole('button', { name: 'Switch fixture project' }).click()
+  await expect(page.locator('.cm-content')).toContainText('Another paper.')
+  await page.clock.install()
+  await page.clock.runFor(2500)
+  await expect(page.locator('.cm-content')).toContainText('Another paper.')
+  await expect(page.getByRole('button', { name: 'Pull', exact: true })).toHaveCount(0)
+})

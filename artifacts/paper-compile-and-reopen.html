@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compile latency and the reopen bug</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+ {
+  "type": "html",
+  "html": "<div class=\"eyebrow\">Linco &#183; compile latency and the reopen bug &#183; 10 September 2026</div><h1>Seventeen seconds, and a workspace that erases itself.</h1><p class=\"lede\">Measured on your machine against your ICLR paper, using the build the app actually produced. The compile is slow for three reasons that stack. The reopen problem is three separate faults, one of which destroys the remembered project rather than merely failing to find it.</p><div class=\"summary-band\"><div><span class=\"k\">Your 17s run</span>1.7s fetch, 16.1s TeX</div><div><span class=\"k\">Same work, standalone</span>about 9s</div><div><span class=\"k\">Floor set by</span>360 endpoint scanning</div><div><span class=\"k\">Reopen bug</span>Confirmed, and it overwrites good state</div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>What your last compile actually did</h2><p>The provenance record from the run at 16:06 shows the shape of the problem. Fetching the paper from the server was cheap that time. The TeX work was not, because latexmk ran three rules rather than one.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Recorded value",
+   "Your 16:06 run",
+   "An earlier run",
+   "Meaning"
+  ],
+  "rows": [
+   [
+    "prepare_ms",
+    "1710",
+    "11136",
+    "Pull the paper off the server, materialise it, sync the build mirror"
+   ],
+   [
+    "compiler_ms",
+    "16133",
+    "9019",
+    "latexmk and everything it spawned"
+   ],
+   [
+    "rules run",
+    "pdflatex, bibtex, pdflatex",
+    "pdflatex",
+    "Three rules cost roughly double one"
+   ],
+   [
+    "source_files_changed",
+    "6",
+    "1",
+    "How many files the mirror had to rewrite"
+   ],
+   [
+    "build_state_reused",
+    "true",
+    "true",
+    "Auxiliary files were reused, so this was already the incremental path"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<h2>Cost of each part, measured directly</h2><p>I ran the same compiler on the same paper outside the app, repeatedly, to separate what TeX costs from what the app adds.</p>"
+ },
+ {
+  "type": "table",
+  "head": [
+   "Step",
+   "Measured",
+   "Note"
+  ],
+  "rows": [
+   [
+    "pdflatex on a four-line hello world",
+    "0.7s",
+    "Pure startup. This is the floor for any compile on this machine"
+   ],
+   [
+    "pdflatex on your paper, one pass",
+    "3.3s",
+    "Stable across five repeats and across disk locations"
+   ],
+   [
+    "bibtex",
+    "0.8s",
+    "Only needed when citations or the bibliography change"
+   ],
+   [
+    "latexmk wrapper, deciding nothing needs doing",
+    "1.7s",
+    "Paid on every compile before any TeX runs"
+   ],
+   [
+    "Files opened per pass",
+    "466",
+    "259 of them distinct"
+   ],
+   [
+    "Best case for your paper, one pass",
+    "about 5s",
+    "latexmk overhead plus one pdflatex"
+   ],
+   [
+    "Three-rule sequence, standalone",
+    "about 9s",
+    "The app recorded 16.1s for the same shape"
+   ]
+  ]
+ },
+ {
+  "type": "html",
+  "html": "<h2>Three causes, in the order worth fixing</h2><div class=\"grid col-2\"><div class=\"card\"><div class=\"eyebrow\">Cause 1 &#183; doubles the TeX time</div><h3>bibtex and a second pass on ordinary edits</h3><p>Your run rewrote six source files, so latexmk conservatively rebuilt the bibliography and ran pdflatex again. That is correct for a citation change and wasted work for a prose change.</p><p>Deciding whether the bibliography input actually changed, and skipping bibtex and the rerun when it did not, takes the common case from three rules to one.</p></div><div class=\"card\"><div class=\"eyebrow\">Cause 2 &#183; erratic, up to 11s</div><h3>The whole paper is re-downloaded every time</h3><p>Each compile pulls all fourteen files. Three of them are a bibliography style, a citation package and a header package that never change, and they are three quarters of the bytes.</p><p>The fetch measured between 1.1s and 11.1s for the same small payload, so this is round trips rather than bandwidth. Sending known fingerprints and returning only what differs removes almost all of it.</p></div><div class=\"card\"><div class=\"eyebrow\">Cause 3 &#183; sets the floor</div><h3>Endpoint protection scans every file TeX opens</h3><p>Your machine runs 360 endpoint protection with its EDR sensor and proactive defence resident. Each pass over your paper opens 466 files.</p><p>A four-line document costing 0.7s is several times what it should be, and the same penalty is paid on all 466 opens. This is why even the best case is five seconds rather than one.</p></div><div class=\"card\"><div class=\"eyebrow\">Not a help</div><h3>The result cache cannot save you here</h3><p>A cached result requires the source fingerprint and all 247 recorded inputs to be unchanged. That holds when you compile twice without editing, and never in the loop where you are actually writing.</p></div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"callout rec\"><div class=\"callout-h\">The biggest single improvement available today</div><p>Exclude the bundled TeX tree and the app build directories from 360 real-time scanning. It needs an administrator, changes no code, and applies to every pass rather than only to some compiles.</p><pre class=\"code\">C:\\Users\\Peilin\\AppData\\Local\\ai.linco.app\\tex\nC:\\Users\\Peilin\\AppData\\Local\\ai.linco.app\\production-builds\nC:\\Users\\Peilin\\AppData\\Local\\ai.linco.app.paper-dev\\tex\nC:\\Users\\Peilin\\AppData\\Local\\ai.linco.app.paper-dev\\production-builds</pre><p>Then fix the three-rule sequence, then the redundant download. Those two are code and belong in the app.</p></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>The reopen bug is three faults, not one</h2><p>The file list is never saved. It is rebuilt by walking the directory on every launch. The only thing that survives a restart is a single pointer to the paper folder, held in browser storage.</p><pre class=\"code\"><span class=\"cm\">// the key, LatexView.tsx:239</span>\n`linco:latex:${host || <span class=\"str\">'local'</span>}:${root}:${field}`\n\n<span class=\"cm\">// what your running dev window holds right now, read live</span>\nlinco:latex:121.89.80.188:/mnt/data/peilin:paperRoot\n   = <span class=\"str\">\"/mnt/data/peilin/6a9ac3ad997a5d92cae564cb\"</span></pre><p>Because that pointer is the whole memory, anything that hides it or overwrites it loses the project, and re-cloning is the only action that writes a good value back.</p>"
+ },
+ {
+  "type": "html",
+  "html": "<div class=\"grid col-2\"><div class=\"card\"><div class=\"eyebrow\">Fault 1 &#183; most likely yours</div><h3>Every window has its own separate memory</h3><p>Browser storage lives in the WebView profile directory. The installed app, each development window, and each debug port all get a different profile, so each keeps its own idea of which paper you opened.</p><p>This machine has seven such profiles. One of them holds nothing at all. Open the app on a different port or switch between the installed build and a dev build, and the workspace is empty because it is reading a different memory, not because anything broke.</p></div><div class=\"card\"><div class=\"eyebrow\">Fault 2 &#183; the destructive one</div><h3>A scan that finds nothing overwrites the pointer</h3><p>The refresh reads the remembered folder, scans it, and if it sees no TeX file it discards the folder, rescans the working directory, falls back to the working directory itself, and writes that back with no condition attached.</p><p>So one empty scan does not merely fail. It replaces your paper with your home directory, permanently. Two keys on this machine are already in that state, holding a value identical to the working directory.</p></div><div class=\"card\"><div class=\"eyebrow\">Fault 3 &#183; how the empty scan happens</div><h3>One unreadable folder empties the whole tree</h3><p>The directory walk has no protection around each listing, so a single permission error or dead mount anywhere under your remote home aborts the entire scan and leaves the workspace blank.</p><p>Your working directory is the remote home, which is a large tree with many unrelated folders. There is also a depth limit of five and a cap of five hundred files, either of which can be exhausted before the walk reaches the paper.</p></div><div class=\"card\"><div class=\"eyebrow\">Why it stays broken</div><h3>Nothing repairs it</h3><p>Once the pointer holds the working directory, every later launch scans the whole home directory, finds no single paper, and keeps the bad value. Deleting and re-cloning is the only path that rewrites it, which is exactly the workaround you found.</p></div></div>"
+ },
+ {
+  "type": "html",
+  "html": "<h3>The code path</h3><pre class=\"code\"><span class=\"cm\">// LatexView.tsx, inside refreshProject</span>\n<span class=\"cm\">// 494  read what we remembered</span>\nconst rememberedRoot = localStorage.getItem(storageKey(host, cwd, <span class=\"str\">'paperRoot'</span>)) || <span class=\"str\">''</span>\n\n<span class=\"cm\">// 503  an empty scan is treated as authoritative, not as a failure</span>\n<span class=\"kw\">if</span> (nextRoot &amp;&amp; !nextFiles.some((file) =&gt; file.kind === <span class=\"str\">'tex'</span>)) {\n  nextRoot = <span class=\"str\">''</span>\n  nextFiles = <span class=\"kw\">await</span> collectProjectFiles(cwd, host)\n}\n\n<span class=\"cm\">// 517  with nothing detected, the working directory becomes the root</span>\nnextRoot = detectedMain ? parentDir(detectedMain) || cwd : cwd\n\n<span class=\"cm\">// 541  and it is written back with no condition attached</span>\nlocalStorage.setItem(storageKey(host, cwd, <span class=\"str\">'paperRoot'</span>), nextRoot)\n\n<span class=\"cm\">// 183  and this is why a listing can come back empty rather than failing</span>\nconst entries = <span class=\"kw\">await</span> listDir(directory, host)   <span class=\"cm\">// no guard per directory</span></pre><p>The startup itself is gated on the connection reporting ready, so this is not a simple race against SSH. The empty listing arrives another way: the remote directory reader silently drops entries it cannot parse, which turns a partial failure into an apparently successful empty result.</p>"
+ },
+ {
+  "type": "html",
+  "html": "<h2>What to change</h2><div class=\"procon\"><div class=\"pros\"><ul><li>Persist the paper folder only when the scan actually found TeX files, and never persist a value equal to the working directory. Leave the previous value untouched on failure.</li><li>Guard each directory listing so one unreadable folder cannot empty the workspace, and say plainly that the scan was partial.</li><li>Move the record out of browser storage into the connection settings, next to the recent directories, so it survives every window, port and build.</li><li>Have the development harness vary only its debug port, not its profile directory, so a dev window reproduces your real state instead of starting blank.</li></ul></div><div class=\"cons\"><ul><li>Do not rescan on a timer to paper over it. That hides the overwrite instead of preventing it.</li><li>Do not treat the working directory as a valid paper folder. It is the value that silently replaces good state.</li><li>Do not raise the file cap as the fix. The walk aborting on one bad folder is the real fragility.</li></ul></div></div><p class=\"note\">Nothing was changed in your working tree. The dev window is still running, and the two build directories it uses were left alone.</p>"
+ }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>

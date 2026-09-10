@@ -14,7 +14,7 @@
 
 import sys, os, json, base64, shutil, subprocess, time, threading, queue
 
-AGENT_VERSION = "25"
+AGENT_VERSION = "28"
 IDLE_TIMEOUT = 1800  # 30 分钟无请求自退
 MAX_BYTES_DEFAULT = 50 * 1024 * 1024
 MAX_WORKERS = 8
@@ -98,6 +98,167 @@ def op_write_file(a):
     with open(a["path"], "w", encoding="utf-8") as f:
         f.write(a["content"])
     return {}
+
+
+def _snapshot_open(root_fd, relative):
+    """Resolve every component beneath an already opened root without symlinks."""
+    parts = relative.split("/")
+    if any(not p or p in (".", "..") or "\\" in p for p in parts):
+        raise ValueError("Snapshot paths must remain inside their repository")
+    parent = os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = next_fd
+        return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
+def _snapshot_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _snapshot_unchanged(root_fd, observed):
+    # Detect edits/replacements of earlier files while later files are being read.
+    # This is a checked capture, not a filesystem-wide atomic snapshot.
+    for relative, before in observed:
+        fd = _snapshot_open(root_fd, relative)
+        try:
+            if _snapshot_identity(before) != _snapshot_identity(os.fstat(fd)):
+                raise ValueError("Source changed during capture; retry")
+        finally:
+            os.close(fd)
+
+
+def op_latex_snapshot(a):
+    """Read a bounded paper snapshot, never write to the remote project.
+
+    Only portable regular paper files are exported. Symlinks are rejected rather
+    than following them outside the paper or silently producing an incomplete PDF.
+    """
+    import stat
+    root = os.path.realpath(a["repo"])
+    if root == os.path.abspath(os.sep) or not os.path.isdir(root):
+        raise ValueError("Select a paper directory, not the filesystem root")
+    extensions = set(("tex bib bst sty cls cfg def fd clo ldf bbx cbx lbx "
+                      "pdf eps png jpg jpeg svg webp csv tsv dat txt "
+                      "otf ttf map enc pfb tfm vf lua").split())
+    skip = {"node_modules", "target", "dist", "build", "__pycache__", "venv",
+            "checkpoints", "wandb"}
+    files, observed = [], []
+    total, visited = 0, 0
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for directory, dirs, names, directory_fd in os.fwalk(".", dir_fd=root_fd, follow_symlinks=False):
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in skip)
+            for name in dirs:
+                if stat.S_ISLNK(os.stat(name, dir_fd=directory_fd, follow_symlinks=False).st_mode):
+                    raise ValueError("Paper snapshot cannot follow symlink directory: " + name)
+            visited += len(dirs) + len(names)
+            if visited > 10000:
+                raise ValueError("Paper folder is too large; select the document subfolder")
+            for name in sorted(names):
+                if name.startswith(".") or name.rsplit(".", 1)[-1].lower() not in extensions:
+                    continue
+                relative = os.path.relpath(os.path.join(directory, name), ".").replace(os.sep, "/")
+                fd = _snapshot_open(root_fd, relative)
+                with os.fdopen(fd, "rb") as stream:
+                    before = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(before.st_mode):
+                        raise ValueError("Paper snapshot requires a regular file: " + relative)
+                    if before.st_size > 50 * 1024 * 1024 or total + before.st_size > 100 * 1024 * 1024 or len(files) >= 2000:
+                        raise ValueError("Paper snapshot limit: 2000 files, 100 MiB total, 50 MiB per file")
+                    data = stream.read(50 * 1024 * 1024 + 1)
+                    after = os.fstat(stream.fileno())
+                if _snapshot_identity(before) != _snapshot_identity(after) or len(data) != before.st_size:
+                    raise ValueError("Paper changed while preparing a copy; retry compilation")
+                total += len(data)
+                observed.append((relative, after))
+                files.append({"path": relative, "data": base64.b64encode(data).decode("ascii")})
+        _snapshot_unchanged(root_fd, observed)
+    finally:
+        os.close(root_fd)
+    return {"files": files, "bytes": total}
+
+
+def op_research_snapshot(a):
+    """Only explicitly selected files; no scripts, project hooks or models run."""
+    import stat
+    root = os.path.realpath(a["repo"])
+    paths = a.get("paths", [])
+    if not paths or len(paths) > 16 or len(set(paths)) != len(paths) or root == os.path.abspath(os.sep):
+        raise ValueError("Select 1-16 evidence files inside a research repository")
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    files, total, observed = [], 0, []
+    try:
+        for relative in paths:
+            parts = relative.split("/")
+            if any(not p or p in (".", "..") or p.startswith(".") or "\\" in p for p in parts):
+                raise ValueError("Evidence paths must be relative and cannot include hidden files")
+            fd = _snapshot_open(root_fd, relative)
+            with os.fdopen(fd, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
+                    raise ValueError("Evidence must be a regular file of at most 1 MiB")
+                data = stream.read(1024 * 1024 + 1)
+                after = os.fstat(stream.fileno())
+                if _snapshot_identity(before) != _snapshot_identity(after) or len(data) != before.st_size:
+                    raise ValueError("Evidence changed during capture; retry")
+            total += len(data)
+            if total > 8 * 1024 * 1024:
+                raise ValueError("Selected evidence exceeds 8 MiB")
+            data.decode("utf-8")
+            if b"\x00" in data:
+                raise ValueError("Select text evidence, not binary data")
+            observed.append((relative, after))
+            files.append({"path": relative, "data": base64.b64encode(data).decode("ascii")})
+        _snapshot_unchanged(root_fd, observed)
+    finally:
+        os.close(root_fd)
+    return {"files": files}
+
+
+def op_paper_ai(a):
+    """Non-interactive writing request, using the remote user's CLI environment."""
+    import signal
+    import tempfile
+    executable = a["executable"]
+    process_env = None
+    if executable == "codex":
+        executable, process_env = _find_codex_executable()
+    elif not os.path.isabs(executable):
+        import shlex
+        found = shutil.which(executable)
+        if not found:
+            shell = os.environ.get("SHELL") or "/bin/bash"
+            resolved = subprocess.run([shell, "-lic", "command -v " + shlex.quote(executable) + "; printf '\\n%s' \"$PATH\""],
+                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8)
+            lines = resolved.stdout.decode("utf-8", "replace").strip().splitlines()
+            found = next((line for line in lines if os.path.isfile(line)), None)
+            if lines:
+                process_env = dict(os.environ, PATH=lines[-1])
+        if not found:
+            raise ValueError("Writing agent executable not found in the remote login environment")
+        executable = found
+    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        process = subprocess.Popen([executable] + a["args"], cwd=a["repo"], env=process_env,
+                                   stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, start_new_session=True)
+        try:
+            process.communicate(a["prompt"].encode("utf-8"), timeout=180)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            raise ValueError("Writing analysis exceeded 180 seconds; saved findings are unchanged")
+        stdout.seek(0)
+        stderr.seek(0)
+        output = stdout.read(2 * 1024 * 1024 + 1)
+        if len(output) > 2 * 1024 * 1024:
+            raise ValueError("Writing agent output exceeded 2 MiB")
+        if process.returncode != 0:
+            raise ValueError("Writing agent failed: " + stderr.read(6000).decode("utf-8", "replace"))
+        return {"output": output.decode("utf-8", "replace")}
 
 
 def op_write_bytes(a):
@@ -379,6 +540,7 @@ def op_git(a):
     try:
         p = subprocess.run(
             ["git", "-C", repo] + list(args),
+            input=a["input"].encode("utf-8") if "input" in a else None,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, timeout=timeout,
         )
@@ -393,6 +555,18 @@ def op_git(a):
 
     except subprocess.TimeoutExpired:
         raise ValueError("git operation timed out")
+
+
+def op_git_input(a):
+    # A separate capability prevents older helpers silently ignoring stdin.
+    # Only immutable Git object preparation accepts content from this endpoint.
+    value = a.get("input")
+    args = a.get("args") or []
+    if args not in (["hash-object", "-w", "--stdin"], ["mktree", "-z"]):
+        raise ValueError("unsupported Git object operation")
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 2_000_000:
+        raise ValueError("invalid or oversized Git object input")
+    return op_git(a)
 
 
 # ---------- Code-agent session history ----------
@@ -1460,13 +1634,15 @@ def op_unwatch(a, rid):
 OPS = {
     "ping": op_ping, "stat": op_stat, "readdir": op_readdir,
     "read_file": op_read_file, "read_bytes": op_read_bytes,
+    "latex_snapshot": op_latex_snapshot,
+    "research_snapshot": op_research_snapshot, "paper_ai": op_paper_ai,
     "write_file": op_write_file, "write_bytes": op_write_bytes,
     "create_file": op_create_file, "mkdir": op_mkdir,
     "rename": op_rename, "delete": op_delete,
     "copy": op_copy, "move": op_move,
     "search_files": op_search_files, "grep": op_grep,
     "search_cancel": op_search_cancel,
-    "git": op_git, "shell": op_shell, "ps": op_ps,
+    "git": op_git, "git_input": op_git_input, "shell": op_shell, "ps": op_ps,
     "agent_sessions": op_agent_sessions,
     "agent_session_delete": op_agent_session_delete,
     "shadow_begin": op_shadow_begin,

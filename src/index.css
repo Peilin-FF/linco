@@ -29,6 +29,7 @@
   --border: #e4e5e5;
   --hover: #eeefef;
   --selection: #e4e7e5;
+  --selection-ink: #242628;
   --input-background: #ffffff;
   --input-border: #cdd0d1;
   --input-placeholder: #767b80;
@@ -72,6 +73,9 @@ body {
 
 ::selection {
   background: var(--selection);
+  /* The highlight is opaque, so text that is not --ink (muted labels, links,
+     syntax, diff colors) can otherwise land on it with no usable contrast. */
+  color: var(--selection-ink, inherit);
 }
 
 /* 整个顶部区域可拖动窗口;交互元素用 .no-drag 排除 */

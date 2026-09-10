@@ -8,7 +8,22 @@ import { useEffect, useState } from 'react'
 import type { ITheme } from '@xterm/xterm'
 import { CURATED_THEMES } from './curatedThemes'
 import { importedThemes } from './importedThemes'
-import { CATALOG_THEMES } from './themeCatalog'
+import { CATALOG_THEMES, contrast, luminance } from './themeCatalog'
+
+/**
+ * A text color guaranteed to stay legible on a selection highlight.
+ *
+ * Selection backgrounds are opaque, and the palettes that ride on top of them
+ * are not: terminal ANSI colors are passed through verbatim, and arbitrary DOM
+ * text can be any color at all. Keeping the original ink is right whenever it
+ * already contrasts, and black or white is the fallback when it does not.
+ */
+export function selectionInk(background: string, ink: string): string {
+  const hex = /^#[0-9a-f]{6}$/i
+  if (!hex.test(background)) return ink
+  if (hex.test(ink) && contrast(ink, background) >= 4.5) return ink
+  return luminance(background) > 0.179 ? '#000000' : '#ffffff'
+}
 
 export interface ThemeVars {
   canvas: string
@@ -251,6 +266,7 @@ export function applyTheme(id: string | undefined): void {
   root.style.setProperty('--border', v.border)
   root.style.setProperty('--hover', v.hover)
   root.style.setProperty('--selection', v.selection)
+  root.style.setProperty('--selection-ink', selectionInk(v.selection, v.ink))
   root.style.setProperty('--input-background', v.inputBackground)
   root.style.setProperty('--input-border', v.inputBorder)
   root.style.setProperty('--input-placeholder', v.inputPlaceholder)
@@ -380,6 +396,10 @@ export function terminalTheme(theme: Theme = currentTheme()): ITheme {
     cursor: theme.dark ? theme.vars.ink : theme.vars.accent,
     cursorAccent: theme.vars.canvas,
     selectionBackground: theme.vars.editorSelection,
+    // Without this, selected cells keep their raw ANSI color. Those come from the
+    // upstream palette unmodified, and the dim black entries most programs use for
+    // secondary output land near 1:1 against the highlight, so the text disappears.
+    selectionForeground: selectionInk(theme.vars.editorSelection, theme.vars.ink),
     extendedAnsi,
     ...ansi
   }

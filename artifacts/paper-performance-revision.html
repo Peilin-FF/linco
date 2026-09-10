@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook</title>
+<link rel="stylesheet" href="/__assets/notebook.css">
+<link rel="stylesheet" href="/__assets/katex.min.css">
+</head>
+<body>
+<div class="page">
+  <div class="toolbar">
+    <button class="btn primary" id="save">Save to file</button>
+    <button class="btn ghost sm" id="copy">Copy Markdown</button>
+    <span class="hint" id="hint">double-click cell to edit · Shift+↵ done · Ctrl+S save · drag ⠿ to reorder · double-click between cells to insert</span>
+  </div>
+  <div id="nb"></div>
+</div>
+
+<!-- ▼▼▼ ALL artifact content lives only here (SEED). The engine is in the plugin, not in this file. ▼▼▼ -->
+<script id="seed" type="application/json">
+[
+  {
+    "type": "html",
+    "html": "<div class=\"eyebrow\">Linco · Paper workbench · 10 September 2026</div><h1>A faster paper loop</h1><p class=\"lede\">Keep the project remote. Reuse the local TeX build. Make AI reading observable.</p><div class=\"summary-band\"><div><span class=\"k\">Implementation</span>Built locally</div><div><span class=\"k\">Compile benchmark</span>Passed</div><div><span class=\"k\">Live AI retest</span>Still unverified</div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"callout\"><div class=\"callout-h\">Open the newest desktop window</div><p>The running build is <b>Linco — Research &amp; Paper Dev (latest)</b>, not the older AI Paper Dev or Fast Paper Dev test window.</p><p>Executable: <code>tmp/paper-fast-reading-v2.exe</code>. Open your paper there, use <b>Ctrl+S</b> to save and compile, and enable <b>AI highlights</b>. The analysis bar now shows stages, elapsed seconds and a Cancel button. This is a development build, not a published release.</p></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Measured on a copy of your paper</h2><p>One Windows run using a disposable copy of the captured ICLR paper, with a small prose edit between builds. The remote project was not changed. These are observations, not a guarantee for every paper or a comparison benchmark against Overleaf.</p><div class=\"stat-grid\"><div class=\"stat-card\"><div class=\"stat-num\">13.5s → 4.5s</div><div class=\"stat-label\">Reported compilation duration</div></div><div class=\"stat-card\"><div class=\"stat-num\">2 → 1</div><div class=\"stat-label\">pdfLaTeX passes</div></div><div class=\"stat-card\"><div class=\"stat-num\">1 → 0</div><div class=\"stat-label\">BibTeX runs</div></div></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Measurement",
+      "Cold build",
+      "After a prose edit"
+    ],
+    "rows": [
+      [
+        "Backend-reported duration",
+        "13,501 ms",
+        "4,498 ms"
+      ],
+      [
+        "End-to-end test duration",
+        "14,035 ms",
+        "5,050 ms"
+      ],
+      [
+        "Compiler stage",
+        "13,446 ms",
+        "4,460 ms"
+      ],
+      [
+        "Persistent build state",
+        "Created",
+        "Reused"
+      ],
+      [
+        "pdfLaTeX / BibTeX passes",
+        "2 / 1",
+        "1 / 0"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<div class=\"grid col-2\"><div class=\"card\"><h3>TeX: retain useful work</h3><p>Each paper and engine has a private, persistent build directory. Unchanged remote source copies retain their timestamps; obsolete copies are removed only from that private mirror. An OS file lock prevents two Linco windows from compiling into the same state simultaneously.</p><p>Every published PDF remains in a separate, immutable job with its provenance record. A deliberate failed build was tested: it did not expose the previous build's PDF, and earlier published PDFs remained unchanged.</p><p>A first build, bibliography changes, or cross-reference changes can still require several passes. Shift-click Compile requests a clean rebuild.</p></div><div class=\"card\"><h3>AI: local connection, remote evidence</h3><p>Reading analysis captures explicitly linked SSH files with hashes, then sends the paper text and evidence packet through the configured local AI account. It no longer launches the highlight agent on the SSH server. Normal remote conversations are unchanged.</p><p>The reading task is bounded to 90 seconds, supports cancellation, and exposes its current stage. The frontend also bounds an unresponsive backend to 100 seconds. Superseded requests are cancelled instead of holding later PDFs in a long queue.</p><p>The model still runs through the configured provider; local execution does not mean an offline model. No keyword-coloring substitute is used.</p></div></div>"
+  },
+  {
+    "type": "html",
+    "html": "<h2>Keep the last completed analysis</h2><p>A failed or cancelled refresh does not erase the existing result. The reader labels it as previous analysis and only maps quotes that still occur exactly in the current PDF. New highlights appear after a complete, validated AI response; this change does not stream partial scientific findings.</p><div class=\"callout\"><div class=\"callout-h\">Remaining live check</div><p>The first real-paper AI test successfully captured SSH evidence and started a local Codex process, but its network requests were refused: the new path was incorrectly using a saved, stopped Git proxy at <code>127.0.0.1:7897</code>. That injection was removed. AI now retains the local agent's own network settings; Git and remote Clash settings were not changed.</p><p>The final live retest after that correction was blocked by this session's execution policy. Therefore, a successful real AI response in the corrected build is <b>not yet verified</b>. Automated UI tests confirm progress, cancellation and retained highlights, but do not substitute for that live connection check.</p></div>"
+  },
+  {
+    "type": "table",
+    "head": [
+      "Verification",
+      "Result",
+      "Evidence / scope"
+    ],
+    "rows": [
+      [
+        "Frontend unit suite",
+        "363 passed",
+        "artifacts/paper-performance-frontend-v4-20260910.log"
+      ],
+      [
+        "Browser interactions",
+        "12 passed",
+        "PDF rendering, cancellation, stale results, autocomplete, Ctrl+S and review memory"
+      ],
+      [
+        "Native LaTeX tests",
+        "20 passed",
+        "Incremental mirror, file lock, PDF/source validation and existing LaTeX behavior"
+      ],
+      [
+        "Native AI request state",
+        "1 passed",
+        "Scoped cancellation, deadline and registry cleanup"
+      ],
+      [
+        "Production frontend build",
+        "Passed",
+        "Existing large-vendor-chunk warning remains"
+      ],
+      [
+        "Real compiler benchmark",
+        "Passed",
+        "artifacts/paper-incremental-benchmark-v2-20260910.log"
+      ],
+      [
+        "Corrected local AI + SSH context",
+        "Unverified",
+        "Live retest blocked; no success claimed"
+      ],
+      [
+        "macOS runtime",
+        "Not run",
+        "Windows development validation only"
+      ]
+    ]
+  },
+  {
+    "type": "html",
+    "html": "<details><summary>Implementation notes and references</summary><p><code>latex_build.rs</code> owns the locked incremental workspace; <code>latex.rs</code> archives independent results; <code>latex_cache.rs</code> excludes generated build outputs from external input verification. <code>paper_ai_job.rs</code> owns progress, cancellation and deadlines. The PDF reader retains labelled previous results and refuses an older, non-cancellable backend before launching analysis.</p><p>The OpenAI Docs skill informed the request-scoped <code>model_reasoning_effort=\"low\"</code> override for Codex reading tasks, without editing normal conversation preferences. See the <a href=\"https://learn.chatgpt.com/docs/config-file/config-reference\">official Codex configuration reference</a>. Build synchronization uses Rust's cross-process file locking, documented in <a href=\"https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock\">File::try_lock</a>.</p><p>No source files on the remote server, VPN settings, published releases or GitHub branches were changed for this revision.</p></details>"
+  }
+]
+</script>
+<!-- ▲▲▲ end of content ▲▲▲ -->
+
+<!-- Math engine: KaTeX first (synchronous, ~270KB); rare formulas fall back to MathJax, lazy-loaded by notebook.js on demand -->
+<script src="/__assets/katex.min.js"></script>
+<script src="/__assets/notebook.js"></script>
+<script>HtmlVibeNotebook.mount(JSON.parse(document.getElementById('seed').textContent));</script>
+</body>
+</html>
