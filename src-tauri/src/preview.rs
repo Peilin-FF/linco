@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(30);
@@ -56,6 +56,20 @@ impl Default for PreviewInner {
 
 // 状态是进程级单例(服务器线程/刷新线程需要 'static 访问);命令一律走 global()。
 static STATE: OnceLock<&'static Mutex<PreviewInner>> = OnceLock::new();
+static BUNDLED_ASSETS_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Native previews use the engine shipped with this application version. This
+/// avoids changing user-installed skills merely to update the reading surface.
+pub fn prepare_bundled_assets(app: &AppHandle) {
+    if let Some(directory) = app.path().resource_dir().ok().and_then(|root| bundled_assets_directory(&root)) {
+        let _ = BUNDLED_ASSETS_DIR.set(directory);
+    }
+}
+
+fn bundled_assets_directory(resources: &Path) -> Option<PathBuf> {
+    let directory = resources.join("codex/en/skills/html-kit/assets").canonicalize().ok()?;
+    directory.is_dir().then_some(directory)
+}
 
 #[derive(Clone, Serialize)]
 struct ReloadEvent {
@@ -508,25 +522,26 @@ fn read_remote_cached(host: &str, abs: &str) -> Result<Vec<u8>, String> {
     Ok(data)
 }
 
-/// 服务 html-vibe 渲染引擎资源(notebook.js/css、mathjax)。
-/// asset 形如 "notebook.js"。引擎必须与产物同机(版本/seed 格式要匹配):
-/// 远程产物 → 远程引擎。为避免 2MB 每次走 SSH:**永久缓存**(一 session 只读一次)
-/// + 连接时**后台预取**(见 preview_prefetch_assets),打开预览前就备好。
+/// Serve notebook resources from this app's bundle for both local and remote
+/// previews. Installed/local/remote plugin assets remain a missing-file fallback.
+/// Large resources are cached and prefetched once per application session.
 fn serve_asset(host: &Option<String>, asset: &str) -> (Vec<u8>, String, u16) {
     // 允许:简单文件名 或 fonts/<名>(KaTeX CSS 用相对路径引字体)。
     // 拒:.. 穿越、绝对路径、其余多级子路径。
-    let allowed = !asset.is_empty()
-        && !asset.contains("..")
-        && !asset.starts_with('/')
-        && (!asset.contains('/') || {
-            // 仅放行单层 fonts/ 子目录
-            let rest = asset.strip_prefix("fonts/");
-            matches!(rest, Some(r) if !r.is_empty() && !r.contains('/'))
-        });
-    if !allowed {
+    if !is_safe_asset_path(asset) {
         return (b"forbidden".to_vec(), "text/plain".into(), 403);
     }
     let ctype = content_type(asset).to_string();
+    // An explicit, process-local development override lets the separate dev
+    // window read repository assets without replacing installed user skills.
+    // Read before the permanent cache so notebook edits remain visible.
+    #[cfg(debug_assertions)]
+    if let Some(bytes) = read_development_asset(asset) {
+        return (bytes, ctype, 200);
+    }
+    if let Some(bytes) = read_bundled_asset(asset) {
+        return (bytes, ctype, 200);
+    }
     // 永久缓存命中:零 IO/零 SSH(2MB mathjax 不再重读/重传)
     let ckey = format!("{}|{asset}", host.as_deref().unwrap_or(""));
     if let Ok(g) = global().lock() {
@@ -568,6 +583,52 @@ fn serve_asset(host: &Option<String>, asset: &str) -> (Vec<u8>, String, u16) {
         }
         Err(_) => (b"asset not found".to_vec(), "text/plain".into(), 404),
     }
+}
+
+fn is_safe_asset_path(asset: &str) -> bool {
+    !asset.is_empty()
+        && !asset.contains("..")
+        && !asset.contains(['\\', ':'])
+        && !asset.chars().any(char::is_control)
+        && !asset.starts_with('/')
+        && (!asset.contains('/') || {
+            let rest = asset.strip_prefix("fonts/");
+            matches!(rest, Some(r) if !r.is_empty() && !r.contains('/'))
+        })
+}
+
+fn read_asset_from_directory(directory: &Path, asset: &str) -> Option<Vec<u8>> {
+    if !directory.is_absolute() || !is_safe_asset_path(asset) {
+        return None;
+    }
+    let root = directory.canonicalize().ok()?;
+    let file = root.join(asset).canonicalize().ok()?;
+    if !file.starts_with(&root) {
+        return None;
+    }
+    std::fs::read(file).ok()
+}
+
+fn read_bundled_asset(asset: &str) -> Option<Vec<u8>> {
+    let directory = BUNDLED_ASSETS_DIR.get()?;
+    // Keep bundled bytes separate from installed/remote fallback cache entries.
+    let key = format!("bundled|{asset}");
+    if let Ok(state) = global().lock() {
+        if let Some(bytes) = state.assets_cache.get(&key) {
+            return Some(bytes.clone());
+        }
+    }
+    let bytes = read_asset_from_directory(directory, asset)?;
+    if let Ok(mut state) = global().lock() {
+        state.assets_cache.insert(key, bytes.clone());
+    }
+    Some(bytes)
+}
+
+#[cfg(debug_assertions)]
+fn read_development_asset(asset: &str) -> Option<Vec<u8>> {
+    let directory = PathBuf::from(std::env::var_os("LINCO_PREVIEW_ASSETS_DIR")?);
+    read_asset_from_directory(&directory, asset)
 }
 
 fn read_local_asset(asset: &str) -> Option<Vec<u8>> {
@@ -991,6 +1052,34 @@ fn percent_decode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_engine_uses_packaged_codex_assets() {
+        let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/HTML-VibeCoding");
+        let expected = resources.join("codex/en/skills/html-kit/assets").canonicalize().unwrap();
+        assert_eq!(bundled_assets_directory(&resources), Some(expected.clone()));
+        let bytes = read_asset_from_directory(&expected, "notebook.js").expect("bundled notebook engine");
+        assert!(String::from_utf8(bytes).unwrap().contains("HtmlVibeNotebook"));
+        assert!(read_asset_from_directory(&expected, "fonts/KaTeX_Main-Regular.woff2").is_some());
+    }
+
+    #[test]
+    fn absent_bundle_resources_allow_the_installed_fallback() {
+        let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/HTML-VibeCoding");
+        let directory = bundled_assets_directory(&resources).unwrap();
+        assert!(bundled_assets_directory(&resources.join("missing-bundle")).is_none());
+        assert!(read_asset_from_directory(&directory, "missing-resource.js").is_none());
+        assert!(read_asset_from_directory(Path::new("relative/assets"), "notebook.js").is_none());
+    }
+
+    #[test]
+    fn asset_paths_reject_traversal_and_windows_prefixes() {
+        for path in ["", "../AGENTS.md", "fonts/../../AGENTS.md", "/notebook.js", "C:\\notebook.js", "C:notebook.js", "fonts\\outside.js", "fonts/nested/font.woff2", "notebook.js\0"] {
+            assert!(!is_safe_asset_path(path), "unsafe asset path: {path:?}");
+        }
+        assert!(is_safe_asset_path("notebook.js"));
+        assert!(is_safe_asset_path("fonts/KaTeX_Main-Regular.woff2"));
+    }
 
     #[test]
     fn content_type_by_ext() {

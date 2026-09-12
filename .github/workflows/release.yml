@@ -75,13 +75,12 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.9:
-            - Point the writing assistant at an experiment repository that names its own machine, so a manuscript kept on this computer can be reviewed against code that lives on a remote server.
-            - Run the paper assistant locally in every case. It reads the remote project over SSH and quotes fingerprinted excerpts, instead of running the model on the server.
-            - Reach a research host that is not the connected one, using that connection's saved identity.
-            - Read PDFs as one continuous scroll, with Ctrl and the wheel zooming at the pointer. Pages no longer flicker at particular zoom levels.
-            - Keep the slide canvas and research context side by side on a remote connection, and route figure drawing to a local agent so it reaches desktop PowerPoint.
-            - Keep selected text legible in every theme, including in the terminal, where selected cells previously kept an unreadable ANSI colour.
+            Linco 1.0.10:
+            - Follow planned work, current progress, review decisions, and completed outcomes in Linco's Live preview action board.
+            - Keep each action's results, adjustments, and decisions together in one living record, with supporting outputs attached to the action.
+            - Continue the same project actions across local or remote sessions. Project instructions and message reminders guide agents to maintain these records; progress is recorded by the agent rather than inferred from terminal activity.
+            - Focus on essential work through a minimal, always-light board and action details, with a quiet visual style that stays readable in every app theme.
+            - Read HTML notebooks with fewer controls and edit on demand. Preserve existing notes and continue updating the same document as the work develops.
 
             Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true

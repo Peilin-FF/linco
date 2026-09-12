@@ -97,9 +97,21 @@ const fileFixtures: Record<string, string[]> = {
 }
 const normalizedProject = project.replaceAll('\\', '/')
 const relativeFile = (path: string) => path.replaceAll('\\', '/').replace(normalizedProject, '').replace(/^\/+/, '')
+const normalizeDemoPath = (path: string) => path.replaceAll('\\', '/').replace(/\/+$/, '')
+const demoDirectories = new Set<string>([normalizedProject])
+const demoParent = (path: string) => path.slice(0, path.lastIndexOf('/'))
+const demoFileExists = (path: string) => savedFiles.has(path) || Object.hasOwn(demoFiles, relativeFile(path))
+const demoDirectoryExists = (path: string) => demoDirectories.has(path) || Object.keys(demoFiles).some(file => `${normalizedProject}/${file}`.startsWith(`${path}/`))
+// Agent onboarding is simulated project metadata, not a visitor's garden edit.
+const isDemoTrackingFile = (path: string) => /^(?:\.linco\/|(?:AGENTS|CLAUDE)\.md$|\.[a-f0-9-]+\.tmp$)/.test(relativeFile(path))
+function demoChild(parent: string, name: string): string {
+  if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) throw new Error('Use a single demo file or folder name.')
+  if (!demoDirectoryExists(parent)) throw new Error(`Directory not found in the demo: ${relativeFile(parent)}`)
+  return `${parent}/${name}`
+}
 const snapshot = () => {
   const files = Object.fromEntries(Object.keys(demoFiles).map(path => [path, readDemoFile(path)]))
-  for (const [path, text] of savedFiles) files[relativeFile(path)] = text
+  for (const [path, text] of savedFiles) if (!isDemoTrackingFile(path)) files[relativeFile(path)] = text
   return files
 }
 const demoChanges = new DemoChanges(snapshot(), snapshot)
@@ -209,9 +221,27 @@ mockIPC(async (cmd, payload) => {
       { id: 'session-c', title: 'Explore the codebase', mtime: Date.now() / 1000 - 86400, size: 1000 },
     ]
     case 'fs_list_dir': {
+      if (isDemo) {
+        const path = normalizeDemoPath(String(args.path))
+        if (!demoDirectoryExists(path)) throw new Error(`Directory not found in the demo: ${relativeFile(path)}`)
+        const entries = new Map(listDemoFiles(relativeFile(path)).map(entry => {
+          const name = entry.replace(/\/$/, '')
+          return [name, { name, path: `${path}/${name}`, is_dir: entry.endsWith('/') }]
+        }))
+        const additions = [
+          ...[...demoDirectories].map(path => ({ path, is_dir: true })),
+          ...[...savedFiles.keys()].map(path => ({ path, is_dir: false })),
+        ]
+        for (const entry of additions) {
+          if (demoParent(entry.path) !== path) continue
+          const name = entry.path.slice(path.length + 1)
+          entries.set(name, { ...entry, name })
+        }
+        return [...entries.values()]
+      }
       if (params.has('files')) {
         const relative = String(args.path).replaceAll('\\', '/').replace(normalizedProject, '').replace(/^\/+|\/+$/g, '')
-        return (isDemo ? listDemoFiles(relative) : fileFixtures[relative] || []).map((entry) => {
+        return (fileFixtures[relative] || []).map((entry) => {
           const name = entry.replace(/\/$/, '')
           return { name, path: `${args.path}/${name}`, is_dir: entry.endsWith('/') }
         })
@@ -221,9 +251,30 @@ mockIPC(async (cmd, payload) => {
       { name: 'package.json', path: `${args.path}/package.json`, is_dir: false },
       ]
     }
-    case 'fs_write_file':
-      savedFiles.set(args.path, args.content)
-      if (isDemo) notifyFiles([relativeFile(String(args.path))])
+    case 'fs_create_dir': {
+      if (!isDemo) return null
+      const path = demoChild(normalizeDemoPath(String(args.parent)), String(args.name))
+      if (demoDirectoryExists(path) || demoFileExists(path)) throw new Error('A demo file or folder already has that name.')
+      demoDirectories.add(path)
+      return path
+    }
+    case 'fs_rename': {
+      if (!isDemo) return null
+      const path = normalizeDemoPath(String(args.path))
+      const destination = demoChild(demoParent(path), String(args.newName))
+      if (!savedFiles.has(path)) throw new Error('Only files saved in demo memory can be renamed.')
+      if (demoDirectoryExists(destination) || demoFileExists(destination)) throw new Error('A demo file or folder already has that name.')
+      savedFiles.set(destination, savedFiles.get(path)!)
+      savedFiles.delete(path)
+      if (!isDemoTrackingFile(path) || !isDemoTrackingFile(destination)) notifyFiles([relativeFile(path), relativeFile(destination)])
+      return destination
+    }
+    case 'fs_write_file': {
+      const path = isDemo ? normalizeDemoPath(String(args.path)) : args.path
+      if (isDemo && (!demoDirectoryExists(demoParent(path)) || demoDirectoryExists(path))) throw new Error('Choose an existing demo folder and a file path.')
+      savedFiles.set(path, args.content)
+      if (isDemo && isDemoTrackingFile(path)) return null
+      if (isDemo) notifyFiles([relativeFile(path)])
       if (isDemo && String(args.path).endsWith('/garden.json')) {
         try { saveGarden(args.content) } catch {
           demoNotice('Sample file saved, but its JSON is invalid. The preview keeps the last valid garden; fix the file and save again.')
@@ -232,13 +283,16 @@ mockIPC(async (cmd, payload) => {
       }
       if (isDemo) demoNotice('Saved to demo memory only. Reload to reset; no files on your computer were changed.' + (String(args.path).endsWith('/garden.json') ? '' : ' Only src/garden.json updates the preview; source examples are not compiled or executed.'))
       return null
-    case 'fs_read_file':
-      if (savedFiles.has(args.path)) return savedFiles.get(args.path)
+    }
+    case 'fs_read_file': {
+      const path = isDemo ? normalizeDemoPath(String(args.path)) : args.path
+      if (savedFiles.has(path)) return savedFiles.get(path)
       if (isDemo && String(args.path).endsWith('/garden.json')) return JSON.stringify(readGarden(), null, 2) + '\n'
       if (params.has('research-config') && String(args.path).endsWith('/.linco/research/workspace.json')) return JSON.stringify({ version: 1, home: `https://www.notion.so/${(100).toString(16).padStart(32, '0')}`, project: `https://www.notion.so/${(201).toString(16).padStart(32, '0')}` })
       if (isDemo) return readDemoFile(relativeFile(String(args.path)))
       if (params.has('files') && String(args.path).endsWith('.sh')) return '# Baseline experiment\nexport SEED=42\nif [ -d outputs ]; then\n  echo "Checkpoint ready"\nfi\n'
       return params.has('files') && String(args.path).endsWith('.py') ? pythonContent : fileContent
+    }
     case 'search_content': return params.has('files') ? ['scripts/train.py', 'index.html', 'README.md'].map((file) => ({ path: `${normalizedProject}/${file}`, matches: [{ line: 1, text: 'baseline checkpoint', ranges: [[0, 8]] }] })) : []
     case 'git_status': return { is_repo: true, branch: 'main', ahead: 0, behind: 0, files: (isDemo ? Object.keys(demoChanges.changes('git')) : params.has('files') ? ['scripts/train.py', 'index.html', 'README.md'] : []).map(path => ({ path, work: 'M', index: ' ', staged: false, unstaged: true, untracked: false })) }
     case 'git_is_repo': return true

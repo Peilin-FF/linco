@@ -34,6 +34,7 @@ import { TmuxWheelThrottle } from '@/lib/terminalWheel'
 import { installTerminalLinks, type TerminalLinkNotice } from '@/lib/terminalLinks'
 import TerminalLinkFeedback from './TerminalLinkFeedback'
 import { installConversationSelection } from '@/lib/terminalSelection'
+import { ensureWorkboardProject } from '@/lib/workboardProject'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 
 function commandName(command?: string): string | undefined {
@@ -76,8 +77,12 @@ interface TerminalViewProps {
   onActivity?: (id: string) => void
   /** 会话退出(PTY 结束)时回调 */
   onExit?: (id: string) => void
+  /** True only once the PTY exists; this does not infer CLI/model readiness. */
+  onReadyChange?: (id: string, ready: boolean) => void
   /** 对话 agent 会话的使用统计上下文;普通终端不传。 */
   usage?: UsageAgentContext
+  /** Remote setup may wait for interactive authentication in this very PTY. */
+  projectReady?: boolean
 }
 
 const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
@@ -92,7 +97,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       identity,
       onActivity,
       onExit,
-      usage
+      onReadyChange,
+      usage,
+      projectReady = false
     },
     ref
   ) {
@@ -121,7 +128,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     // 回调用 ref 持有,避免父组件每次重渲染传新函数触发终端重挂载。
     const onActivityRef = useRef(onActivity)
     const onExitRef = useRef(onExit)
+    const onReadyChangeRef = useRef(onReadyChange)
     const usageRef = useRef(usage)
+    const projectReadyRef = useRef(projectReady)
     const usageBufferRef = useRef('')
     const usageTimerRef = useRef<number | null>(null)
     const outputQueueRef = useRef<Uint8Array[]>([])
@@ -136,7 +145,9 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     initCmdRef.current = initialCommand
     onActivityRef.current = onActivity
     onExitRef.current = onExit
+    onReadyChangeRef.current = onReadyChange
     usageRef.current = usage
+    projectReadyRef.current = projectReady
     visibleRef.current = visible
 
     useImperativeHandle(ref, () => ({
@@ -328,6 +339,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const showExit = (): void => {
         if (disposed) return
         started = false
+        onReadyChangeRef.current?.(id, false)
         term.write(`\r\n\x1b[90m[${tRef.current('term.disconnected')}]\x1b[0m\r\n`)
         setExited(true)
         onExitRef.current?.(id)
@@ -543,6 +555,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       syncVisibleRef.current = syncVisibleSize
       const start = (): void => {
         const sequence = ++startSequence
+        onReadyChangeRef.current?.(id, false)
         setExited(false)
         started = false
         activeGen = null
@@ -556,14 +569,36 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         const startEnv = isCodexCommand(initCmdRef.current, usageRef.current)
           ? { ...envRef.current, WT_SESSION: 'linco-xterm' }
           : envRef.current
-        void termStart(id, term.cols, term.rows, {
+        // Capture this start's scope before asynchronous setup. A project switch
+        // or resume must never launch an older request with newer refs.
+        const options = {
           cwd: cwdRef.current,
           env: startEnv,
           initialCommand: initCmdRef.current,
           host: hostRef2.current,
           identity: identityRef.current
+        }
+        const prepare = options.cwd && options.initialCommand && usageRef.current &&
+          (!options.host || projectReadyRef.current)
+        let preparationTimer: ReturnType<typeof setTimeout> | undefined
+        const preparation = prepare
+          ? Promise.race([
+              ensureWorkboardProject(options.cwd!, options.host),
+              new Promise<never>((_, reject) => {
+                preparationTimer = setTimeout(() => reject(new Error('Workboard setup timed out')), 15000)
+              })
+            ]).catch((error: unknown) => {
+              // Tracking failure must not make the terminal unavailable. Its
+              // project status and the next composer submission allow retry.
+              console.debug('Workboard setup before agent start failed:', error)
+            }).finally(() => clearTimeout(preparationTimer))
+          : Promise.resolve()
+        void preparation.then(() => {
+          if (disposed || sequence !== startSequence) return undefined
+          return termStart(id, term.cols, term.rows, options)
         })
           .then((gen) => {
+            if (gen === undefined) return
             if (disposed || sequence !== startSequence) {
               void termKill(id, gen)
               return
@@ -571,6 +606,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
             activeGen = gen
             started = true
+            onReadyChangeRef.current?.(id, true)
             // Initial fit happens before the PTY exists. Send the final WebView
             // dimensions after SSH starts so the remote tty and tmux receive WINCH.
             syncStartedPtySize()
@@ -586,6 +622,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           .catch((e) => {
             if (disposed || sequence !== startSequence) return
             startupEvents = []
+            onReadyChangeRef.current?.(id, false)
             term.write(`\r\n\x1b[31m[${String(e)}]\x1b[0m\r\n`)
             setExited(true)
             onExitRef.current?.(id)
@@ -633,6 +670,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         start()
       })().catch((e) => {
         if (disposed) return
+        onReadyChangeRef.current?.(id, false)
         term.write(`\r\n\x1b[31m[${String(e)}]\x1b[0m\r\n`)
         setExited(true)
         onExitRef.current?.(id)
@@ -650,6 +688,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
       return () => {
         disposed = true
+        onReadyChangeRef.current?.(id, false)
         startSequence += 1
         const gen = activeGen
         activeGen = null

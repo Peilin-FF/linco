@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Notebook reading fixture</title></head>
+<body>
+  <div class="page">
+    <div class="toolbar">
+      <button id="save" class="btn primary">Save to file</button>
+      <button id="copy" class="btn ghost sm">Copy Markdown</button>
+      <span id="hint" class="hint">The legacy shortcut instructions should disappear.</span>
+    </div>
+    <div id="nb"></div>
+  </div>
+  <script>
+    const editions = {
+      'codex-en': 'codex/en/skills/html-kit/assets',
+      'codex-zh': 'codex/zh/skills/html-kit/assets',
+      'plugin-en': 'plugins/linco-html-en/assets',
+      'plugin-zh': 'plugins/linco-html/assets'
+    };
+    const edition = new URLSearchParams(location.search).get('edition') || 'codex-en';
+    const base = '/vendor/HTML-VibeCoding/' + editions[edition];
+    document.documentElement.lang = edition.endsWith('-zh') ? 'zh' : 'en';
+    const style = document.createElement('link');
+    style.rel = 'stylesheet'; style.href = base + '/notebook.css'; document.head.append(style);
+    const engine = document.createElement('script'); engine.src = base + '/notebook.js';
+    engine.onload = function () {
+      HtmlVibeNotebook.mount([
+        { type: 'html', html: '<section data-result="preserve"><h1>A quieter workspace</h1><p>The latest result comes first.</p><details><summary>How it works</summary><p>Keep supporting observations nearby.</p></details></section>' },
+        { type: 'md', text: 'Keep my original requirement here.' },
+        { type: 'table', head: ['Result', 'Status'], rows: [['Preview', 'Ready'], ['Notes', 'Saved']] }
+      ]);
+    };
+    document.body.append(engine);
+  </script>
+</body>
+</html>

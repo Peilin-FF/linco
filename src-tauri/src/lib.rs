@@ -88,6 +88,7 @@ fn run_desktop(context: tauri::Context<tauri::Wry>, development_window: Option<t
 
             // 存 AppHandle 给 agent_rpc 的 reader 线程 emit 文件变更事件
             agent_rpc::set_app(app.handle().clone());
+            preview::prepare_bundled_assets(app.handle());
             powerpoint_live::prepare(app.handle().clone())?;
             latex::prepare_bundled_tex(app.handle().clone());
             notion::prepare(app.handle())?;

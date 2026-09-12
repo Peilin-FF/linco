@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 
 test.beforeEach(async ({ page }) => {
   // The native preview server serves project HTML, not the Vite app entry point.
-  await page.route('**/__index__', (route) => route.fulfill({
+  await page.route('**/workbench-preview.html', (route) => route.fulfill({
     contentType: 'text/html',
     body: '<!doctype html><html lang="en"><head><title>Project preview</title></head><body style="font:14px system-ui;padding:40px;color:#293b31"><p style="font-size:11px;letter-spacing:2px;color:#627e6b">PROJECT PREVIEW</p><h1>Make something wonderful.</h1><p>Explore your project as you build it.</p><input aria-label="Preview draft" placeholder="Try your changes" style="padding:10px;border:1px solid #cad6ce;border-radius:6px;font:inherit"></body></html>',
   }))
@@ -15,6 +15,13 @@ async function openWorkbench(page: Page, query = '') {
   await expect(page.getByRole('navigation', { name: 'Workspaces', exact: true })).toBeVisible({ timeout: 15000 })
   await expect(page.locator('.workspace-canvas')).toBeVisible()
   return errors
+}
+
+async function openDocumentPreview(page: Page) {
+  await page.locator('button.preview-address').click()
+  await page.locator('input.preview-address').fill(new URL('/workbench-preview.html', page.url()).href)
+  await page.locator('input.preview-address').press('Enter')
+  await expect(page.frameLocator('iframe[title="preview"]').getByRole('textbox', { name: 'Preview draft' })).toBeVisible()
 }
 
 async function assertFits(page: Page) {
@@ -42,7 +49,12 @@ test('three workspaces, themes, editor and settings preserve the running termina
   await expect(page.getByRole('navigation', { name: 'Workspaces', exact: true }).getByRole('button')).toHaveCount(3)
   await expect(page.getByRole('button', { name: 'Vibe Working', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(page.locator('.workspace-drawer')).toHaveCount(0)
+  await openDocumentPreview(page)
   await page.frameLocator('iframe').getByRole('textbox', { name: 'Preview draft' }).fill('Preview state stays here')
+  await page.getByRole('button', { name: 'Board', exact: true }).click()
+  await expect(page.locator('iframe[title="preview"]')).toBeHidden()
+  await page.locator('button[title="Forward"]').click()
+  await expect(page.frameLocator('iframe').getByRole('textbox', { name: 'Preview draft' })).toHaveValue('Preview state stays here')
   await assertFits(page)
   await page.screenshot({ path: 'artifacts/design-light.png' })
 
@@ -88,7 +100,7 @@ test('commands work with keyboard, empty searches, Escape and focus restoration'
   const input = page.locator('#agent-composer')
   await input.focus()
   await page.keyboard.press('Control+Shift+P')
-  const search = page.getByRole('combobox')
+  const search = page.getByRole('combobox', { name: 'Search views and actions…', exact: true })
   await expect(search).toBeFocused()
   await search.fill('no-such-command')
   await expect(page.getByText('No matching commands.', { exact: false })).toBeVisible()
@@ -103,6 +115,31 @@ test('commands work with keyboard, empty searches, Escape and focus restoration'
   await page.screenshot({ path: 'artifacts/design-commands.png' })
   await page.keyboard.press('Escape')
   await expect(input).toBeFocused()
+  expect(errors).toEqual([])
+})
+
+test('returning from the board refreshes a document changed by the agent while hidden', async ({ page }) => {
+  const errors = await openWorkbench(page)
+  let revision = 1
+  await page.route('**/agent-progress.html', route => route.fulfill({
+    contentType: 'text/html', body: `<!doctype html><html><body><h1>Revision ${revision}</h1></body></html>`,
+  }))
+  await page.locator('button.preview-address').click()
+  await page.locator('input.preview-address').fill('http://127.0.0.1:1431/agent-progress.html')
+  await page.locator('input.preview-address').press('Enter')
+  const preview = page.frameLocator('iframe[title="preview"]')
+  await expect(preview.getByRole('heading', { name: 'Revision 1' })).toBeVisible()
+  await page.getByRole('button', { name: 'Board', exact: true }).click()
+  await expect(page.locator('.pwb-root')).toBeVisible()
+  revision = 2
+  await page.evaluate(async () => {
+    const eventModule = '/node_modules/@tauri-apps/api/event.js'
+    const { emit } = await import(eventModule)
+    await emit('preview-reload', { token: 2 })
+  })
+  await expect(page.locator('.pwb-root')).toBeVisible()
+  await page.locator('button[title="Forward"]').click()
+  await expect(preview.getByRole('heading', { name: 'Revision 2' })).toBeVisible()
   expect(errors).toEqual([])
 })
 
@@ -175,6 +212,7 @@ test('Visual opens the canvas, Code remembers its tool, and the composer stays u
 
 test('interface typography follows saved sizes without zooming the editor or preview', async ({ page }) => {
   const errors = await openWorkbench(page)
+  await openDocumentPreview(page)
   const mode = page.getByRole('button', { name: 'Vibe Working', exact: true })
   await expect(mode).toHaveCSS('font-size', '12px')
   await expect(page.locator('#agent-composer')).toHaveCSS('font-size', '12px')

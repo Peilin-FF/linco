@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import ScreenView from './components/ScreenView'
 import TerminalView, { type TerminalHandle } from './components/TerminalView'
-import ChatInput from './components/ChatInput'
+import ChatInput, { canAppendAgentContext } from './components/ChatInput'
 import FilesView from './components/FilesView'
 import GitView from './components/GitView'
 import DrawingView from './components/DrawingView'
@@ -64,6 +64,7 @@ import {
 import { watchStart, watchStop } from '@/lib/watch'
 import { previewPrefetchAssets } from '@/lib/preview'
 import { shadowBeginTurn } from '@/lib/shadow'
+import { ensureWorkboardProject, workboardSessionReminder } from '@/lib/workboardProject'
 import { proxyStart, proxyBeginTurn } from '@/lib/agentProxy'
 import AgentCommandLog from './components/AgentCommandLog'
 import { agentTasks, type AgentTask } from '@/lib/procs'
@@ -307,6 +308,8 @@ export default function App(): JSX.Element {
   // 对话会话:每连接一个,常驻挂载。chatRefs 按 id 持有句柄,
   // 底部对话框转发到当前活动会话。
   const chatRefs = useRef<Map<string, TerminalHandle>>(new Map())
+  const readyChatSessionsRef = useRef<Set<string>>(new Set())
+  const [readyChatSessions, setReadyChatSessions] = useState<Set<string>>(new Set())
   // 已给哪些远程 host 装过插件(每 host 一次,避免重复 rsync)
   const remotePluginsDoneRef = useRef<Set<string>>(new Set())
   // 本地已为哪个「agent 家族+语言」装过插件(避免每次 config 变更都重装)
@@ -539,6 +542,16 @@ export default function App(): JSX.Element {
   const cwd = (host ? activeConn?.cwd : config?.cwd) || undefined
   const remoteDataReady = !host || connState === 'connected'
 
+  // Project instructions belong beside the work itself, including on SSH hosts.
+  // A remote PTY may authenticate the connection first; prepare as soon as its
+  // filesystem becomes available without blocking that login path.
+  useEffect(() => {
+    if (!cwd || !remoteDataReady) return
+    void ensureWorkboardProject(cwd, host).catch(() => {
+      // The workboard exposes the scoped setup error and a retry control.
+    })
+  }, [cwd, host, remoteDataReady])
+
   // 后台预热三视图:连接/工作目录就绪后,空闲时悄悄把 文件/Git/预览 挂载好
   // (含各自首次数据拉取),用户真正点开时已热好=瞬现,不再卡那一下。
   // 切连接(host/cwd 变)时重置重热。
@@ -754,6 +767,15 @@ export default function App(): JSX.Element {
   }
   const markExited = (sid: string): void => {
     setExitedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)))
+  }
+  const markChatReady = (sid: string, ready: boolean): void => {
+    const previous = readyChatSessionsRef.current
+    if (previous.has(sid) === ready) return
+    const next = new Set(previous)
+    if (ready) next.add(sid)
+    else next.delete(sid)
+    readyChatSessionsRef.current = next
+    setReadyChatSessions(next)
   }
 
   // 连接显示名:'local' → 本地;否则取连接的 name/host。
@@ -1071,7 +1093,8 @@ export default function App(): JSX.Element {
   }
 
   // 底部对话框:始终与「对话」会话通信。发送/输入不切换当前视图。
-  const handleSend = (text: string): void => {
+  const handleSend = (text: string, session: ChatSession): void => {
+    const { cwd, host } = session
     // 用户发消息 = 新一轮:记 git 基线,之后的改动即"本轮 agent 改动"(Cursor 式 diff)。
     // 基线建好后派发 turn-refresh:让文件树重拉 git 标记、已打开文件重拉 diff,
     // 这样即便远端轮询有 ~1s 延迟,"发消息"这一刻也立即反映上一轮已落盘的改动。
@@ -1089,18 +1112,13 @@ export default function App(): JSX.Element {
     // 命令可见:新回合清空本会话命令日志(纯回合制,不累积)。同 shadow 的回合语义。
     // 无条件调用:proxy_begin_turn 对不存在/已空的文件是 no-op,无害;不依赖 proxyState
     // 避免因状态时序导致清空漏掉(代理没起时本来也没日志,截断也无妨)。
-    if (defaultAgent) {
-      const sess = `${config?.activeConnection || 'local'}:${defaultAgent.id}`
+    if (session.usage.agentId) {
+      const sess = `${session.connId}:${session.usage.agentId}`
       proxyBeginTurn(sess).catch(() => {})
     }
-    if (defaultAgent) {
+    if (session.usage.agentId) {
       usageRecordTurn(
-        {
-          agentId: defaultAgent.id,
-          agentName: defaultAgent.name,
-          provider: defaultAgent.provider,
-          model: defaultAgent.model
-        },
+        session.usage,
         text,
         { host, cwd }
       ).catch(() => {})
@@ -1115,13 +1133,18 @@ export default function App(): JSX.Element {
   // Windows:ConPTY 下 TUI 吞这段多字节文本更慢,16ms 的 \r 常常赶在文本落定前到达、
   // 被 TUI 吸收掉 → 文字进了输入框却没回车提交(就是 Windows 用户反馈的"只进框不发送")。
   // 故 Windows 用更长的延时,且分两次补发 \r 兜底(第二次防第一次仍被吃掉)。
-  const submitToAgent = (text: string): void => {
+  const submitToAgent = (text: string): boolean => {
     const t = text.trim()
-    if (!t) return
+    if (!t) return false
     const handle = chatRefs.current.get(activeChatId)
-    if (!handle) return
-    handleSend(t)
-    handle.write(t)
+    const session = chatSessions.find((candidate) => candidate.id === activeChatId)
+    if (!handle || !session || !readyChatSessionsRef.current.has(session.id)) return false
+    const suffix = canAppendAgentContext(t) && (session.command || composerEpochs[session.id]) &&
+      (!session.host || (session.host === host && remoteDataReady))
+      ? ' ' + workboardSessionReminder(session.id)
+      : ''
+    handleSend(t, session)
+    handle.write(t + suffix)
     const isWindows = navigator.platform.toLowerCase().includes('win')
     if (isWindows) {
       window.setTimeout(() => handle.write('\r'), 120)
@@ -1130,6 +1153,7 @@ export default function App(): JSX.Element {
       window.setTimeout(() => handle.write('\r'), 16)
     }
     handle.focus()
+    return true
   }
 
   // Figure work always belongs to this machine: the slide canvas drives desktop
@@ -1165,11 +1189,11 @@ export default function App(): JSX.Element {
     const started = Date.now()
     const deliver = (): void => {
       const handle = chatRefs.current.get(localFigureChatId)
-      if (!handle) {
+      if (!handle || !readyChatSessionsRef.current.has(localFigureChatId)) {
         if (Date.now() - started < 20000) window.setTimeout(deliver, 150)
         return
       }
-      handle.write(body)
+      handle.write(body + (initialCommand && canAppendAgentContext(body) ? ' ' + workboardSessionReminder(localFigureChatId) : ''))
       const isWindows = navigator.platform.toLowerCase().includes('win')
       if (isWindows) {
         window.setTimeout(() => handle.write('\r'), 120)
@@ -1178,6 +1202,7 @@ export default function App(): JSX.Element {
         window.setTimeout(() => handle.write('\r'), 16)
       }
     }
+    void ensureWorkboardProject(localFigureCwd).catch(() => {})
     deliver()
   }
 
@@ -1358,7 +1383,9 @@ export default function App(): JSX.Element {
                   identity={s.identity}
                   onActivity={markActivity}
                   onExit={markExited}
+                  onReadyChange={markChatReady}
                   usage={s.usage}
+                  projectReady={!s.host || (s.host === host && remoteDataReady)}
                 />
               </div>
             )
@@ -1707,11 +1734,18 @@ export default function App(): JSX.Element {
         <div className="app-bottom-composer min-w-0">
           {chatSessions.map((session) => <div key={`${session.id}:${composerEpochs[session.id] || 0}`} style={{ display: session.id === activeChatId ? undefined : 'none' }}>
           <ChatInput
-            onSend={handleSend}
+            onSend={(text) => handleSend(text, session)}
+            onPrepareSend={(session.command || composerEpochs[session.id]) &&
+              (!session.host || (session.host === host && remoteDataReady)) ? async () => {
+              if (!session.cwd) return undefined
+              await ensureWorkboardProject(session.cwd, session.host)
+              return workboardSessionReminder(session.id)
+            } : undefined}
             onForward={(data) => chatRefs.current.get(session.id)?.write(data)}
             cwd={session.cwd}
             remote={!!session.host}
             active={session.id === activeChatId && showComposer}
+            ready={readyChatSessions.has(session.id)}
             extraHeight={chatBoxHeight}
             maxHeight={maxComposerInputHeight}
           />

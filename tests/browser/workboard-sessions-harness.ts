@@ -1,3 +1,2 @@
-// The desktop app never imports this synthetic workspace.
 await import('./workboard-sessions-mock')
 await import('../../src/main')

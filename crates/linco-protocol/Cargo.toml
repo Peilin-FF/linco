@@ -1,6 +1,6 @@
 [package]
 name = "linco-protocol"
-version = "1.0.9"
+version = "1.0.10"
 edition = "2021"
 license = "MIT"
 rust-version.workspace = true
