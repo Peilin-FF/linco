@@ -704,6 +704,7 @@ export const zh: Record<string, string> = {
   'term.disconnected': '连接已断开',
   'term.reconnect': '重新连接',
   'term.reconnectBtn': '重连',
+  'term.refreshing': '正在更新对话…',
   'term.link.hover': '点击在浏览器中打开',
   'term.link.opening': '正在浏览器中打开…',
   'term.link.opened': '已发送到默认浏览器',

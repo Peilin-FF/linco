@@ -9,7 +9,31 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create one draft for all platforms
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            flags=()
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+              --title "Linco $TAG" --notes-file .github/release-notes.md "${flags[@]}"
+          fi
+          echo "id=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -72,14 +96,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
-          releaseBody: |
-            Linco 1.0.12:
-            - Messages you send from Linco carry the project workboard reminder only once per agent session, with the first substantive prompt, instead of with every message. A restarted session is reminded once more; slash commands and short replies are untouched.
-            - Includes 1.0.11: the redesigned Live preview board, one-click agent handoff on every action row, and the manual update check in Settings.
-
-            Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
@@ -103,6 +122,8 @@ jobs:
           import json
           d=json.load(open('latest.json'))
           p=d['platforms']
+          required={'darwin-aarch64', 'darwin-x86_64', 'windows-x86_64-nsis'}
+          assert required <= p.keys(), f'Missing updater platforms: {required - p.keys()}'
           if 'windows-x86_64-nsis' in p:
               nsis=p['windows-x86_64-nsis']
               p['windows-x86_64']={'signature':nsis['signature'],'url':nsis['url']}

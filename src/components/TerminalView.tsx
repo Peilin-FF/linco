@@ -28,6 +28,8 @@ import {
 import { useI18n } from '@/lib/i18n'
 import { observeTheme, terminalTheme } from '@/lib/theme'
 import { TerminalReplayBatcher } from '@/lib/terminalReplay'
+import { TerminalOutputQueue } from '@/lib/terminalOutputQueue'
+import { TerminalViewportCache } from '@/lib/terminalViewportCache'
 import { enableTerminalWebgl } from '@/lib/terminalWebgl'
 import { decorateTerminalOutput } from '@/lib/terminalHighlights'
 import { TmuxWheelThrottle } from '@/lib/terminalWheel'
@@ -115,6 +117,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const [linkNotice, setLinkNotice] = useState<TerminalLinkNotice | null>(null)
     const [hasSelection, setHasSelection] = useState(false)
     const [copyStatus, setCopyStatus] = useState<'copied' | 'error' | null>(null)
+    const [replaying, setReplaying] = useState(false)
     const copySelectionRef = useRef<(() => void) | null>(null)
     // 重连用:持有重启 PTY 会话的函数(由 effect 内赋值)
     const restartRef = useRef<((silent?: boolean) => void) | null>(null)
@@ -133,11 +136,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
     const projectReadyRef = useRef(projectReady)
     const usageBufferRef = useRef('')
     const usageTimerRef = useRef<number | null>(null)
-    const outputQueueRef = useRef<Uint8Array[]>([])
-    const outputFrameRef = useRef<number | null>(null)
     const decoderRef = useRef(new TextDecoder())
     const visibleRef = useRef(visible)
     const syncVisibleRef = useRef<(() => void) | null>(null)
+    const clearViewportCacheRef = useRef<(() => void) | null>(null)
     hostRef2.current = host
     identityRef.current = identity
     cwdRef.current = cwd
@@ -152,14 +154,17 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
 
     useImperativeHandle(ref, () => ({
       send: (text: string) => {
+        clearViewportCacheRef.current?.()
         // 写入文本并以回车提交,等价于在终端输入命令
         termWrite(id, text.endsWith('\n') ? text : text + '\r')
       },
       write: (data: string) => {
+        clearViewportCacheRef.current?.()
         // 原始转发(逐字符同步)
         termWrite(id, data)
       },
       restartWith: (command: string) => {
+        clearViewportCacheRef.current?.()
         // 用新命令重启:更新初始命令 ref,再走 effect 内的重启逻辑
         // (start() 读取 initCmdRef.current,termStart 会先杀掉同 id 旧 PTY)。
         initCmdRef.current = command
@@ -224,7 +229,15 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         host.dataset.terminalCols = String(term.cols)
         host.dataset.terminalRows = String(term.rows)
       }
-      fit.fit()
+      // A terminal can mount inside a collapsed/inactive pane. FitAddon would
+      // clamp that layout to 2 x 1 and launch the agent at that size, wrapping
+      // its history one character per line before the first visible fit.
+      const initialDimensions = fit.proposeDimensions()
+      if (visibleRef.current && document.visibilityState !== 'hidden' &&
+        host.clientWidth > 0 && host.clientHeight > 0 &&
+        initialDimensions && initialDimensions.cols >= 20 && initialDimensions.rows >= 2) {
+        fit.fit()
+      }
       recordTerminalDimensions()
       termRef.current = term
       fitRef.current = fit
@@ -243,24 +256,34 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       let codexBannerSeen = false
       let commandProbe = ''
       const codexOutputDecoder = new TextDecoder()
-      let replayRevealFrame: number | null = null
+      const viewportCache = new TerminalViewportCache(term, setReplaying)
+      let replayViewport = 0
+      let replayFollowBottom = true
+      let replayUserInteracted = false
+      const dismissViewportCache = (): void => {
+        replayUserInteracted = true
+        viewportCache.clear()
+      }
+      clearViewportCacheRef.current = dismissViewportCache
       const replayBatcher = new TerminalReplayBatcher({
+        // A large remote transcript may take seconds to arrive. The cached
+        // viewport stays visible while bounded batches parse underneath it.
+        quietMs: 500,
+        maxWaitMs: 30000,
         write: (bytes, onParsed) => term.write(bytes, onParsed),
         onStart: () => {
-          if (replayRevealFrame !== null) {
-            window.cancelAnimationFrame(replayRevealFrame)
-            replayRevealFrame = null
-          }
-          // Keep the current transcript visible while a remote resize redraw
-          // is buffered. Hiding it here blanks every returning conversation.
+          replayUserInteracted = false
+          replayViewport = term.buffer.active.viewportY
+          replayFollowBottom = replayViewport === term.buffer.active.baseY
+          viewportCache.hold()
         },
         onComplete: () => {
-          term.scrollToBottom()
-          replayRevealFrame = window.requestAnimationFrame(() => {
-            replayRevealFrame = null
-            if (disposed) return
-            term.refresh(0, Math.max(0, term.rows - 1))
-          })
+          if (disposed) return
+          if (!replayUserInteracted) {
+            if (replayFollowBottom) term.scrollToBottom()
+            else term.scrollToLine(Math.min(replayViewport, term.buffer.active.baseY))
+          }
+          viewportCache.reveal()
         },
         onError: (error) => console.warn('[terminal] replay batch failed', error)
       })
@@ -284,32 +307,25 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       const inspectTerminalOutput = (
         bytes: Uint8Array
       ): { startsReplay: boolean } => {
-        codexProbe = (
-          codexProbe + codexOutputDecoder.decode(bytes, { stream: true })
-        ).slice(-4096)
-        const hasBanner = /OpenAI Codex/i.test(codexProbe)
-        const startsReplay = hasBanner && !codexBannerSeen
-        if (hasBanner || /Ask Codex to do anything/i.test(codexProbe)) {
+        const prefixLength = codexProbe.length
+        const probe = codexProbe + codexOutputDecoder.decode(bytes, { stream: true })
+        // Inspect the entire new batch, not just its final 4 KiB: a long
+        // transcript often clears the screen at the beginning of a large read.
+        const freshMatch = (pattern: RegExp): boolean =>
+          [...probe.matchAll(pattern)].some(match => match.index! + match[0].length > prefixLength)
+        const hasBanner = freshMatch(/OpenAI Codex/gi)
+        const clearsHistory = freshMatch(/\x1b\[(?:2|3)J/g)
+        const startsReplay = hasBanner || (codexActive && clearsHistory)
+        if (hasBanner || /Ask Codex to do anything/i.test(probe)) {
           codexActive = true
           codexBannerSeen ||= hasBanner
         }
+        codexProbe = probe.slice(-4096)
         return { startsReplay }
       }
 
-      const flushTerminalOutput = (): void => {
-        outputFrameRef.current = null
-        const chunks = outputQueueRef.current
-        outputQueueRef.current = []
-        if (disposed || chunks.length === 0) return
-
-        const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-        const bytes = new Uint8Array(total)
-        let offset = 0
-        for (const chunk of chunks) {
-          bytes.set(chunk, offset)
-          offset += chunk.length
-        }
-
+      const outputQueue = new TerminalOutputQueue((bytes) => {
+        if (disposed) return
         const inspection = inspectTerminalOutput(bytes)
         if (inspection.startsReplay) replayBatcher.begin()
         if (!replayBatcher.push(bytes)) {
@@ -327,13 +343,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           }
         }
         onActivityRef.current?.(id)
-      }
+      })
 
       const enqueueTerminalOutput = (bytes: Uint8Array): void => {
-        outputQueueRef.current.push(bytes)
-        if (outputFrameRef.current === null) {
-          outputFrameRef.current = window.requestAnimationFrame(flushTerminalOutput)
-        }
+        outputQueue.push(bytes)
       }
 
       const showExit = (): void => {
@@ -508,15 +521,28 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       // 启动(或重启)PTY 会话:重连时复用同一函数。
       let started = false // 会话建好前不发 resize(减少无谓调用)
       let resizeFrame: number | null = null
+      let resizeTimer: ReturnType<typeof setTimeout> | undefined
       let sentCols = 0
       let sentRows = 0
+      const canPaint = (): boolean => {
+        if (disposed || !visibleRef.current || document.visibilityState === 'hidden' ||
+          host.getClientRects().length === 0) return false
+        const style = window.getComputedStyle(host)
+        // clientWidth/Height still include padding on a collapsed container.
+        return host.clientWidth > parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) &&
+          host.clientHeight > parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+      }
       const fitAndResize = (force = false): void => {
-        if (!visibleRef.current) return
+        // FitAddon clamps a hidden/zero-size container to 2 columns x 1 row.
+        // Sending that to the PTY destroys the useful viewport and asks the CLI
+        // to replay history when the window returns to its original size.
+        if (!canPaint()) return
         try {
           const proposed = fit.proposeDimensions()
+          if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows) ||
+            proposed.cols < 20 || proposed.rows < 2) return
           const ptyWillResize =
             started &&
-            proposed !== undefined &&
             (proposed.cols !== sentCols || proposed.rows !== sentRows)
           if (!force && ptyWillResize && codexActive && codexBannerSeen) {
             // Keep the local buffer visible and batch the redraw produced by
@@ -544,15 +570,40 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           fitAndResize()
         })
       }
+      const scheduleResize = (): void => {
+        clearTimeout(resizeTimer)
+        // Restore animations and workspace transitions can report several
+        // transient sizes. Send only the settled dimensions to the agent.
+        if (canPaint()) resizeTimer = setTimeout(() => fitAndResize(), 100)
+      }
       const syncVisibleSize = (): void => {
-        fitAndResize()
+        if (!canPaint()) return
+        // The persistent xterm buffer is our conversation cache. Repaint it
+        // locally on restore, even when dimensions and PTY output are unchanged.
+        // refresh preserves scrollback, selection and the user's reading position.
+        term.refresh(0, Math.max(0, term.rows - 1))
+        outputQueue.flush()
+        scheduleResize()
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
         resizeFrame = window.requestAnimationFrame(() => {
           resizeFrame = null
-          fitAndResize()
+          if (canPaint()) term.refresh(0, Math.max(0, term.rows - 1))
         })
       }
       syncVisibleRef.current = syncVisibleSize
+      const onVisibilityChange = (): void => {
+        if (document.visibilityState === 'hidden') {
+          clearTimeout(resizeTimer)
+          outputQueue.flush()
+        }
+        else syncVisibleSize()
+      }
+      document.addEventListener('visibilitychange', onVisibilityChange)
+      window.addEventListener('focus', syncVisibleSize)
+      window.addEventListener('pageshow', syncVisibleSize)
+      host.addEventListener('pointerdown', dismissViewportCache, true)
+      host.addEventListener('wheel', dismissViewportCache, true)
+      host.addEventListener('keydown', dismissViewportCache, true)
       const start = (): void => {
         const sequence = ++startSequence
         onReadyChangeRef.current?.(id, false)
@@ -677,7 +728,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
       })
 
       // 尺寸自适应:容器变化时 fit + 同步 PTY(会话建好后才发 resize)
-      const ro = new ResizeObserver(() => fitAndResize())
+      const ro = new ResizeObserver(scheduleResize)
       ro.observe(host)
 
       const stopObservingTheme = observeTheme(() => {
@@ -694,13 +745,19 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         activeGen = null
         startupEvents = []
         syncVisibleRef.current = null
+        clearViewportCacheRef.current = null
+        document.removeEventListener('visibilitychange', onVisibilityChange)
+        window.removeEventListener('focus', syncVisibleSize)
+        window.removeEventListener('pageshow', syncVisibleSize)
+        host.removeEventListener('pointerdown', dismissViewportCache, true)
+        host.removeEventListener('wheel', dismissViewportCache, true)
+        host.removeEventListener('keydown', dismissViewportCache, true)
         ro.disconnect()
+        clearTimeout(resizeTimer)
         if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame)
         tmuxWheelThrottle.dispose()
         replayBatcher.dispose()
-        if (replayRevealFrame !== null) {
-          window.cancelAnimationFrame(replayRevealFrame)
-        }
+        viewportCache.dispose()
         highlights.dispose()
         links.dispose()
         conversationSelection.dispose()
@@ -713,12 +770,7 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
         titleSub.dispose()
         const timer = usageTimerRef.current
         window.clearTimeout(timer ?? undefined)
-        if (outputFrameRef.current !== null) {
-          const frame = outputFrameRef.current
-          window.cancelAnimationFrame(frame)
-          outputFrameRef.current = null
-        }
-        outputQueueRef.current = []
+        outputQueue.dispose()
         flushUsageOutput()
         unlistenOut?.()
         unlistenExit?.()
@@ -743,9 +795,10 @@ const TerminalView = forwardRef<TerminalHandle, TerminalViewProps>(
           data-terminal-kind={
             id.startsWith('chat:') ? 'chat' : id.startsWith('dock:') ? 'dock' : 'shell'
           }
-          className="h-full w-full px-3 pt-2"
+          className="relative z-0 h-full w-full px-3 pt-2"
         />
         {linkNotice && <TerminalLinkFeedback key={`${linkNotice.url}:${linkNotice.status}`} notice={linkNotice} onClose={() => setLinkNotice(null)} />}
+        {replaying && !exited && <div role="status" className="pointer-events-none absolute right-3 top-2 rounded-md bg-canvas/95 px-2 py-1 text-[11px] text-ink-muted">{t('term.refreshing')}</div>}
         {(hasSelection || copyStatus) && <div className="absolute bottom-2 right-3 flex items-center gap-2 rounded-md border border-black/10 bg-canvas/95 px-2 py-1 text-[11px] text-ink shadow-sm">
           {copyStatus === 'error' && <span role="alert" className="text-red-600">{t('term.copyFailed')}</span>}
           <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => copySelectionRef.current?.()}

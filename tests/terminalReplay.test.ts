@@ -103,6 +103,26 @@ describe('TerminalReplayBatcher', () => {
     expect(writes).toEqual([Uint8Array.of(9, 8, 7, 6)])
   })
 
+  it('keeps the replay active across size-limited flushes until output settles', () => {
+    const writes: Uint8Array[] = []
+    const onComplete = vi.fn()
+    const batcher = new TerminalReplayBatcher({
+      maxBytes: 4, quietMs: 100,
+      onStart: vi.fn(), onComplete,
+      write: (data, parsed) => { writes.push(data); parsed() }
+    })
+    batcher.begin()
+    expect(batcher.push(Uint8Array.of(1, 2, 3, 4))).toBe(true)
+    expect(batcher.active).toBe(true)
+    expect(onComplete).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(80)
+    expect(batcher.push(Uint8Array.of(5, 6, 7, 8))).toBe(true)
+    expect(writes).toEqual([Uint8Array.of(1, 2, 3, 4), Uint8Array.of(5, 6, 7, 8)])
+    vi.advanceTimersByTime(100)
+    expect(onComplete).toHaveBeenCalledOnce()
+    expect(batcher.active).toBe(false)
+  })
+
   it('does not reveal or write after disposal', () => {
     const write = vi.fn()
     const onComplete = vi.fn()
@@ -119,6 +139,28 @@ describe('TerminalReplayBatcher', () => {
     vi.runAllTimers()
     expect(write).not.toHaveBeenCalled()
     expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  it('queues buffered history before passthrough when the deadline interrupts parsing', () => {
+    const writes: Uint8Array[] = []
+    const callbacks: Array<() => void> = []
+    const onComplete = vi.fn()
+    const batcher = new TerminalReplayBatcher({
+      maxBytes: 4, quietMs: 1000, maxWaitMs: 100,
+      onStart: vi.fn(), onComplete,
+      write: (data, parsed) => { writes.push(data); callbacks.push(parsed) }
+    })
+    batcher.begin()
+    batcher.push(Uint8Array.of(1, 2, 3, 4)) // A is still parsing.
+    batcher.push(Uint8Array.of(5, 6)) // B is buffered.
+    vi.advanceTimersByTime(100)
+    const live = Uint8Array.of(7, 8)
+    if (!batcher.push(live)) writes.push(live) // C passes through after the deadline.
+    expect(writes).toEqual([Uint8Array.of(1, 2, 3, 4), Uint8Array.of(5, 6), live])
+    callbacks[0]()
+    expect(onComplete).not.toHaveBeenCalled()
+    callbacks[1]()
+    expect(onComplete).toHaveBeenCalledOnce()
   })
 
   it('uses an absolute deadline and switches continuing output to passthrough', () => {

@@ -26,8 +26,9 @@ export class TerminalReplayBatcher {
 
   private chunks: Uint8Array[] = []
   private byteLength = 0
-  private flushing = false
+  private pendingWrites = 0
   private finishing = false
+  private settling = false
   private sawOutput = false
   private disposed = false
   private idleTimer: ReturnType<typeof setTimeout> | undefined
@@ -51,6 +52,7 @@ export class TerminalReplayBatcher {
     if (!this.active) {
       this.active = true
       this.finishing = false
+      this.settling = false
       this.sawOutput = false
       this.onStart()
     }
@@ -62,6 +64,7 @@ export class TerminalReplayBatcher {
   public push(data: Uint8Array): boolean {
     if (this.disposed || !this.active || this.finishing) return false
     this.chunks.push(data)
+    this.settling = false
     this.byteLength += data.length
     if (!this.sawOutput) {
       this.sawOutput = true
@@ -75,11 +78,15 @@ export class TerminalReplayBatcher {
   public flush(finalize = false): void {
     if (this.disposed || !this.active) return
     if (finalize) this.finishing = true
-    if (this.flushing) return
+    // At the hard deadline enqueue all remaining bytes before allowing new
+    // output to pass through, even if an earlier size-limited write is parsing.
+    if (this.pendingWrites > 0 && !finalize) return
     if (finalize) this.clearTimers()
     else this.clearIdleTimer()
     if (this.byteLength === 0) {
-      this.complete()
+      if (this.pendingWrites > 0) return
+      if (this.finishing || this.settling) this.complete()
+      else this.armIdleTimer()
       return
     }
 
@@ -91,23 +98,26 @@ export class TerminalReplayBatcher {
     }
     this.chunks = []
     this.byteLength = 0
-    this.flushing = true
+    this.pendingWrites++
 
     try {
       this.write(data, () => {
-        this.flushing = false
+        this.pendingWrites--
         if (this.disposed) return
+        if (this.pendingWrites > 0) return
         if (this.finishing) {
           if (this.byteLength > 0) this.flush(true)
           else this.complete()
-        } else if (this.byteLength > 0) {
-          this.armIdleTimer()
-        } else {
+        } else if (this.settling && this.byteLength === 0) {
           this.complete()
+        } else {
+          // A size-limited flush is only part of the replay. Keep buffering
+          // later chunks and holding the cached viewport until output settles.
+          this.armIdleTimer()
         }
       })
     } catch (error) {
-      this.flushing = false
+      this.pendingWrites--
       this.onError?.(error)
       this.complete()
     }
@@ -117,6 +127,7 @@ export class TerminalReplayBatcher {
     this.disposed = true
     this.active = false
     this.finishing = false
+    this.settling = false
     this.sawOutput = false
     this.chunks = []
     this.byteLength = 0
@@ -140,6 +151,7 @@ export class TerminalReplayBatcher {
     this.clearIdleTimer()
     this.idleTimer = setTimeout(() => {
       this.idleTimer = undefined
+      this.settling = true
       this.flush()
     }, this.quietMs)
   }

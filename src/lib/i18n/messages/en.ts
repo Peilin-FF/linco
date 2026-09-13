@@ -689,6 +689,7 @@ export const en: Record<string, string> = {
   'term.disconnected': 'disconnected',
   'term.reconnect': 'Reconnect',
   'term.reconnectBtn': 'Reconnect',
+  'term.refreshing': 'Updating conversation…',
   'term.link.hover': 'Click to open in your browser',
   'term.link.opening': 'Opening in your browser…',
   'term.link.opened': 'Sent to your default browser',

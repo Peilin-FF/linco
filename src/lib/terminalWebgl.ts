@@ -17,7 +17,9 @@ type WebglFactory = () => WebglAddonLike
 export function enableTerminalWebgl(
   terminal: Terminal,
   onChange?: (kind: TerminalRendererKind) => void,
-  createAddon: WebglFactory = () => new WebglAddon()
+  // Retain the last painted pixels so a resize/history replay can snapshot the
+  // visible viewport before the CLI clears it. Only one viewport is copied.
+  createAddon: WebglFactory = () => new WebglAddon(true)
 ): TerminalWebglHandle {
   let addon: WebglAddonLike | undefined
   let contextLossSubscription: IDisposable | undefined
