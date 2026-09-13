@@ -19,18 +19,17 @@ interface PreviewWorkboardProps {
 
 const words = {
   en: {
-    board: 'Project workboard', heading: 'Work in view', eyebrow: 'LINCO', subtitle: 'A little space for the work that matters.',
-    trackingReady: 'Session tracking ready', trackingPreparing: 'Preparing session tracking…', trackingError: 'Could not prepare session tracking', trackingHint: 'Agent sessions in this project receive instructions to create and update actions.', viewAction: 'View action',
+    board: 'Project workboard', heading: 'Work in view',
+    trackingReady: 'Shared with Codex and Claude Code sessions', trackingPreparing: 'Preparing session tracking…', trackingError: 'Could not prepare session tracking', trackingHint: 'Agent sessions in this project create and update actions here, so any agent can pick up where another left off.', viewAction: 'View action',
     newOutcome: 'New action', planned: 'Planned', progress: 'In progress', review: 'Needs review', done: 'Done',
-    current: 'CURRENT FOCUS', next: 'UP NEXT', noCurrent: 'No work in progress', noNext: 'Your next action goes here',
-    currentHint: 'Choose an action when work begins.', nextHint: 'Keep future actions in Planned.',
+    next: 'Next', askAgent: 'Ask agent', askAgentHint: 'Send this action to the agent session that is open now.',
+    nothingYet: 'Nothing in motion yet.', countProgress: '{n} in progress', countReview: '{n} waiting for your review', countPlanned: '{n} planned', countDone: '{n} done', listSeparator: ', ', sentenceEnd: '.',
     search: 'Search actions', filter: 'Filter actions', all: 'All actions', active: 'Active', archived: 'Archived',
     title: 'Title', titlePlaceholder: 'What should be different when this is done?', outcome: 'Expected outcome', action: 'Action',
     outcomePlaceholder: 'Describe the result and why it matters.', status: 'Status', create: 'Create action', cancel: 'Cancel',
     save: 'Save changes', saving: 'Saving…', latest: 'Latest progress', nextStep: 'Next step', acceptance: 'Acceptance checks',
     acceptanceHint: 'One check per line', progressPlaceholder: 'A concise account of the current state.', nextPlaceholder: 'The next concrete action or decision.',
     emptyTitle: 'Good work starts with an intention.', emptyBody: 'Ask your agent to begin. Each action keeps its progress and results together. You can also create an action here.',
-    emptyPlanned: 'Nothing planned yet', emptyProgress: 'Nothing in progress', emptyReview: 'Nothing to review', emptyDone: 'Completed work lives here',
     noMatches: 'No matching actions', unassigned: 'Link existing artifact', unassignedBody: 'Attach an existing HTML file as a supporting result for an action. Its file stays where it is.',
     noUnassigned: 'All discovered HTML files are linked, or no HTML files have been created yet.', limited: 'Discovery reached its limit. You can also attach a project-relative file path in action details.',
     open: 'Open', attach: 'Attach', attachFile: 'Attach file', attachTo: 'Attach to an action', newInstead: 'New action instead',
@@ -49,23 +48,21 @@ const words = {
     changedElsewhere: 'This action has new updates. Your draft is preserved; saving changes only the fields you edited.',
     needsTitle: 'Give this action a title.', invalidPath: 'Use a project-relative .html or .htm file path without .. segments.',
     chooseOutcome: 'Choose an action', linked: 'Linked preview', attachment: 'Preview attached',
-    runningCount: 'in progress', reviewCount: 'need review', doneCount: 'done', totalCount: 'actions',
     noHistory: 'Progress and decisions will appear here.', deleted: 'This action is no longer available. Close and refresh the workboard.',
     archiveHint: 'Archived actions remain in project history.', optional: 'Optional', noUpdate: 'No progress update yet', changeDetails: 'View changes',
   },
   zh: {
-    board: '项目工作看板', heading: '让进展清晰可见', eyebrow: 'LINCO', subtitle: '留一点空间，专注重要的事。',
-    trackingReady: '会话追踪已就绪', trackingPreparing: '正在准备会话追踪…', trackingError: '无法准备会话追踪', trackingHint: '此项目中的 Agent 会话将收到创建和更新行动的指引。', viewAction: '查看行动',
+    board: '项目工作看板', heading: '让进展清晰可见',
+    trackingReady: '与 Codex 和 Claude Code 会话共享', trackingPreparing: '正在准备会话追踪…', trackingError: '无法准备会话追踪', trackingHint: '此项目中的 Agent 会话会在这里创建和更新行动，任何 Agent 都能接着上一个继续。', viewAction: '查看行动',
     newOutcome: '新建行动', planned: '待开始', progress: '进行中', review: '待审阅', done: '已完成',
-    current: '当前重点', next: '下一步', noCurrent: '暂无进行中的工作', noNext: '在这里规划下一项行动',
-    currentHint: '开始工作时，将行动移至进行中。', nextHint: '将后续行动放在待开始列。',
+    next: '下一步', askAgent: '交给 Agent', askAgentHint: '将此行动发送给当前打开的 Agent 会话。',
+    nothingYet: '还没有进行中的工作。', countProgress: '{n} 项进行中', countReview: '{n} 项等待你审阅', countPlanned: '{n} 项待开始', countDone: '{n} 项已完成', listSeparator: '，', sentenceEnd: '。',
     search: '搜索行动', filter: '筛选行动', all: '全部行动', active: '未完成', archived: '已归档',
     title: '标题', titlePlaceholder: '完成后，你希望看到什么变化？', outcome: '预期结果', action: '行动',
     outcomePlaceholder: '描述预期结果及其意义。', status: '状态', create: '创建行动', cancel: '取消',
     save: '保存修改', saving: '保存中…', latest: '最新进展', nextStep: '下一步', acceptance: '验收条件',
     acceptanceHint: '每行一项条件', progressPlaceholder: '简要记录当前状态。', nextPlaceholder: '下一项具体行动或需要做出的决定。',
     emptyTitle: '从一个想法，开始一项行动。', emptyBody: '让 Agent 开始工作，每项行动会收纳自己的进展与成果。也可以在这里创建行动。',
-    emptyPlanned: '暂无待开始的行动', emptyProgress: '暂无进行中的行动', emptyReview: '暂无待审阅的行动', emptyDone: '完成的工作会留在这里',
     noMatches: '没有匹配的行动', unassigned: '关联已有文档', unassignedBody: '将已有 HTML 文件关联为行动的相关成果。文件仍保留在原位置。',
     noUnassigned: '已发现的 HTML 文件均已关联，或项目尚未创建 HTML 文件。', limited: '文件发现已达到数量上限。也可在行动详情内输入项目相对路径进行关联。',
     open: '打开', attach: '关联', attachFile: '关联文件', attachTo: '关联到行动', newInstead: '改为新建行动',
@@ -84,13 +81,14 @@ const words = {
     changedElsewhere: '此行动有新更新。你的草稿已保留；保存时仅更新你编辑过的字段。',
     needsTitle: '请填写行动标题。', invalidPath: '请输入不含 .. 路径段的项目相对 .html 或 .htm 文件路径。',
     chooseOutcome: '选择行动', linked: '已关联预览', attachment: '关联预览',
-    runningCount: '进行中', reviewCount: '待审阅', doneCount: '已完成', totalCount: '项行动',
     noHistory: '进展与决策将在此显示。', deleted: '此行动已不可用。请关闭并刷新看板。',
     archiveHint: '归档行动仍保留在项目历史中。', optional: '选填', noUpdate: '暂无进展更新', changeDetails: '查看修改',
   }
 }
 
 const statuses: WorkboardStatus[] = ['planned', 'progress', 'review', 'done']
+const sectionOrder: WorkboardStatus[] = ['progress', 'review', 'planned', 'done']
+type Counts = Record<WorkboardStatus, number> & { total: number }
 type TaskPatch = NonNullable<Parameters<typeof appendWorkboardEvent>[1]['patch']>
 type Draft = { title: string; description: string; summary: string; nextAction: string; status: WorkboardStatus; acceptance: string }
 const emptyDraft = (): Draft => ({ title: '', description: '', summary: '', nextAction: '', status: 'planned', acceptance: '' })
@@ -111,6 +109,16 @@ function Modal({ title, children, onClose, busy }: { title: string; children: Re
     <div className="pwb-dialog-heading"><h2 id={titleId}>{title}</h2><button type="button" className="pwb-icon-button" aria-label={words[lang].close} disabled={busy} onClick={onClose}><X size={18} /></button></div>
     {children}
   </dialog>
+}
+
+/* Each status is a small member of one circle family: open, half full in pond blue, full in rose, full in violet. */
+function Mark({ status }: { status: WorkboardStatus }): JSX.Element {
+  const half = Math.PI * 3
+  return <svg className={`pwb-mark pwb-mark-${status}`} viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+    {status === 'progress' && <circle className="pwb-mark-fill" cx="6" cy="6" r="3" fill="none" strokeWidth="6" strokeDasharray={`${half} ${half * 2}`} transform="rotate(-90 6 6)" />}
+    {(status === 'review' || status === 'done') && <circle className="pwb-mark-fill" cx="6" cy="6" r="5.5" />}
+    <circle cx="6" cy="6" r="5.5" fill="none" stroke="currentColor" strokeWidth="1" />
+  </svg>
 }
 
 export default function PreviewWorkboard({ cwd, host, onOpenArtifact, onSubmitToAgent }: PreviewWorkboardProps): JSX.Element {
@@ -219,6 +227,18 @@ export default function PreviewWorkboard({ cwd, host, onOpenArtifact, onSubmitTo
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseDraft)
   const taskEvents = events.filter(event => event.taskId === selectedId).sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
   const formatTime = (at: string): string => new Date(at).toLocaleString(lang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const formatDate = (at: string): string => new Date(at).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' })
+  const fill = (template: string, values: Record<string, number>): string => template.replace(/\{(\w+)\}/g, (_match, key: string) => String(values[key] ?? ''))
+  const counts = useMemo<Counts>(() => activeTasks.reduce((sum, task) => ({ ...sum, [task.status]: sum[task.status] + 1, total: sum.total + 1 }), { planned: 0, progress: 0, review: 0, done: 0, total: 0 } as Counts), [activeTasks])
+  const stateSentence = counts.total === 0 ? w.nothingYet : [
+    counts.progress ? fill(w.countProgress, { n: counts.progress }) : '', counts.review ? fill(w.countReview, { n: counts.review }) : '',
+    counts.planned ? fill(w.countPlanned, { n: counts.planned }) : '', counts.done ? fill(w.countDone, { n: counts.done }) : '',
+  ].filter(Boolean).join(w.listSeparator) + w.sentenceEnd
+  const lastTouched = useMemo(() => {
+    const latest = new Map<string, WorkboardEvent>()
+    for (const event of events) { const current = latest.get(event.taskId); if (!current || event.at > current.at) latest.set(event.taskId, event) }
+    return latest
+  }, [events])
 
   useEffect(() => {
     if (!selected || dirty) return
@@ -292,11 +312,11 @@ export default function PreviewWorkboard({ cwd, host, onOpenArtifact, onSubmitTo
     if (!selected || !note.trim()) return
     if (await write({ taskId: selected.id, actor: 'user', type, note: note.trim() })) setNote('')
   }
-  const requestWork = async (): Promise<void> => {
-    if (!selected || dirty || !onSubmitToAgent) return
-    const event = await write({ taskId: selected.id, actor: 'user', type: 'note', note: w.requested })
+  const requestWork = async (task: WorkboardTask): Promise<void> => {
+    if (!onSubmitToAgent || (task.id === selectedId && dirty)) return
+    const event = await write({ taskId: task.id, actor: 'user', type: 'note', note: w.requested })
     if (event) {
-      try { if (onSubmitToAgent(workboardAgentPrompt(selected)) === false) setError(w.requestUnavailable) } catch (failure) { setError(errorText(failure)) }
+      try { if (onSubmitToAgent(workboardAgentPrompt(task)) === false) setError(w.requestUnavailable) } catch (failure) { setError(errorText(failure)) }
     }
   }
   const statusOptions = statuses.map(status => <option key={status} value={status}>{w[status]}</option>)
@@ -319,26 +339,26 @@ export default function PreviewWorkboard({ cwd, host, onOpenArtifact, onSubmitTo
   if (!cwd) return <div className="pwb-root pwb-project-empty"><LayoutGrid size={28} /><p>{w.noProject}</p></div>
 
   return <div className="pwb-root preview-workboard" aria-label={w.board}>
-    <div className="pwb-scroll">
-      <header className="pwb-heading"><div><div className="pwb-eyebrow"><span className="pwb-project-mark" aria-hidden="true" /><span className="pwb-project-name" title={`${host ? `${host}: ` : ''}${cwd}`}>{host ? `${host} / ` : ''}{filename(cwd)}</span></div><h1>{w.heading}</h1></div><button type="button" className="pwb-secondary pwb-new-action" disabled={pending || loading} onClick={() => beginCreate()}><Plus size={15} />{w.newOutcome}</button></header>
+    <div className="pwb-scroll"><div className="pwb-page">
+      <header className="pwb-heading"><div><div className="pwb-eyebrow"><span className="pwb-project-mark" aria-hidden="true" /><span className="pwb-project-name" title={`${host ? `${host}: ` : ''}${cwd}`}>{host ? `${host} / ` : ''}{filename(cwd)}</span></div><h1>{w.heading}</h1>{!loading && <p className="pwb-state">{stateSentence}</p>}</div></header>
       {!creating && !selectedId && !attaching && errorNotice}
       {warnings.length > 0 && <details className="pwb-warning"><summary>{w.warnings} ({warnings.length})</summary>{warnings.map((warning, index) => <p key={index}>{warning}</p>)}</details>}
       {loading ? <div className="pwb-loading" role="status"><RotateCw size={17} />{w.loading}</div> : <>
-        <div className="pwb-toolbar"><label className="pwb-search"><Search size={14} /><input aria-label={w.search} placeholder={w.search} value={search} onChange={event => setSearch(event.target.value)} /></label><select aria-label={w.filter} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{w.all}</option><option value="active">{w.active}</option><option value="archived">{w.archived}</option></select><button type="button" className="pwb-icon-button" aria-label={w.refresh} title={w.refresh} disabled={pending} onClick={() => void refresh()}><RotateCw size={14} /></button></div>
-        {tasks.length === 0 && !visibleError && <div className="pwb-onboarding"><div className="pwb-onboarding-icon"><LayoutGrid size={22} /></div><div><h2>{w.emptyTitle}</h2><p>{w.emptyBody}</p></div></div>}
+        <div className="pwb-toolbar"><button type="button" className="pwb-new-action" disabled={pending} onClick={() => beginCreate()}><span className="pwb-plus" aria-hidden="true"><Plus size={16} /></span>{w.newOutcome}</button><label className="pwb-search"><Search size={14} /><input aria-label={w.search} placeholder={w.search} value={search} onChange={event => setSearch(event.target.value)} /></label><select aria-label={w.filter} value={filter} onChange={event => setFilter(event.target.value)}><option value="all">{w.all}</option><option value="active">{w.active}</option><option value="archived">{w.archived}</option></select><button type="button" className="pwb-icon-button" aria-label={w.refresh} title={w.refresh} disabled={pending} onClick={() => void refresh()}><RotateCw size={14} /></button></div>
+        {tasks.length === 0 && !visibleError && <div className="pwb-onboarding"><h2>{w.emptyTitle}</h2><p>{w.emptyBody}</p></div>}
         {tasks.length > 0 && visibleTasks.length === 0 && <p className="pwb-muted pwb-no-matches">{w.noMatches}</p>}
-        <div className="pwb-lanes">{statuses.map(status => <section className={`pwb-lane pwb-lane-${status}`} key={status} aria-label={w[status]}>
-          <div className="pwb-lane-heading"><h2><span className={`pwb-dot pwb-dot-${status}`} />{w[status]}</h2><span className="pwb-count">{visibleTasks.filter(task => task.status === status).length}</span></div>
-          <div className="pwb-lane-cards">{visibleTasks.filter(task => task.status === status).map(task => <article className="pwb-card" key={task.id}>
-            <button type="button" className="pwb-card-main" aria-label={`${w.viewAction}: ${task.title}`} disabled={pending} onClick={() => void openAction(task)}><span className="pwb-card-title">{task.title}</span>{(task.summary || task.description) && <span className="pwb-card-summary">{task.summary || task.description}</span>}{task.nextAction && task.status !== 'done' && <span className="pwb-card-next"><span><strong>{w.nextStep} · </strong>{task.nextAction}</span></span>}</button>
-            <div className="pwb-card-footer"><button type="button" className="pwb-card-preview" aria-label={w.openAction} disabled={pending} onClick={() => void openAction(task)} title={w.actionArtifactHint}><span>{w.viewAction}</span><ArrowRight size={12} /></button><button type="button" className="pwb-icon-button" disabled={pending} onClick={() => openTask(task)} aria-label={`${w.actionDetails}: ${task.title}`} title={w.actionDetails}><MoreHorizontal size={16} /></button></div>
-          </article>)}{!visibleTasks.some(task => task.status === status) && <div className="pwb-lane-empty"><span>{w[({ planned: 'emptyPlanned', progress: 'emptyProgress', review: 'emptyReview', done: 'emptyDone' } as const)[status]]}</span></div>}</div>
-        </section>)}</div>
+        <div className="pwb-sections">{sectionOrder.map(status => { const rows = visibleTasks.filter(task => task.status === status); return rows.length === 0 ? null : <section className={`pwb-section pwb-section-${status}`} key={status} aria-label={w[status]}>
+          <div className="pwb-section-head"><h2>{w[status]}</h2><span className="pwb-count">{rows.length}</span></div>
+          <div className="pwb-rows">{rows.map(task => { const text = task.summary || task.description; const touched = lastTouched.get(task.id); return <article className={`pwb-card pwb-card-${status}`} key={task.id}>
+            <button type="button" className="pwb-card-main" aria-label={`${w.viewAction}: ${task.title}`} title={w.actionArtifactHint} disabled={pending} onClick={() => void openAction(task)}><Mark status={status} /><span className="pwb-card-body"><span className="pwb-card-title">{task.title}</span>{status !== 'done' && (text || task.nextAction) && <span className="pwb-card-text">{text && <span className="pwb-card-summary">{text}</span>}{task.nextAction && <span className="pwb-card-next"><span className="pwb-card-next-label">{w.next}</span>{task.nextAction}</span>}</span>}</span></button>
+            <div className="pwb-card-aside">{touched && <span className="pwb-card-who">{touched.actor === 'agent' ? w.agent : w.user}</span>}<time dateTime={task.updatedAt}>{formatDate(task.updatedAt)}</time>{onSubmitToAgent && status !== 'done' && !task.archived && <button type="button" className="pwb-text-button pwb-card-ask" aria-label={`${w.askAgent}: ${task.title}`} title={w.askAgentHint} disabled={pending} onClick={() => void requestWork(task)}>{w.askAgent}</button>}<button type="button" className="pwb-icon-button" disabled={pending} onClick={() => openTask(task)} aria-label={`${w.actionDetails}: ${task.title}`} title={w.actionDetails}><MoreHorizontal size={16} /></button></div>
+          </article> })}</div>
+        </section> })}</div>
         <details className="pwb-inbox"><summary><FolderOpen size={14} /><strong>{w.unassigned}</strong><ChevronDown size={13} /></summary><p className="pwb-muted">{w.unassignedBody}</p>{unassigned.length === 0 ? <p className="pwb-muted">{w.noUnassigned}</p> : <div className="pwb-inbox-files">{unassigned.map(path => <div className="pwb-file-row" data-artifact-path={path} key={path}><FileText size={15} /><div className="pwb-file-name"><strong>{filename(path)}</strong><span title={path}>{path}</span></div><button type="button" className="pwb-text-button" disabled={pending} onClick={() => openFile(path)}>{w.open}</button><button type="button" className="pwb-secondary" disabled={pending} onClick={() => { setAttaching(path); setAttachTarget(activeTasks[0]?.id || ''); setError('') }}><Plus size={12} />{w.attach}</button></div>)}</div>}{limited && <p className="pwb-muted">{w.limited}</p>}</details>
         <footer className="pwb-footer"><span>{!visibleError && <><Check size={12} />{w.saved}</>}</span><span role="status" title={tracking.status === 'ready' ? w.trackingHint : undefined}>{tracking.status === 'ready' ? w.trackingReady : tracking.status === 'preparing' ? w.trackingPreparing : ''}</span></footer>
         {tracking.status === 'error' && <div className="pwb-error pwb-tracking-error" role="alert"><strong>{w.trackingError}</strong><span>{tracking.message}</span><button type="button" onClick={() => { void ensureWorkboardProject(cwd, host).catch(() => {}) }}>{w.retry}</button></div>}
       </>}
-    </div>
+    </div></div>
 
     {creating && <Modal title={w.newOutcome} onClose={() => setCreating(false)} busy={pending}><form className="pwb-form" onSubmit={event => { event.preventDefault(); void createOutcome() }}>{errorNotice}<p className="pwb-muted pwb-create-hint"><FileText size={14} />{w.createHint}</p><fieldset disabled={pending}>
       <label>{w.title}<input autoFocus value={draft.title} placeholder={w.titlePlaceholder} onChange={event => updateDraft('title', event.target.value)} required maxLength={240} /></label>
@@ -372,7 +392,7 @@ export default function PreviewWorkboard({ cwd, host, onOpenArtifact, onSubmitTo
           <ol className="pwb-history">{taskEvents.slice(-historyLimit).map(event => <li key={event.id}><span className={`pwb-history-marker ${event.type === 'decision' ? 'pwb-history-decision' : ''}`} /><div className="pwb-history-meta"><strong>{event.actor === 'agent' ? w.agent : w.user}</strong><span>{describeEvent(event)}</span><time dateTime={event.at}>{formatTime(event.at)}</time></div>{event.note && <p>{event.note}</p>}{eventChanges(event).length > 0 && <details className="pwb-event-changes"><summary>{w.changeDetails}</summary><dl>{eventChanges(event).map(([field, value]) => <div key={field}><dt>{field}</dt><dd>{value}</dd></div>)}</dl></details>}</li>)}</ol>
         </section>
 
-        <section className="pwb-agent-action"><div><Sparkles size={17} /><p>{dirty ? w.saveFirst : w.requestHint}</p></div>{onSubmitToAgent && <button type="button" className="pwb-primary" disabled={pending || dirty || selected.archived} onClick={() => void requestWork()}><ArrowRight size={14} />{w.request}</button>}</section>
+        <section className="pwb-agent-action"><div><Sparkles size={17} /><p>{dirty ? w.saveFirst : w.requestHint}</p></div>{onSubmitToAgent && <button type="button" className="pwb-primary" disabled={pending || dirty || selected.archived} onClick={() => void requestWork(selected)}><ArrowRight size={14} />{w.request}</button>}</section>
         <div className="pwb-detail-bottom"><button type="button" className="pwb-text-button" disabled={pending || dirty} title={w.archiveHint} onClick={async () => { if (await write({ taskId: selected.id, actor: 'user', type: 'update', patch: { archived: !selected.archived }, note: selected.archived ? w.restoreNote : w.archiveNote })) setSelectedId(null) }}><Archive size={13} />{selected.archived ? w.restore : w.archive}</button>{selected.status !== 'done' && <button type="button" className="pwb-secondary" disabled={pending || dirty} onClick={async () => { if (await write({ taskId: selected.id, actor: 'user', type: 'update', patch: { status: 'done' }, note: w.markedDone })) { setDraft(previous => ({ ...previous, status: 'done' })); setBaseDraft(previous => ({ ...previous, status: 'done' })) } }}><Check size={14} />{w.markDone}</button>}</div>
       </div>}
     </Modal>}
