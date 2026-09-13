@@ -3,6 +3,7 @@ import { useI18n } from '@/lib/i18n'
 import { importedThemes, importTheme, removeImportedTheme, ThemeImportError, THEME_IMPORT_LIMIT } from '@/lib/importedThemes'
 import type { AppConfig } from '@/lib/config'
 import ThemeGallery from './ThemeGallery'
+import UpdateSettings from './UpdateSettings'
 import {
   THEMES,
   applyTheme,
@@ -182,6 +183,7 @@ export default function GeneralSettings({ config, onChange }: Props): JSX.Elemen
           </pre>
         </div>
       </section>
+      <UpdateSettings />
     </div>
   )
 }

@@ -573,6 +573,12 @@ export const zh: Record<string, string> = {
   'update.installNow': '立即更新',
   'update.later': '稍后',
   'update.restartHint': '更新后 App 会自动重启',
+  'settings.updates': '更新',
+  'update.currentVersion': '当前版本 {version}',
+  'update.checkNow': '检查更新',
+  'update.checking': '正在检查…',
+  'update.upToDate': '已是最新版本。',
+  'update.failedHint': '部分网络下发布检查会失败。可以重试，或到 Releases 页面下载安装包。',
   // Git 视图
   'git.pickDir': '选择工作目录',
   'git.notRepo': '当前目录不是 Git 仓库',
