@@ -75,10 +75,9 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.11:
-            - Live preview has a new board: a quiet white surface in a palette taken from Monet's water lilies, with a large title, one rule, and each action as a row in reading order: in progress, needs review, planned, done. Empty groups no longer stand as empty columns.
-            - Each row shows who last touched the action and when, and carries an Ask agent link that hands the action to the open agent session, so Codex and Claude Code sessions can pass work between them on the same board.
-            - Settings shows the installed version with a manual update check, so a failed release check is visible and can be retried instead of waiting for the next automatic poll.
+            Linco 1.0.12:
+            - Messages you send from Linco carry the project workboard reminder only once per agent session, with the first substantive prompt, instead of with every message. A restarted session is reminded once more; slash commands and short replies are untouched.
+            - Includes 1.0.11: the redesigned Live preview board, one-click agent handoff on every action row, and the manual update check in Settings.
 
             Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true
