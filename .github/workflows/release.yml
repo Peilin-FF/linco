@@ -75,12 +75,10 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Linco ${{ github.ref_name }}
           releaseBody: |
-            Linco 1.0.10:
-            - Follow planned work, current progress, review decisions, and completed outcomes in Linco's Live preview action board.
-            - Keep each action's results, adjustments, and decisions together in one living record, with supporting outputs attached to the action.
-            - Continue the same project actions across local or remote sessions. Project instructions and message reminders guide agents to maintain these records; progress is recorded by the agent rather than inferred from terminal activity.
-            - Focus on essential work through a minimal, always-light board and action details, with a quiet visual style that stays readable in every app theme.
-            - Read HTML notebooks with fewer controls and edit on demand. Preserve existing notes and continue updating the same document as the work develops.
+            Linco 1.0.11:
+            - Live preview has a new board: a quiet white surface in a palette taken from Monet's water lilies, with a large title, one rule, and each action as a row in reading order: in progress, needs review, planned, done. Empty groups no longer stand as empty columns.
+            - Each row shows who last touched the action and when, and carries an Ask agent link that hands the action to the open agent session, so Codex and Claude Code sessions can pass work between them on the same board.
+            - Settings shows the installed version with a manual update check, so a failed release check is visible and can be retried instead of waiting for the next automatic poll.
 
             Windows x64, Apple Silicon, and Intel Mac installers are included. Mac builds are ad-hoc signed, not Apple-notarized; macOS may show a first-launch security warning.
           releaseDraft: true
