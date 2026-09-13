@@ -21,7 +21,8 @@ export function canAppendAgentContext(text: string): boolean {
 }
 
 interface ChatInputProps {
-  onSend?: (text: string) => void
+  /** Called once the text and any appended context have been forwarded. */
+  onSend?: (text: string, context?: string) => void
   /** Prepare this explicit submission and return optional context to append. */
   onPrepareSend?: (text: string) => string | undefined | Promise<string | undefined>
   /** Forward input to this composer's own PTY, including deferred Enter. */
@@ -127,7 +128,7 @@ export default function ChatInput({
       // context; re-sending the original would duplicate the prompt in the TUI.
       const suffix = context?.replace(/[\r\n]+/g, ' ').trim()
       if (suffix) onForward?.(' ' + suffix)
-      onSend?.(text)
+      onSend?.(text, suffix || undefined)
       // Capture this composer's callback, so switching projects cannot route
       // the deferred Enter into a different resident terminal.
       const enterDelay = suffix && navigator.platform.toLowerCase().includes('win') ? 120 : 16

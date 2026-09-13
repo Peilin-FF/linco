@@ -68,14 +68,17 @@ test('startup installs persistent project instructions before the local agent wi
   expect(reopened.disk.files[`|${root}/AGENTS.md`]).toContain(reopened.existingAgents)
 })
 
-test('a running agent receives each user prompt once and one scoped reminder immediately before Enter', async ({ page }) => {
+test('a running agent receives each user prompt once and the scoped reminder only with its first prompt', async ({ page }) => {
   await openApp(page)
   const started = (await inspect(page)).starts.length
   const first = await sendAndRead(page, 'Investigate retained drafts TOKEN_731')
   expectTrackedSend(first, 'Investigate retained drafts TOKEN_731')
+  // The agent has read the instructions now; later prompts carry only the user's text.
   const second = await sendAndRead(page, 'Continue the same investigation TOKEN_732')
-  expectTrackedSend(second, 'Continue the same investigation TOKEN_732')
+  expect(second.map(message => message.data)).toEqual(['Continue the same investigation TOKEN_732', '\r'])
   expect(second[0].id).toBe(first[0].id)
+  const third = await sendAndRead(page, 'And a third message TOKEN_733')
+  expect(third.map(message => message.data)).toEqual(['And a third message TOKEN_733', '\r'])
   expect((await inspect(page)).starts).toHaveLength(started)
 })
 

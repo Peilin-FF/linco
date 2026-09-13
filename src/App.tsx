@@ -310,6 +310,10 @@ export default function App(): JSX.Element {
   const chatRefs = useRef<Map<string, TerminalHandle>>(new Map())
   const readyChatSessionsRef = useRef<Set<string>>(new Set())
   const [readyChatSessions, setReadyChatSessions] = useState<Set<string>>(new Set())
+  // Sessions whose agent has already received the workboard reminder. The agent
+  // reads the project instructions once, so later prompts carry only the user's
+  // text; a restarted terminal starts a fresh agent and is reminded again.
+  const remindedSessionsRef = useRef<Set<string>>(new Set())
   // 已给哪些远程 host 装过插件(每 host 一次,避免重复 rsync)
   const remotePluginsDoneRef = useRef<Set<string>>(new Set())
   // 本地已为哪个「agent 家族+语言」装过插件(避免每次 config 变更都重装)
@@ -773,7 +777,7 @@ export default function App(): JSX.Element {
     if (previous.has(sid) === ready) return
     const next = new Set(previous)
     if (ready) next.add(sid)
-    else next.delete(sid)
+    else { next.delete(sid); remindedSessionsRef.current.delete(sid) }
     readyChatSessionsRef.current = next
     setReadyChatSessions(next)
   }
@@ -1140,11 +1144,12 @@ export default function App(): JSX.Element {
     const session = chatSessions.find((candidate) => candidate.id === activeChatId)
     if (!handle || !session || !readyChatSessionsRef.current.has(session.id)) return false
     const suffix = canAppendAgentContext(t) && (session.command || composerEpochs[session.id]) &&
-      (!session.host || (session.host === host && remoteDataReady))
+      (!session.host || (session.host === host && remoteDataReady)) && !remindedSessionsRef.current.has(session.id)
       ? ' ' + workboardSessionReminder(session.id)
       : ''
     handleSend(t, session)
     handle.write(t + suffix)
+    if (suffix) remindedSessionsRef.current.add(session.id)
     const isWindows = navigator.platform.toLowerCase().includes('win')
     if (isWindows) {
       window.setTimeout(() => handle.write('\r'), 120)
@@ -1193,7 +1198,10 @@ export default function App(): JSX.Element {
         if (Date.now() - started < 20000) window.setTimeout(deliver, 150)
         return
       }
-      handle.write(body + (initialCommand && canAppendAgentContext(body) ? ' ' + workboardSessionReminder(localFigureChatId) : ''))
+      const suffix = initialCommand && canAppendAgentContext(body) && !remindedSessionsRef.current.has(localFigureChatId)
+        ? ' ' + workboardSessionReminder(localFigureChatId) : ''
+      handle.write(body + suffix)
+      if (suffix) remindedSessionsRef.current.add(localFigureChatId)
       const isWindows = navigator.platform.toLowerCase().includes('win')
       if (isWindows) {
         window.setTimeout(() => handle.write('\r'), 120)
@@ -1734,12 +1742,15 @@ export default function App(): JSX.Element {
         <div className="app-bottom-composer min-w-0">
           {chatSessions.map((session) => <div key={`${session.id}:${composerEpochs[session.id] || 0}`} style={{ display: session.id === activeChatId ? undefined : 'none' }}>
           <ChatInput
-            onSend={(text) => handleSend(text, session)}
+            onSend={(text, context) => {
+              if (context) remindedSessionsRef.current.add(session.id)
+              handleSend(text, session)
+            }}
             onPrepareSend={(session.command || composerEpochs[session.id]) &&
               (!session.host || (session.host === host && remoteDataReady)) ? async () => {
               if (!session.cwd) return undefined
               await ensureWorkboardProject(session.cwd, session.host)
-              return workboardSessionReminder(session.id)
+              return remindedSessionsRef.current.has(session.id) ? undefined : workboardSessionReminder(session.id)
             } : undefined}
             onForward={(data) => chatRefs.current.get(session.id)?.write(data)}
             cwd={session.cwd}
